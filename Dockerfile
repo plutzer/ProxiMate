@@ -40,10 +40,13 @@ RUN make -C /SAINTexpress_v3.6.3__2018-03-09/SAINT-MRF-spc clean
 RUN make -C /SAINTexpress_v3.6.3__2018-03-09/SAINT-MRF-int
 RUN cp /SAINTexpress_v3.6.3__2018-03-09/bin/SAINTexpress-int /bin/SAINTexpress-int
 
-
-
-
 RUN apt-get update && apt-get install -y python3-pip
 
 COPY requirements.txt ../requirements.txt
 RUN pip3 install -r ../requirements.txt
+
+# Copy over the folders with code and tests
+COPY Scripts /Scripts
+COPY tests /tests
+COPY GUI /GUI
+
