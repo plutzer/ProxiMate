@@ -1,0 +1,10 @@
+.vscode/
+__pycache__/
+SAINTexpress-custom/boostsrc/
+SAINTexpress-custom/nloptsrc/
+SAINTexpress-custom/boost/
+SAINTexpress-custom/nlopt/
+**/PaxHeader/*
+SAINTexpress-custom/va/
+SAINTexpress-custom/Precompiled_binaries/
+Datasets/
