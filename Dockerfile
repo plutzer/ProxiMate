@@ -49,4 +49,8 @@ RUN pip3 install -r ../requirements.txt
 COPY Scripts /Scripts
 COPY tests /tests
 COPY GUI /GUI
+COPY Datasets /Datasets
+
+# Preprocess the datasets
+RUN python3 Scripts/preprocess_biogrid.py --biogrid_all /Datasets/BIOGRID-ALL.tab3.txt --biogrid_mv /Datasets/BIOGRID-MV-Physical.tab3.txt --output /Datasets
 
