@@ -29,9 +29,9 @@ BioGRID: April 15, 2024
 If you want to run the tool with new or custom versions of the databases. You can re-build the docker container after assembling the following files in a `/Databases` subdirectory inside the ProxiMate parent directory. File names will need to match or be changed in the Dockerfile before building.
 
 
-BIOGRID-ALL.tab3.txt - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
+`BIOGRID-ALL.tab3.txt` - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
 
-BIOGRID-MV-Physical.tab3.txt - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
+`BIOGRID-MV-Physical.tab3.txt` - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
 
 
 
