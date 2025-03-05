@@ -19,6 +19,21 @@ The docker container contains a shell script to run the entire pipeline. This ca
 1. Run the command:
        `docker run --mount type=bind,source=<native_path_to_data_directory>,target=<working_directory_within_container> plutzer/score_apms /bin/bash /run_pipeline.sh <path_to_ED_file> <path_to_PG_file> <quant_type (Intensity, Spectral Counts, or LFQ)> <path_to_output_directory> <n_iterations_for_WD_scoring> <imputation (1 for yes or 0 for no)>`
 
+## Annotations and Databases:
+I will periodically push newer versions of the tool with updated databases. 
+
+Current versions of the databases:
+BioGRID: April 15, 2024
+
+### Updating databases manually (experienced users):
+If you want to run the tool with new or custom versions of the databases. You can re-build the docker container after assembling the following files in a `/Databases` subdirectory inside the ProxiMate parent directory. File names will need to match or be changed in the Dockerfile before building.
+
+BIOGRID-ALL.tab3.txt - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
+BIOGRID-MV-Physical.tab3.txt - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
+
+
+
+
 ## Common Errors
 
 ### SAINT
