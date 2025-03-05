@@ -26,6 +26,12 @@ Current versions of the databases:
 
 BioGRID: April 15, 2024
 
+UniProt: April 12, 2024
+
+Human Protein Atlas: March 5, 2025
+
+
+
 ### Updating databases manually (experienced users):
 If you want to run the tool with new or custom versions of the databases. You can re-build the docker container after assembling the following files in a `/Databases` subdirectory inside the ProxiMate parent directory. File names will need to match or be changed in the Dockerfile before building.
 
@@ -33,6 +39,12 @@ If you want to run the tool with new or custom versions of the databases. You ca
 `BIOGRID-ALL.tab3.txt` - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
 
 `BIOGRID-MV-Physical.tab3.txt` - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
+
+`uniprot_anns.tsv` - tsv-formatted annotations for human proteins from [UniProt](https://www.uniprot.org/uniprotkb?query=%28proteome%3AUP000005640%29&facets=reviewed%3Atrue)
+
+`subcellular_location.tsv` - downloaded from [Human Protein Atlas](https://www.proteinatlas.org/humanproteome/subcellular/data#locations)
+
+`humanComplexes.txt` - downloaded from [CORUM](https://mips.helmholtz-muenchen.de/corum/download): Human Complexes.
 
 
 
