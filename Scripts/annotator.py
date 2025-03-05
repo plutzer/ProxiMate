@@ -150,7 +150,7 @@ def main():
 
     parser.add_argument("--complexFile",
                         help="path to human complexes file",
-                        default="/Datasets/humanComplexes.txt")
+                        default="/Datasets/corum_humanComplexes.txt")
 
     # Add arguments for the prey and bait columns
     parser.add_argument("--preyColumn",
@@ -207,7 +207,9 @@ def main():
 
     #subset human protein atlas to just two columns
     hpa = pd.read_csv(args.locationFile, sep='\t')
-    name_loc = pd.DataFrame(hpa.iloc[:, [1,3]]) # TODO: Make this not hardcoded
+    name_loc = hpa[['Gene name', 'Main location']]
+    
+    # pd.DataFrame(hpa.iloc[:, [1,3]]) # TODO: Make this not hardcoded
 
     annotated_scores['Matched_Gene_Name'] = annotated_scores['First_Prey_Gene'].apply(get_match, subcellular=name_loc['Gene name'].to_numpy(), uniprot=uniprot['Gene Names'].to_numpy())
 
@@ -298,7 +300,7 @@ def main():
                         "gene_pair_comb.pl",
                         str(gogo_input_path),
                         str(args.outputDir) + "/gogo_output.txt"],
-                        cwd="/GOGO")
+                        cwd="/Scripts/GOGO")
 
     # Now read in the GOGO output file
     output_filename = str(args.outputDir) + "/gogo_output.txt" # This will be the output file from GOGO
