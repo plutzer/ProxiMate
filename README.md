@@ -44,7 +44,7 @@ If you want to run the tool with new or custom versions of the databases. You ca
 
 `subcellular_location.tsv` - downloaded from [Human Protein Atlas](https://www.proteinatlas.org/humanproteome/subcellular/data#locations)
 
-`humanComplexes.txt` - downloaded from [CORUM](https://mips.helmholtz-muenchen.de/corum/download): Human Complexes.
+`corum_humanComplexes.txt` - downloaded from [CORUM](https://mips.helmholtz-muenchen.de/corum/download): Human Complexes.
 
 
 
