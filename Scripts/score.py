@@ -5,6 +5,7 @@ import argparse
 import subprocess
 import pandas as pd
 import aft_impute_saint
+import compPASS_pval
 #import tab_to_JSON
 
 print("Running parse_scoreSAINT.py...")
@@ -144,33 +145,42 @@ else:
 #     f.write("79|Preparing files for scoring...")
 
 ########################################################################################################################
+########################################################################################################################
 # Run CompPASS R script
 print("Running CompPASS...")
-p = subprocess.run(['Rscript',
-                    '/neo_comppass.R',
-                    args.scoreInputs,
-                    args.outputPath,
-                    str(args.n_iterations)],
-                    cwd="/") # Output file will be called compPASS.csv and compPASS_resampled.csv
 
-print("Calculating WD-FDR from Resampled CompPASS...")
+# Read input file
+comp_input = pd.read_csv(f"{args.outputPath}/to_CompPASS.csv", sep=',', index_col=0).astype({'Prey': str, 'Bait': str})
 
-# Read in the CompPASS output
-compPASS = pd.read_csv(f"{args.outputPath}/compPASS.csv")
+compPass_result = compPASS_pval.score_compPass(comp_input, 0.98, args.n_iterations)
 
-# Read in Resampled CompPASS output
-comp_resampled = pd.read_csv(f"{args.outputPath}/compPASS_resampled.csv")
+compPass_result.to_csv(f"{args.outputPath}/compPASS.csv", index=False)
 
-wds = comp_resampled.loc[:, comp_resampled.columns.str.contains('WD_') & ~comp_resampled.columns.str.contains('test')]
-wd_list = pd.DataFrame(wds.apply(lambda x: x.dropna().tolist(), axis=1))
-wd_list['WD'] = compPASS['WD']
-wd_list['FDR'] = wd_list.apply(lambda x: sum(i > x['WD'] for i in x[0])/len(x[0]), axis=1)
-compPASS['WDFDR'] = wd_list['FDR']
+# p = subprocess.run(['Rscript',
+#                     '/neo_comppass.R',
+#                     args.scoreInputs,
+#                     args.outputPath,
+#                     str(args.n_iterations)],
+#                     cwd="/") # Output file will be called compPASS.csv and compPASS_resampled.csv
 
-# Overwrite the original compPASS.csv file with the new one
-compPASS.to_csv(f"{args.outputPath}/compPASS.csv", index=False)
+# print("Calculating WD-FDR from Resampled CompPASS...")
 
+# # Read in the CompPASS output
+# compPASS = pd.read_csv(f"{args.outputPath}/compPASS.csv")
 
+# # Read in Resampled CompPASS output
+# comp_resampled = pd.read_csv(f"{args.outputPath}/compPASS_resampled.csv")
+
+# wds = comp_resampled.loc[:, comp_resampled.columns.str.contains('WD_') & ~comp_resampled.columns.str.contains('test')]
+# wd_list = pd.DataFrame(wds.apply(lambda x: x.dropna().tolist(), axis=1))
+# wd_list['WD'] = compPASS['WD']
+# wd_list['FDR'] = wd_list.apply(lambda x: sum(i > x['WD'] for i in x[0])/len(x[0]), axis=1)
+# compPASS['WDFDR'] = wd_list['FDR']
+
+# # Overwrite the original compPASS.csv file with the new one
+# compPASS.to_csv(f"{args.outputPath}/compPASS.csv", index=False)
+
+########################################################################################################################
 ########################################################################################################################
 # # Run numpPASS (Under testing)
 # import numpPASS
@@ -202,13 +212,13 @@ print("Merging CompPASS and SAINT outputs for intensity...")
 saint = pd.read_csv(f"{args.scoreInputs}/list.txt", sep="\t")
 
 # Print the number of rows in each dataframe
-print("CompPASS rows: " + str(len(compPASS.index)))
+print("CompPASS rows: " + str(len(compPass_result.index)))
 print("SAINT rows: " + str(len(saint.index)))
 
 # Merge the two dataframes on two columns:
 # "Bait" in SAINT corresponds to "Experiment.ID" in CompPASS
 # "Prey" in SAINT corresponds to "Prey" in CompPASS
-merged = pd.merge(saint, compPASS, how="left", left_on=["Bait", "Prey"], right_on=["Experiment.ID", "Prey"])
+merged = pd.merge(saint, compPass_result, how="left", left_on=["Bait", "Prey"], right_on=["Experiment.ID", "Prey"])
 
 # Print the number of rows in the merged dataframe
 print("Merged rows: " + str(len(merged.index)))

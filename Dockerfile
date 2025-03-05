@@ -47,9 +47,9 @@ RUN pip3 install -r ../requirements.txt
 
 # Copy over the folders with code and tests
 COPY Scripts /Scripts
-COPY tests /tests
 COPY GUI /GUI
 COPY Datasets /Datasets
+COPY run_pipeline.sh /run_pipeline.sh
 
 # Preprocess the datasets
 RUN python3 Scripts/preprocess_biogrid.py --biogrid_all /Datasets/BIOGRID-ALL.tab3.txt --biogrid_mv /Datasets/BIOGRID-MV-Physical.tab3.txt --output /Datasets
