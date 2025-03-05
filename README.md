@@ -30,6 +30,8 @@ UniProt: April 12, 2024
 
 Human Protein Atlas: March 5, 2025
 
+CORUM: March 5, 2025
+
 
 
 ### Updating databases manually (experienced users):
