@@ -23,6 +23,7 @@ The docker container contains a shell script to run the entire pipeline. This ca
 I will periodically push newer versions of the tool with updated databases. 
 
 Current versions of the databases:
+
 BioGRID: April 15, 2024
 
 ### Updating databases manually (experienced users):
