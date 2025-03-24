@@ -127,3 +127,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_select("download_dataset", choices=available_choices)
 
 app = App(app_ui, server)
+
+if __name__ == "__main__":
+    run_app(app, host="0.0.0.0", port=3838)

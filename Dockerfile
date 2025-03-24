@@ -54,3 +54,7 @@ COPY run_pipeline.sh /run_pipeline.sh
 # Preprocess the datasets
 RUN python3 Scripts/preprocess_biogrid.py --biogrid_all /Datasets/BIOGRID-ALL.tab3.txt --biogrid_mv /Datasets/BIOGRID-MV-Physical.tab3.txt --output /Datasets
 
+# When the container starts, start the GUI
+EXPOSE 3838
+CMD ["python3", "/GUI/app.py"]
+

@@ -3,3 +3,4 @@ pandas
 argparse
 scipy
 statsmodels
+shiny
