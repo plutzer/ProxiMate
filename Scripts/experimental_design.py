@@ -54,3 +54,12 @@ class ExperimentalDesign:
         print("Num bait experiments:", num_experiments)
         print("Max replicates per bait:", max_replicates)
         print("Num control experiments:", num_controls)
+
+        self.num_experiments = num_experiments
+        self.num_controls = num_controls
+
+    # def get_num_baits(self):
+    #     return self.num_baits
+    
+    # def get_num_ctrls(self):
+    #     return len([experiment for experiment in self.name2experiment.values() if experiment.attributes["Type"] == "C"])

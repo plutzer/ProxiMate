@@ -45,16 +45,23 @@ RUN apt-get update && apt-get install -y python3-pip
 COPY requirements.txt ../requirements.txt
 RUN pip3 install -r ../requirements.txt
 
+# Preprocess the datasets
+COPY Datasets /Datasets
+COPY Scripts/preprocess_biogrid.py /Scripts/preprocess_biogrid.py
+RUN python3 Scripts/preprocess_biogrid.py --biogrid_all /Datasets/BIOGRID-ALL.tab3.txt --biogrid_mv /Datasets/BIOGRID-MV-Physical.tab3.txt --output /Datasets
+
 # Copy over the folders with code and tests
 COPY Scripts /Scripts
 COPY GUI /GUI
-COPY Datasets /Datasets
 COPY run_pipeline.sh /run_pipeline.sh
 
-# Preprocess the datasets
-RUN python3 Scripts/preprocess_biogrid.py --biogrid_all /Datasets/BIOGRID-ALL.tab3.txt --biogrid_mv /Datasets/BIOGRID-MV-Physical.tab3.txt --output /Datasets
+ENV PYTHONPATH=/Scripts
+
+
+# Create a directory for output files
+RUN mkdir -p /Outputs
 
 # When the container starts, start the GUI
 EXPOSE 3838
-CMD ["python3", "/GUI/app.py"]
+CMD ["python3", "-u", "/GUI/app.py"]
 
