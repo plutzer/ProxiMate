@@ -4,6 +4,10 @@ import pandas as pd
 import os
 import parse
 import subprocess
+import zipfile
+import tempfile
+import datetime
+import shutil
 
 out_dir = "/Outputs"
 
@@ -37,14 +41,21 @@ app_ui = ui.page_navbar(
                  # Render text if parse button has executed successfully
                  ui.card(
                      ui.card_header(
+                        ui.h1('Datasets in this Session'),
                         ui.layout_columns(
-                            ui.h1('Parsed Datasets'),
-                            ui.input_action_button("clear_datasets", "Clear All Datasets"),
+                            ui.card(
+                                ui.input_action_button("clear_datasets", "Clear All Datasets"),
+                                ui.download_button("download_session", "Download Session Zip"),
                             ),
-                        ),
-                     ui.output_data_frame("render_datasets"),
+                            ui.card(
+                                ui.input_file("session_file", "Upload Session Zip"),
+                                ui.input_action_button("upload_session", "Load Session"),
+                            ),
+                        )
                     ),
-                 ),
+                    ui.output_data_frame("render_datasets"),
+                ),
+            ),
     ui.nav_panel("Score Data",
                     ui.input_select("score_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
                     ui.input_radio_buttons("imputation_method", "Imputation Method", choices={0: "Default", 1: "Prey-specific"}),
@@ -84,7 +95,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     print("Server started")
 
     datasets = reactive.Value(pd.DataFrame(
-        columns=['Dataset Name', 'Input Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']
+        columns=['Dataset Name', 'Input Type', 'Quant Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']
     ))
 
     # Function to render the datasets table
@@ -108,7 +119,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         n_exp, n_ctrl = parse.parse_ed_pg(input.pg_file.get()[0]['datapath'], input.ed_file.get()[0]['datapath'], input.mq_quant_type.get(), out_dir + '/' + input.mq_dataset_name.get())
 
         # Update the datasets dataframe
-        new_row = pd.DataFrame([[input.mq_dataset_name.get(), 'Protein Groups', n_exp, n_ctrl, '', '', '']], columns=datasets.get().columns)
+        new_row = pd.DataFrame([[input.mq_dataset_name.get(), f'Protein Groups', input.mq_quant_type.get(), n_exp, n_ctrl, '', '', '']], columns=datasets.get().columns)
         updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
         datasets.set(updated_datasets)
 
@@ -122,6 +133,63 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         # Code for parsing goes here
 
+    def do_clear_datasets():
+        datasets.set(pd.DataFrame(columns=['Dataset Name', 'Input Type', 'Quant Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']))
+        print("Datasets table cleared.")
+        # Clear the output folder
+        for root, dirs, files in os.walk(out_dir):
+            for file in files:
+                abs_file = os.path.join(root, file)
+                os.remove(abs_file)
+            for dir in dirs:
+                abs_dir = os.path.join(root, dir)
+                shutil.rmtree(abs_dir)
+        print("Output folder cleared.")
+
+    @reactive.effect
+    @reactive.event(input.clear_datasets)
+    def clear_datasets():
+        do_clear_datasets()
+
+    @render.download()
+    def download_session():
+        # Save the current state of the datasets dataframe to a CSV file
+        datasets.get().to_csv(out_dir + "/datasets.csv", index=False)
+
+        file_prefix = f"ProxiMateSession_{datetime.datetime.now().strftime('%Y%m%d')}"
+        tmp_zip = tempfile.NamedTemporaryFile(prefix=file_prefix, suffix=".zip", delete=False)
+        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for root, _, files in os.walk(out_dir):
+                for file in files:
+                    abs_file = os.path.join(root, file)
+                    # Write the file using a relative path
+                    zipf.write(abs_file, arcname=os.path.relpath(abs_file, out_dir))
+        tmp_zip.close()
+        # Return the path of the zip file for download
+        return tmp_zip.name
+    
+    @reactive.effect
+    @reactive.event(input.upload_session)
+    def upload_session():
+        # Start by clearing the current datasets
+        do_clear_datasets()
+
+        # Check if the upload has occurred
+        uploaded = input.session_file.get()
+        if uploaded:
+            # uploaded is a list of dicts; use the first file
+            zip_path = uploaded[0]['datapath']
+            # Choose a destination directory (for example, your session directory)
+            session_dest = "/Outputs"
+            # Extract the zip file to the destination
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                zip_ref.extractall(session_dest)
+            print("Session uploaded and extracted to:", session_dest)
+
+            # Load the datasets.csv file into the datasets reactive value
+            datasets.set(pd.read_csv(os.path.join(session_dest, "datasets.csv")))
+
+
     # Scoring data
     @reactive.effect
     @reactive.event(input.score_data)
@@ -130,6 +198,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         print(input.score_dataset.get())
         print(input.imputation_method.get())
         print(input.wdfdr_iterations.get())
+
+        # Get the quant type from the datasets dataframe
+        quant_type = datasets.get().loc[datasets.get()['Dataset Name'] == input.score_dataset.get(), 'Quant Type'].values[0]
 
         # Code for scoring goes here
         result = subprocess.run([
@@ -146,7 +217,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             "--imputation",
             input.imputation_method.get(),
             "--quantType",
-            input.mq_quant_type.get()
+            quant_type,
         ], capture_output=True, text=True)
         print("Scoring result:", result.stdout)
         if result.stderr:
