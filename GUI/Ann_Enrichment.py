@@ -3,10 +3,91 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+import argparse
+from collections import Counter
 
-threshold = 0.9
+def enrich_foreground(foreground_ids, all_ids, feature_map):
+    """
+    foreground_ids: set of proteins deemed 'hits'
+    all_ids:      set of all proteins seen in the assay
+    feature_map:  dict protein_id -> list of features
+    """
+    M = len(all_ids)
+    n = len(foreground_ids)
 
-def process_data(data, columns_for_analysis):
+    # count K (# proteins in all with each feature) and k (# in foreground with each feature)
+    feat_population = Counter(feat
+                     for prot, feats in feature_map.items()
+                     if prot in all_ids
+                     for feat in feats)
+    feat_foreground = Counter(feat
+                     for prot in foreground_ids
+                     for feat in feature_map.get(prot, []))
+
+    rows = []
+    for feat, k in feat_foreground.items():
+        K = feat_population[feat]
+        # skip super‐rare features
+        if K < 5 or k < 2:  
+            continue
+        p = hypergeom.sf(k-1, M, K, n)
+        enrich = (k/n) / (K/M)
+        rows.append((feat, k, n, K, M, p, enrich))
+
+    df = (pd.DataFrame(rows, 
+                       columns=['Feature','k','n','K','M','p_value','enrichment'])
+          .sort_values('p_value'))
+    # df['adj_p'] = multipletests(df['p_value'], method='fdr_bh')[1]
+    return df
+
+def process_refactored(data, columns_for_analysis, threshold):
+    # Get the unique experiments from the data
+    experiments = list(data['Experiment.ID'].unique())
+
+    # Initialize a dataframe for the results
+    results = pd.DataFrame(columns=['Bait', 'Feature', 'Feature_type', 'k','n','K','M','p_value','enrichment', 'adj_p'])
+
+    # Get the unique proteins from the data
+    all_proteins = set(data['Prey.ID'].unique())
+
+    for column in columns_for_analysis:
+        # Create a temporary dataframe to store results for this feature type
+        temp_df = pd.DataFrame(columns=['Bait', 'Feature', 'Feature_type', 'k','n','K','M','p_value','enrichment'])
+
+        # Create a feature map for this feature type
+        feature_map = {}
+        feature_df = data[['Prey.ID', column]].copy()
+        feature_df.loc[:, 'list'] = feature_df[column].apply(lambda x: set(x.split(';')) if isinstance(x, str) else set())
+        feature_map = dict(zip(feature_df['Prey.ID'], feature_df['list']))
+
+        print(len(feature_map), " features in feature map")
+
+        for experiment in experiments:
+            print('Analyzing experiment:', experiment, 'for feature type:', column)
+            foreground = data[data['Experiment.ID'] == experiment]
+            foreground = foreground[foreground['SaintScore'] >= threshold]
+            foreground_ids = set(foreground['Prey.ID'].unique())
+
+            result = enrich_foreground(foreground_ids, all_proteins, feature_map)
+
+            # Add information about the bait and feature type
+            result['Bait'] = experiment
+            result['Feature_type'] = column
+
+            # Concatenate the results to the temp_df
+            if not result.empty:
+                temp_df = pd.concat([temp_df, result], ignore_index=True)
+        
+        # Adjust the p-value for this feature type
+        temp_df['adj_p'] = multipletests(temp_df['p_value'], method='fdr_bh')[1]
+    
+        # Add the temp_df to the results dataframe
+        results = pd.concat([results, temp_df], ignore_index=True)
+
+    return results
+        
+def process_data(data, columns_for_analysis, threshold):
 
     experiments = list(data['Experiment.ID'].unique())
 
@@ -94,19 +175,32 @@ def process_data(data, columns_for_analysis):
 
 def main():
     
+    # Arguments
+    parser = argparse.ArgumentParser(description="Enrichment analysis of interaction data")
+
+    parser.add_argument("--input", help="Path to the input file", required=True)
+    parser.add_argument("--output", help="Path to the output directory", required=True)
+    parser.add_argument("--threshold", help="Threshold for enrichment analysis", type=float, default=0.9)
+
+    # Parse the arguments
+    args = parser.parse_args()
+    input_file = args.input
+    output_dir = args.output
+    threshold = args.threshold
+
     print("Started Script")
 
-    out_dir = "C:/Users/isaac/Work/025_MainNetwork/Enrichment/"
     columns_for_analysis = ['GO_CC', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains']
 
 
     # Load the dataset
-    data = pd.read_csv("C:/Users/isaac/Work/025_MainNetwork/1_MainNetwork_aggregated_scores.csv")
+    data = pd.read_csv(input_file, sep=",")
 
-    feature_df, results = process_data(data, columns_for_analysis)
+    # feature_df, results = process_data(data, columns_for_analysis, threshold)
+    results = process_refactored(data, columns_for_analysis, threshold)
 
-    feature_df.to_csv(out_dir + "Feature_DF.csv", index=False)
-    results.to_csv(out_dir + "Results.csv", index=False)
+    # feature_df.to_csv(output_dir + "Feature_DF_new.csv", index=False)
+    results.to_csv(output_dir + "Results_new.csv", index=False)
 
 
 if __name__ == "__main__":
