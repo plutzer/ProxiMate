@@ -6,6 +6,8 @@ from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 import argparse
 from collections import Counter
+# import dash_bio
+
 
 def enrich_foreground(foreground_ids, all_ids, feature_map):
     """
@@ -172,6 +174,41 @@ def process_data(data, columns_for_analysis, threshold):
 
     return feature_df, results
 
+def plot_results(results, feature_type, num_features=30):
+    # Filter the results for the specific feature type
+    filtered_results = results[results['Feature_type'] == feature_type]
+
+    # Get a list of the top features that are passing a threshold
+    thresholded_results = filtered_results[filtered_results['adj_p'] <= 0.05]
+
+    # Get a counts of the number of times each feature is present
+    feature_counts = thresholded_results['Feature'].value_counts()
+
+    # Get the top N features
+    top_features = feature_counts.head(num_features).index.tolist()
+
+    # Filter the results again for these features
+    filtered_results = filtered_results[filtered_results['Feature'].isin(top_features)]
+
+    # Turn this long format into a wide format for plotting
+    filtered_results = filtered_results.pivot(index='Feature', columns='Bait', values='enrichment')
+
+    # Fill NaN values with 1 (no enrichment)
+    filtered_results = filtered_results.fillna(1)
+    heatmap = sns.clustermap(filtered_results.T, cmap='viridis', cbar_kws={'label': 'Enrichment Score'})
+    plt.title(f"Enrichment Analysis for {feature_type}")
+    plt.xlabel("Bait")
+    plt.ylabel("Feature")
+
+    ax = heatmap.ax_heatmap
+    ax.set_xticklabels(ax.get_xticklabels(), fontsize=8, rotation=45, ha='right')
+    ax.set_yticklabels(ax.get_yticklabels(), fontsize=5)
+    # plt.xticks(rotation=45, ha='right', fontsize=8)
+    # plt.yticks(fontsize=8)
+    plt.tight_layout()
+
+    return heatmap
+
 
 def main():
     
@@ -199,9 +236,15 @@ def main():
     # feature_df, results = process_data(data, columns_for_analysis, threshold)
     results = process_refactored(data, columns_for_analysis, threshold)
 
-    # feature_df.to_csv(output_dir + "Feature_DF_new.csv", index=False)
-    results.to_csv(output_dir + "Results_new.csv", index=False)
+    test = plot_results(results, 'GO_CC')
 
+    # Show the plot
+    plt.show()
+
+    # # feature_df.to_csv(output_dir + "Feature_DF_new.csv", index=False)
+    # results.to_csv(output_dir + "Results_new.csv", index=False)
+
+    # Plot the results
 
 if __name__ == "__main__":
     main()
