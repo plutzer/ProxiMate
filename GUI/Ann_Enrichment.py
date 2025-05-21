@@ -180,6 +180,7 @@ def plot_results(results, feature_type, num_features=30):
 
     # Get a list of the top features that are passing a threshold
     thresholded_results = filtered_results[filtered_results['adj_p'] <= 0.05]
+    thresholded_results = thresholded_results[thresholded_results['enrichment'] >= 3]
 
     # Get a counts of the number of times each feature is present
     feature_counts = thresholded_results['Feature'].value_counts()
@@ -195,7 +196,7 @@ def plot_results(results, feature_type, num_features=30):
 
     # Fill NaN values with 1 (no enrichment)
     filtered_results = filtered_results.fillna(1)
-    heatmap = sns.clustermap(filtered_results.T, cmap='viridis', cbar_kws={'label': 'Enrichment Score'})
+    heatmap = sns.clustermap(filtered_results, cmap='viridis', cbar_kws={'label': 'Enrichment Score'})
     plt.title(f"Enrichment Analysis for {feature_type}")
     plt.xlabel("Bait")
     plt.ylabel("Feature")
