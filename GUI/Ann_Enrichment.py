@@ -168,8 +168,7 @@ def plot_results(results, feature_type, num_features=30):
     return heatmap
 
 
-def main():
-    
+def main():   
     # Arguments
     parser = argparse.ArgumentParser(description="Enrichment analysis of interaction data")
 
