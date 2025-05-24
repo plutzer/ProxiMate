@@ -6,6 +6,8 @@ from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 import argparse
 from collections import Counter
+import matplotlib.ticker as ticker
+
 # import dash_bio
 
 
@@ -43,6 +45,23 @@ def enrich_foreground(foreground_ids, all_ids, feature_map):
     # df['adj_p'] = multipletests(df['p_value'], method='fdr_bh')[1]
     return df
 
+def split_and_clean(annotations):
+    if isinstance(annotations, str):
+        split_anns = annotations.split(';')
+        # Remove any leading or trailing whitespace from each annotation
+        split_anns = [x.strip() for x in split_anns]
+        # Remove any numbers that are at the end of the string
+        split_anns = [x.rstrip('0123456789') for x in split_anns]
+        # Remove trailing whitespace again
+        split_anns = [x.strip() for x in split_anns]
+        # Remove any empty strings
+        split_anns = [x for x in split_anns if x != '']
+        # Remove any annotations that begin with a number
+        split_anns = [x for x in split_anns if not x[0].isdigit()]
+        return set(split_anns)
+    else:
+        return set()
+
 def process_refactored(data, columns_for_analysis, threshold):
     # Get the unique experiments from the data
     experiments = list(data['Experiment.ID'].unique())
@@ -60,7 +79,7 @@ def process_refactored(data, columns_for_analysis, threshold):
         # Create a feature map for this feature type
         feature_map = {}
         feature_df = data[['Prey.ID', column]].copy()
-        feature_df.loc[:, 'list'] = feature_df[column].apply(lambda x: set(x.split(';')) if isinstance(x, str) else set())
+        feature_df.loc[:, 'list'] = feature_df[column].apply(split_and_clean)
         feature_map = dict(zip(feature_df['Prey.ID'], feature_df['list']))
 
         print(len(feature_map), " features in feature map")
@@ -180,7 +199,7 @@ def plot_results(results, feature_type, num_features=30):
 
     # Get a list of the top features that are passing a threshold
     thresholded_results = filtered_results[filtered_results['adj_p'] <= 0.05]
-    thresholded_results = thresholded_results[thresholded_results['enrichment'] >= 3]
+    thresholded_results = thresholded_results[thresholded_results['enrichment'] >= 2]
 
     # Get a counts of the number of times each feature is present
     feature_counts = thresholded_results['Feature'].value_counts()
@@ -196,17 +215,40 @@ def plot_results(results, feature_type, num_features=30):
 
     # Fill NaN values with 1 (no enrichment)
     filtered_results = filtered_results.fillna(1)
-    heatmap = sns.clustermap(filtered_results, cmap='viridis', cbar_kws={'label': 'Enrichment Score'})
-    plt.title(f"Enrichment Analysis for {feature_type}")
+
+    # Make anything less than 1 equal to 1 (no enrichment)
+    filtered_results[filtered_results < 1] = 1
+
+    # Convert the enrichment to log2 scale
+    filtered_results = np.log2(filtered_results)
+
+    # Initialize the plot with custom size
+    # plt.figure(figsize=(10, 28))
+
+    heatmap = sns.clustermap(filtered_results, cmap='viridis', cbar_kws={'label': 'Enrichment Score'}, figsize =  (28, 10))
+    # plt.title(f"Enrichment Analysis for {feature_type}")
     plt.xlabel("Bait")
     plt.ylabel("Feature")
+    heatmap.cax.set_ylabel('log2 Enrichment Score', rotation=270, labelpad=15)
 
     ax = heatmap.ax_heatmap
-    ax.set_xticklabels(ax.get_xticklabels(), fontsize=8, rotation=45, ha='right')
-    ax.set_yticklabels(ax.get_yticklabels(), fontsize=5)
+    # ax.set_xticklabels(ax.get_xticklabels(), fontsize=5, rotation=45, ha='right')
+    # ax.set_yticklabels(ax.get_yticklabels(), fontsize=8)
+
+    # Use the reordered DataFrame from the clustermap (data2d holds the data with proper ordering)
+    ordered_columns = heatmap.data2d.columns
+
+    # # Set tick positions corresponding to every column
+    ax.set_xticks(np.arange(len(ordered_columns)) + 0.5)
+    ax.set_xticklabels(ordered_columns, rotation=45, ha='right', fontsize=5)
+
+
+    # Force the locator to show every tick
+    # ax.xaxis.set_major_locator(ticker.FixedLocator(np.arange(len(ordered_columns))))
+
     # plt.xticks(rotation=45, ha='right', fontsize=8)
     # plt.yticks(fontsize=8)
-    plt.tight_layout()
+    # plt.tight_layout()
 
     return heatmap
 
@@ -237,13 +279,20 @@ def main():
     # feature_df, results = process_data(data, columns_for_analysis, threshold)
     results = process_refactored(data, columns_for_analysis, threshold)
 
-    test = plot_results(results, 'GO_CC')
+    # test = plot_results(results, 'Domains', num_features=30)
+    for feature in columns_for_analysis:
+        print("Plotting results for feature type:", feature)
+        heatmap = plot_results(results, feature, num_features=30)
+
+        # Save the figure to a file
+        plt.savefig(output_dir + f"{feature}_enrichment_analysis.png", dpi=600, bbox_inches='tight')
+        plt.close()
 
     # Show the plot
     plt.show()
 
-    # # feature_df.to_csv(output_dir + "Feature_DF_new.csv", index=False)
-    # results.to_csv(output_dir + "Results_new.csv", index=False)
+    # feature_df.to_csv(output_dir + "Feature_DF_new.csv", index=False)
+    results.to_csv(output_dir + "Results_new.csv", index=False)
 
     # Plot the results
 
