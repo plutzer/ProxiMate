@@ -303,6 +303,7 @@ def main():
                         cwd="/Scripts/GOGO")
 
     # Now read in the GOGO output file
+    print(f"Reading in GOGO output file... {str(args.outputDir)}")
     output_filename = str(args.outputDir) + "/gogo_output.txt" # This will be the output file from GOGO
 
     # Initialize the dictionary

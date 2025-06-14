@@ -55,7 +55,7 @@ COPY Scripts /Scripts
 COPY GUI /GUI
 COPY run_pipeline.sh /run_pipeline.sh
 
-ENV PYTHONPATH=/Scripts
+ENV PYTHONPATH=/Scripts:/Scripts/GOGO
 
 
 # Create a directory for output files
