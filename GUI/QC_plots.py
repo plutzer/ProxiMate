@@ -2,6 +2,7 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 from sklearn.decomposition import PCA
+import plotly.graph_objects as go
 
 
 
@@ -51,12 +52,18 @@ def pca_plot(interaction, experimentalDesign):
     # Merge with the metadata to get the BaitName and Type
     pca_df = pca_df.merge(metadata, left_on='Experiment', right_on='Experiment', how='left')
 
-    # Make a plotly scatterplot of the PCA results
-    fig = px.scatter(pca_df, x='PC1', y='PC2', color='BaitName', symbol='Type',
-                                 hover_name='Experiment', hover_data=['Experiment', 'BaitName'],
-                                 title="PCA of Interaction Data")
+    pca_df['PC1'] = pd.to_numeric(pca_df['PC1'], errors='coerce')
+    pca_df['PC2'] = pd.to_numeric(pca_df['PC2'], errors='coerce')
 
-    return fig
+    # Make a plotly scatterplot of the PCA results
+    # fig = px.scatter(pca_df, x='PC1', y='PC2', color='BaitName', symbol='Type',
+    #                              hover_name='Experiment', hover_data=['Experiment', 'BaitName'],
+    #                              title="PCA of Interaction Data")
+    print(pca_df)
+
+    # fig_widget = go.FigureWidget(fig)
+
+    return pca_df
 
 def saint_known_retention(results_path, ctrl_experiments=None):
 

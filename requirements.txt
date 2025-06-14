@@ -4,3 +4,8 @@ argparse
 scipy
 statsmodels
 shiny
+plotly
+scikit-learn
+ipywidgets
+shinywidgets
+anywidget

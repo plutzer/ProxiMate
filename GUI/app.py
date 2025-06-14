@@ -1,5 +1,9 @@
 from functools import partial
 from shiny import App, Inputs, Outputs, Session, reactive, render, ui, run_app
+import plotly.graph_objects as go
+import plotly.express as px
+# from shiny import render_plotly
+from shinywidgets import output_widget, render_widget, render_plotly
 import pandas as pd
 import os
 import parse
@@ -8,10 +12,17 @@ import zipfile
 import tempfile
 import datetime
 import shutil
+from QC_plots import pca_plot
+
 
 out_dir = "/Outputs"
 
 app_ui = ui.page_navbar(
+    ui.tags.head(
+        ui.tags.script(
+            {"src": "https://cdn.plot.ly/plotly-latest.min.js"}
+        )
+    ),
     ui.nav_spacer(),
     ui.nav_panel("Input Data",
                  "Use either method to parse input data:",
@@ -67,7 +78,7 @@ app_ui = ui.page_navbar(
                     ui.input_select("qc_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
                     ui.card(
                         ui.card_header("Raw Data UMAP"),
-                        # Plotly PCA plot goes here
+                        ui.output_ui("raw_pca_plot"),
                     ),
                     ui.card(
                         # Add dropdown to select bait
@@ -250,6 +261,50 @@ def server(input: Inputs, output: Outputs, session: Session):
         print(curr_dataset)
         datasets.set(curr_dataset)
         print("Dataset updated.")
+
+    # Quality controls tab
+    @render_plotly
+    def raw_pca_plot():
+        # # Get the selected dataset
+        # dataset_name = input.qc_dataset.get()
+        # if not dataset_name:
+        #     return None
+        
+        # # Build the file paths
+        # interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
+        # ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
+
+        # # Check if the files exist
+        # if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
+        #     return None
+        
+        # # Generate the PCA plot
+        # pca_df = pca_plot(interaction_path, ed_path)
+
+        # Sample data
+        x = [1, 2, 3, 4, 5]
+        y = [10, 15, 13, 17, 14]
+
+        # Create figure
+        fig = go.Figure()
+
+        # Add scatter trace
+        fig.add_trace(go.Scatter(
+            x=x,
+            y=y,
+            mode='markers',  # can also use 'lines+markers' or 'lines'
+            marker=dict(size=10, color='blue'),
+            name='Data points'
+        ))
+        # Create a Plotly figure
+        # fig = px.scatter(pca_df, x='PC1', y='PC2', 
+        #                         # color='BaitName', symbol='Type',
+        #                         #  hover_name='Experiment', hover_data=['Experiment', 'BaitName'],
+        #                          title="PCA of Interaction Data")
+        
+        # fig_widget = go.FigureWidget(fig.data, fig.layout)
+
+        return fig
 
 
     @reactive.Calc
