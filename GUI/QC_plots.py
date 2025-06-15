@@ -52,18 +52,18 @@ def pca_plot(interaction, experimentalDesign):
     # Merge with the metadata to get the BaitName and Type
     pca_df = pca_df.merge(metadata, left_on='Experiment', right_on='Experiment', how='left')
 
-    pca_df['PC1'] = pd.to_numeric(pca_df['PC1'], errors='coerce')
-    pca_df['PC2'] = pd.to_numeric(pca_df['PC2'], errors='coerce')
+    # pca_df['PC1'] = pd.to_numeric(pca_df['PC1'], errors='coerce')
+    # pca_df['PC2'] = pd.to_numeric(pca_df['PC2'], errors='coerce')
 
     # Make a plotly scatterplot of the PCA results
-    # fig = px.scatter(pca_df, x='PC1', y='PC2', color='BaitName', symbol='Type',
-    #                              hover_name='Experiment', hover_data=['Experiment', 'BaitName'],
-    #                              title="PCA of Interaction Data")
+    fig = px.scatter(pca_df, x='PC1', y='PC2', color='BaitName', symbol='Type',
+                                 hover_name='Experiment', hover_data=['Experiment', 'BaitName'],
+                                 title="PCA of Interaction Data")
     print(pca_df)
 
     # fig_widget = go.FigureWidget(fig)
 
-    return pca_df
+    return fig
 
 def saint_known_retention(results_path, ctrl_experiments=None):
 

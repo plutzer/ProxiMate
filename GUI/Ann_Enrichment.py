@@ -96,13 +96,16 @@ def process_refactored(data, columns_for_analysis, threshold):
             result['Bait'] = experiment
             result['Feature_type'] = column
 
+            # calculate an adjusted p-value for the results
+            if len(result) > 0:
+                result['adj_p'] = multipletests(result['p_value'], method='fdr_bh')[1]
+            else:
+                continue
+
             # Concatenate the results to the temp_df
             if not result.empty:
                 temp_df = pd.concat([temp_df, result], ignore_index=True)
         
-        # Adjust the p-value for this feature type
-        temp_df['adj_p'] = multipletests(temp_df['p_value'], method='fdr_bh')[1]
-    
         # Add the temp_df to the results dataframe
         results = pd.concat([results, temp_df], ignore_index=True)
 

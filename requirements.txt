@@ -1,10 +1,14 @@
 numpy
 pandas
+matplotlib
+seaborn
+scipy
+statsmodels
 argparse
 scipy
 statsmodels
 shiny
-plotly
+plotly==5.24
 scikit-learn
 ipywidgets
 shinywidgets

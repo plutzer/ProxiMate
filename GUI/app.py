@@ -12,17 +12,13 @@ import zipfile
 import tempfile
 import datetime
 import shutil
-from QC_plots import pca_plot
+from QC_plots import pca_plot, saint_known_retention
+from Ann_Enrichment import process_refactored, plot_results
 
 
 out_dir = "/Outputs"
 
 app_ui = ui.page_navbar(
-    ui.tags.head(
-        ui.tags.script(
-            {"src": "https://cdn.plot.ly/plotly-latest.min.js"}
-        )
-    ),
     ui.nav_spacer(),
     ui.nav_panel("Input Data",
                  "Use either method to parse input data:",
@@ -76,18 +72,34 @@ app_ui = ui.page_navbar(
     ),
     ui.nav_panel("Quality Controls",
                     ui.input_select("qc_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
+                    ui.layout_columns(
+                        ui.card(
+                            ui.card_header("Raw Data UMAP"),
+                            output_widget("raw_pca_plot"),
+                        ),
+                        ui.card(
+                            # Add dropdown to select bait
+                            ui.card_header("Known Physical Interactions"),
+                            output_widget("known_retention_plot")
+                        ),
+                    ),
+    ),
+    ui.nav_panel("Protein Feature Analysis",
+                ui.layout_columns(
                     ui.card(
-                        ui.card_header("Raw Data UMAP"),
-                        ui.output_ui("raw_pca_plot"),
+                        ui.card_header("Parameters for Feature Analysis"),
+                        ui.input_select("feature_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
+                        ui.input_slider("saint_threshold", "Saint Threshold", min=0.0, max=1.0, value=0.9),
+                        ui.input_action_button("feature_analysis", "Run Feature Analysis"),
                     ),
                     ui.card(
-                        # Add dropdown to select bait
-                        ui.card_header("Known Physical Interactions"),
-                        # Plotly line plot goes here
-                    )
-    ),
-    ui.nav_panel("Protein Domains",
-                    "Page D content"
+                        ui.card_header("Feature Enrichment Analysis"),
+                        ui.input_select("feature_type", "Select Feature Type", choices=["GO_CC", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
+                        ui.input_numeric("num_features", "Number of Features to Display", value=30, min=1, max=100),
+                        # Spot for a seaborn heatmap
+                        ui.output_plot("feature_enrichment_plot"),
+                    ),
+                ),
     ),
     ui.nav_panel("Cytoscape",
                     "Page E content"
@@ -265,47 +277,88 @@ def server(input: Inputs, output: Outputs, session: Session):
     # Quality controls tab
     @render_plotly
     def raw_pca_plot():
-        # # Get the selected dataset
-        # dataset_name = input.qc_dataset.get()
-        # if not dataset_name:
-        #     return None
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return None
         
-        # # Build the file paths
-        # interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
-        # ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
+        # Build the file paths
+        interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
+        ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
 
-        # # Check if the files exist
-        # if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
-        #     return None
+        # Check if the files exist
+        if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
+            return None
         
-        # # Generate the PCA plot
-        # pca_df = pca_plot(interaction_path, ed_path)
-
-        # Sample data
-        x = [1, 2, 3, 4, 5]
-        y = [10, 15, 13, 17, 14]
-
-        # Create figure
-        fig = go.Figure()
-
-        # Add scatter trace
-        fig.add_trace(go.Scatter(
-            x=x,
-            y=y,
-            mode='markers',  # can also use 'lines+markers' or 'lines'
-            marker=dict(size=10, color='blue'),
-            name='Data points'
-        ))
-        # Create a Plotly figure
-        # fig = px.scatter(pca_df, x='PC1', y='PC2', 
-        #                         # color='BaitName', symbol='Type',
-        #                         #  hover_name='Experiment', hover_data=['Experiment', 'BaitName'],
-        #                          title="PCA of Interaction Data")
-        
-        # fig_widget = go.FigureWidget(fig.data, fig.layout)
+        # Generate the PCA plot
+        fig = pca_plot(interaction_path, ed_path)
 
         return fig
+    
+    @render_widget
+    def known_retention_plot():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return None
+        
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
 
+        if not os.path.exists(results_path):
+            return None
+        else:
+            # Call the saint_known_retention function to generate the plot
+            fig = saint_known_retention(results_path)
+
+            # Return the figure widget
+            return fig
+
+    feature_enrichment = reactive.Value(pd.DataFrame())
+
+    # Feature analysis tab
+    @reactive.effect
+    @reactive.event(input.feature_analysis)
+    def feature_analysis():
+        print("Running feature analysis")
+        print(input.feature_dataset.get())
+        print(input.saint_threshold.get())
+
+        # Get the selected dataset
+        dataset = pd.read_csv(os.path.join(out_dir, input.feature_dataset.get(), "annotated_scores.csv"))
+
+        result = process_refactored(
+            dataset,
+            columns_for_analysis = ['GO_CC', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains'],
+            threshold = input.saint_threshold.get()
+        )
+
+        # Store the results in the reactive value
+        feature_enrichment.set(result)
+
+        # Save the results to the dataset directory
+        result.to_csv(os.path.join(out_dir, input.feature_dataset.get(), "Feature_enrichment.csv"), index=False)
+        
+        print("Done running feature analysis. Results saved.")
+
+    @render.plot
+    def feature_enrichment_plot():
+        # Check if the feature enrichment data is available
+        if feature_enrichment.get().empty:
+            return None
+        
+        feature_type = input.feature_type.get()
+        if not feature_type:
+            feature_type = 'GO_CC'  # Default feature type if none is selected
+        # Plot the results for a specific feature type, e.g., 'Domains'
+
+        num_features = input.num_features.get() if input.num_features.get() else 30  # Default to 30 if not set
+        if num_features < 1:
+            num_features = 30
+
+        # Call the plot_results function to generate the heatmap
+        heatmap = plot_results(feature_enrichment.get(), feature_type, num_features)
+
+        return heatmap
 
     @reactive.Calc
     def available_datasets():
@@ -319,6 +372,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_select("score_dataset", choices=available_choices)
         ui.update_select("qc_dataset", choices=available_choices)
         ui.update_select("download_dataset", choices=available_choices)
+        ui.update_select("feature_dataset", choices=available_choices)
 
 app = App(app_ui, server)
 
