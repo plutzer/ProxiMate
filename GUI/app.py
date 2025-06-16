@@ -25,7 +25,9 @@ app_ui = ui.page_navbar(
                  ui.layout_columns(
                     ui.card(
                         ui.card_header("MaxQuant & Experimental Design Input"),
-                        ui.input_text("mq_dataset_name", "Dataset Name"),
+                        ui.input_text("mq_dataset_name", 
+                                    "Dataset Name",
+                                    placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
                         ui.input_file("pg_file", "MaxQuant proteinGroups.txt file"),
                         ui.input_file("ed_file", "Experimental Design File"),
                         ui.input_select("mq_quant_type", "Quantification Type", choices=["Intensity", "LFQ", "Spectral Counts"]),
@@ -129,22 +131,35 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.parse_mq)
     def parse_mq():
-        print("Parsing")
-        print(input.pg_file.get()[0]['name'])
-        print(input.ed_file.get()[0]['name'])
-        curr_dataset = datasets.get()
+        # Check if the dataset name is valid
+        dataset_name = input.mq_dataset_name.get()
+        check_result = parse.validate_name(dataset_name, datasets.get()['Dataset Name'].tolist())
+        if check_result != 0:
+            print(check_result)
+            ui.notification_show(
+                    f"Parser: {check_result}",
+                    type="error",
+                )            
+            return "Error: " + check_result
 
-        # Code for parsing goes here
-        print('parsing...')
-        # Print the current directory
-        print("Current directory:", os.getcwd())
+        with ui.Progress(min=0, max=1) as progress:
+            progress.set(message="Parsing MaxQuant inputs", value=0.25)
+            print("Parsing MaxQuant and Experimental Design files")
+            print(input.pg_file.get()[0]['name'])
+            print(input.ed_file.get()[0]['name'])
+            curr_dataset = datasets.get()
+            progress.set(0.45)
+            print("Current directory:", os.getcwd())
 
-        n_exp, n_ctrl = parse.parse_ed_pg(input.pg_file.get()[0]['datapath'], input.ed_file.get()[0]['datapath'], input.mq_quant_type.get(), out_dir + '/' + input.mq_dataset_name.get())
+            n_exp, n_ctrl = parse.parse_ed_pg(input.pg_file.get()[0]['datapath'], input.ed_file.get()[0]['datapath'], input.mq_quant_type.get(), out_dir + '/' + input.mq_dataset_name.get())
+            progress.set(0.85)
 
-        # Update the datasets dataframe
-        new_row = pd.DataFrame([[input.mq_dataset_name.get(), f'Protein Groups', input.mq_quant_type.get(), n_exp, n_ctrl, '', '', '']], columns=datasets.get().columns)
-        updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-        datasets.set(updated_datasets)
+            # Update the datasets dataframe
+            new_row = pd.DataFrame([[input.mq_dataset_name.get(), f'Protein Groups', input.mq_quant_type.get(), n_exp, n_ctrl, '', '', '']], columns=datasets.get().columns)
+            updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+            datasets.set(updated_datasets)
+            progress.set(1.0)
+        return "Parsed!"
 
     @reactive.effect
     @reactive.event(input.parse_saint)
@@ -217,83 +232,93 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.score_data)
     def score_data():
-        print("Scoring data")
-        print(input.score_dataset.get())
-        print(input.imputation_method.get())
-        print(input.wdfdr_iterations.get())
+        with ui.Progress(min=0, max=100) as progress:
+            progress.set(message="Scoring data", detail="Gathering inputs...", value=0)
+            print("Scoring data")
+            print(input.score_dataset.get())
+            print(input.imputation_method.get())
+            print(input.wdfdr_iterations.get())
 
-        # Get the quant type from the datasets dataframe
-        quant_type = datasets.get().loc[datasets.get()['Dataset Name'] == input.score_dataset.get(), 'Quant Type'].values[0]
+            # Get the quant type from the datasets dataframe
+            quant_type = datasets.get().loc[datasets.get()['Dataset Name'] == input.score_dataset.get(), 'Quant Type'].values[0]
 
-        # Code for scoring goes here
-        result = subprocess.run([
-            "python3",
-            "/Scripts/score.py",
-            "--experimentalDesign",
-            out_dir + '/' + input.score_dataset.get() + "/ED.csv",
-            "--scoreInputs",
-            out_dir + '/' + input.score_dataset.get(),
-            "--outputPath",
-            out_dir + '/' + input.score_dataset.get(),
-            "--n-iterations",
-            str(input.wdfdr_iterations.get()),
-            "--imputation",
-            input.imputation_method.get(),
-            "--quantType",
-            quant_type,
-        ], capture_output=True, text=True)
-        print("Scoring result:", result.stdout)
-        if result.stderr:
-            print("Error:", result.stderr)
-        print("Scoring completed.")
+            progress.set(message="Scoring data", detail="Running SAINT...", value=25)
+            # Code for scoring goes here
+            result = subprocess.run([
+                "python3",
+                "/Scripts/score.py",
+                "--experimentalDesign",
+                out_dir + '/' + input.score_dataset.get() + "/ED.csv",
+                "--scoreInputs",
+                out_dir + '/' + input.score_dataset.get(),
+                "--outputPath",
+                out_dir + '/' + input.score_dataset.get(),
+                "--n-iterations",
+                str(input.wdfdr_iterations.get()),
+                "--imputation",
+                input.imputation_method.get(),
+                "--quantType",
+                quant_type,
+            ], capture_output=True, text=True)
+            print("Scoring result:", result.stdout)
+            if result.stderr:
+                print("Error:", result.stderr)
+            print("Scoring completed.")
 
-        # Add script for annotation here
-        ann_result = subprocess.run([
-            "python3",
-            "/Scripts/annotator.py",
-            "--scoreFile",
-            out_dir + '/' + input.score_dataset.get() + "/merged.csv",
-            "--outputDir",
-            out_dir + '/' + input.score_dataset.get(),
-        ], capture_output=True, text=True)
-        print("Annotation result:", ann_result.stdout)
-        if ann_result.stderr:
-            print("Error:", ann_result.stderr)
-        print("Annotation completed.")
+            progress.set(message="Scoring data", detail="Adding protein annotation...", value=65)
 
-        # Update the datasets dataframe
-        curr_dataset = datasets.get().copy()
-        # Edit the row for the current dataset
+            # Add script for annotation here
+            ann_result = subprocess.run([
+                "python3",
+                "/Scripts/annotator.py",
+                "--scoreFile",
+                out_dir + '/' + input.score_dataset.get() + "/merged.csv",
+                "--outputDir",
+                out_dir + '/' + input.score_dataset.get(),
+            ], capture_output=True, text=True)
+            print("Annotation result:", ann_result.stdout)
+            if ann_result.stderr:
+                print("Error:", ann_result.stderr)
+            print("Annotation completed.")
 
-        imp_mapping = {0: 'Default', 1: 'Prey-specific'}
+            progress.set(message="Scoring data", detail="Updating datasets...", value=90)
 
-        curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Scored'] = 'Yes'
-        curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Imputation'] = imp_mapping[int(input.imputation_method.get())]
-        curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'WDFDR iterations'] = input.wdfdr_iterations.get()
-        print(curr_dataset)
-        datasets.set(curr_dataset)
-        print("Dataset updated.")
+            # Update the datasets dataframe
+            curr_dataset = datasets.get().copy()
+            # Edit the row for the current dataset
+
+            imp_mapping = {0: 'Default', 1: 'Prey-specific'}
+
+            curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Scored'] = 'Yes'
+            curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Imputation'] = imp_mapping[int(input.imputation_method.get())]
+            curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'WDFDR iterations'] = input.wdfdr_iterations.get()
+            print(curr_dataset)
+            datasets.set(curr_dataset)
+            print("Dataset updated.")
+            progress.set(message="Scoring data", detail="Done!", value=100)
 
     # Quality controls tab
     @render_plotly
     def raw_pca_plot():
-        # Get the selected dataset
-        dataset_name = input.qc_dataset.get()
-        if not dataset_name:
-            return None
-        
-        # Build the file paths
-        interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
-        ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
+        with ui.Progress(min=0, max=100) as progress:
+            progress.set(message="Generating Plots...", value=25)
+            # Get the selected dataset
+            dataset_name = input.qc_dataset.get()
+            if not dataset_name:
+                return None
+            
+            # Build the file paths
+            interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
+            ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
 
-        # Check if the files exist
-        if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
-            return None
-        
-        # Generate the PCA plot
-        fig = pca_plot(interaction_path, ed_path)
+            # Check if the files exist
+            if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
+                return None
+            
+            # Generate the PCA plot
+            fig = pca_plot(interaction_path, ed_path)
 
-        return fig
+            return fig
     
     @render_widget
     def known_retention_plot():
@@ -319,32 +344,47 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.feature_analysis)
     def feature_analysis():
-        print("Running feature analysis")
-        print(input.feature_dataset.get())
-        print(input.saint_threshold.get())
+        with ui.Progress(min=0, max=100) as progress:
+            progress.set(message="Running protein feature analysis", value=5)
+            print("Running feature analysis")
+            print(input.feature_dataset.get())
+            print(input.saint_threshold.get())
 
-        # Get the selected dataset
-        dataset = pd.read_csv(os.path.join(out_dir, input.feature_dataset.get(), "annotated_scores.csv"))
+            # Get the selected dataset
+            progress.set(message="Running protein feature analysis", detail="Loading dataset...", value=20)
+            dataset = pd.read_csv(os.path.join(out_dir, input.feature_dataset.get(), "annotated_scores.csv"))
 
-        result = process_refactored(
-            dataset,
-            columns_for_analysis = ['GO_CC', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains'],
-            threshold = input.saint_threshold.get()
-        )
+            progress.set(message="Running protein feature analysis", detail="Processing data...", value=50)
+            result = process_refactored(
+                dataset,
+                columns_for_analysis = ['GO_CC', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains'],
+                threshold = input.saint_threshold.get()
+            )
 
-        # Store the results in the reactive value
-        feature_enrichment.set(result)
+            progress.set(message="Running protein feature analysis", detail="Generating plots...", value=80)
+            # Store the results in the reactive value
+            feature_enrichment.set(result)
 
-        # Save the results to the dataset directory
-        result.to_csv(os.path.join(out_dir, input.feature_dataset.get(), "Feature_enrichment.csv"), index=False)
-        
-        print("Done running feature analysis. Results saved.")
+            progress.set(message="Running protein feature analysis", detail="Saving results...", value=90)
+            # Save the results to the dataset directory
+            result.to_csv(os.path.join(out_dir, input.feature_dataset.get(), "Feature_enrichment.csv"), index=False)
+            
+            progress.set(message="Running protein feature analysis", detail="Done!", value=100)
+            print("Done running feature analysis. Results saved.")
 
     @render.plot
     def feature_enrichment_plot():
-        # Check if the feature enrichment data is available
-        if feature_enrichment.get().empty:
+        
+        # Set the feature enrichment to whatever dataset is selected
+        dataset = input.feature_dataset.get()
+        if not dataset:
             return None
+        
+        feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
+        if not os.path.exists(feature_file):
+            return None
+
+        feature_enrichment.set(pd.read_csv(feature_file))
         
         feature_type = input.feature_type.get()
         if not feature_type:
@@ -362,17 +402,21 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @reactive.Calc
     def available_datasets():
-        # Extract the "Dataset Name" column
         return datasets.get()["Dataset Name"].tolist()
+
+    @reactive.Calc
+    def scored_datasets():
+        return datasets.get()[datasets.get()['Scored'] == 'Yes']["Dataset Name"].tolist()
 
     @reactive.Effect
     def update_score_dataset():
         # Update the dropdown choices dynamically
         available_choices = available_datasets()
+        scored_choices = scored_datasets()
         ui.update_select("score_dataset", choices=available_choices)
         ui.update_select("qc_dataset", choices=available_choices)
         ui.update_select("download_dataset", choices=available_choices)
-        ui.update_select("feature_dataset", choices=available_choices)
+        ui.update_select("feature_dataset", choices=scored_choices)
 
 app = App(app_ui, server)
 

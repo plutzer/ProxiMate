@@ -5,6 +5,25 @@ import os
 from experimental_design import ExperimentalDesign
 from protein_groups import ProteinGroups
 import shutil
+import re
+
+def validate_name(s: str, datasets):
+    """
+    Check that `s` is non‐empty, contains no whitespace, and only alphanumeric or underscore characters.
+    Returns:
+      0 if the name is valid,
+      otherwise a string describing the first validation error.
+    """
+    if not s:
+        return "Error: Dataset name cannot be empty"
+    if re.search(r"\s", s):
+        return "Error: Dataset name cannot contain spaces"
+    # allow only letters, digits, and underscore
+    if re.search(r"[^A-Za-z0-9_]", s):
+        return "Error: Dataset name can only contain letters, numbers, and underscores"
+    if s in datasets:
+        return f"Error: Dataset name '{s}' already exists in the datasets"
+    return 0
 
 def parse_ed_pg(proteinGroups, experimentalDesign, quantType, outputPath):
     """
@@ -107,11 +126,4 @@ def main():
         print("Error: No proteinGroups file provided.")
 
 if __name__ == "__main__":
-    # main()
-    num_expts, num_ctrls = parse_ed_pg("C:/Users/plutzer/Work/ProxiMate_Testing/proteinGroups.txt",
-                "C:/Users/plutzer/Work/ProxiMate_Testing/ED_CUL3_NC_split_basal_1hB_3hB_IB.csv",
-                "Intensity",
-                "C:/Users/plutzer/Work/ProxiMate_Testing")
-    
-    print("Num experiments: ", num_expts)
-    print("Num controls: ", num_ctrls)
+    main()
