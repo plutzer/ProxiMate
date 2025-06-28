@@ -12,7 +12,7 @@ import zipfile
 import tempfile
 import datetime
 import shutil
-from QC_plots import pca_plot, saint_known_retention
+from QC_plots import pca_plot, saint_known_retention, roc_plot
 from Ann_Enrichment import process_refactored, plot_results
 
 
@@ -84,6 +84,12 @@ app_ui = ui.page_navbar(
                             ui.card_header("Known Physical Interactions"),
                             output_widget("known_retention_plot")
                         ),
+                        ui.card(
+                            ui.card_header("ROC Curve for BioGRID Interactions"),
+                            ui.input_radio_buttons("roc_known_type", "True Positive Type", choices={"BioGRID":"All Physical Interactions", "Multivalidated":"Multivalidated Physical Interactions"}),
+                            output_widget("roc_curve_plot")
+                        ),
+                        col_widths=(4,4,4),
                     ),
     ),
     ui.nav_panel("Protein Feature Analysis",
@@ -337,6 +343,23 @@ def server(input: Inputs, output: Outputs, session: Session):
 
             # Return the figure widget
             return fig
+        
+    @render_widget
+    def roc_curve_plot():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return None
+        
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+
+        if not os.path.exists(results_path):
+            return None
+
+        fig = roc_plot(results_path, known_type=input.roc_known_type.get()) # Add selected ctrls
+
+        # Return the figure widget
+        return fig
 
     feature_enrichment = reactive.Value(pd.DataFrame())
 
@@ -399,6 +422,8 @@ def server(input: Inputs, output: Outputs, session: Session):
         heatmap = plot_results(feature_enrichment.get(), feature_type, num_features)
 
         return heatmap
+    
+
 
     @reactive.Calc
     def available_datasets():
