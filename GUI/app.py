@@ -39,13 +39,23 @@ app_ui = ui.page_navbar(
                     ui.card(
                         ui.card_header('SAINT Input'),
                         ui.input_text("st_dataset_name", "Dataset Name"),
-                        ui.input_file("bait", "SAINT bait.txt file"),
-                        ui.input_file("prey", "SAINT prey.txt file"),
-                        ui.input_file("interaction", "SAINT interaction.txt file"),
-                        # Add a link to the SAINT documentation for input formats
-                        # ui.link("Documentation for SAINT input format", "www.google.com"),# Placeholder
-                        ui.input_action_button("parse_saint", "Parse SAINT Inputs")
+                        ui.layout_columns(
+                            ui.panel_well(
+                                ui.input_file("bait", "SAINT bait.txt file"),
+                                ui.input_file("prey", "SAINT prey.txt file"),
+                                ui.input_file("interaction", "SAINT interaction.txt file"),
+                                # Add a link to the SAINT documentation for input formats
+                                # ui.link("Documentation for SAINT input format", "www.google.com"),# Placeholder
+                                ui.input_select("saint_quant_type", "Quantification Type", choices=["Intensity", "LFQ", "Spectral Counts"]),
+                                ui.input_action_button("parse_saint", "Parse SAINT Inputs")
+                            ),
+                            ui.panel_well(
+                                "CompPASS Scoring requires a mapping of Experiment IDs to their corresponding uniprot IDs. Edit the values in the Bait ID column for accurate CompPASS scoring.",
+                                ui.output_data_frame("bait_table"),
+                            ),
+                        ),
                     ),
+                    col_widths=[4,8]
                  ),
                  # Render text if parse button has executed successfully
                  ui.card(
@@ -133,6 +143,32 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.data_frame
     def render_datasets():
         return render.DataGrid(datasets.get())
+    
+    saint_baits = reactive.Value(pd.DataFrame(
+        columns=["Experiment Name", "Bait", "Type", "Bait ID"]
+    ))
+
+    @render.data_frame
+    def bait_table():
+        # Return the bait table for SAINT input
+        return render.DataGrid(saint_baits.get(), editable=True)
+
+    @reactive.effect
+    @reactive.event(input.bait)
+    def update_bait_table():
+        # Check to see if the bait file has been uploaded
+        if input.bait.get():
+            # Read the bait file and set it to the saint_baits reactive value
+            print("Bait file uploaded:", input.bait.get()[0]['name'])
+            # Read the bait file into a DataFrame
+
+            # Catch bad input files here
+
+            # Check to make sure the columns are correct and don't have any missing values
+            saint_baits.set(pd.read_csv(input.bait.get()[0]['datapath'], sep="\t", header=None, index_col=None, names=["Experiment Name", "Bait", "Type"]))
+            # Add a new column for Bait ID
+            saint_baits.get()['Bait ID'] = 'None'  # Default value for Bait ID
+            print("Bait table updated with", len(saint_baits.get()), "rows.")
 
     @reactive.effect
     @reactive.event(input.parse_mq)
@@ -171,11 +207,48 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.event(input.parse_saint)
     def parse_saint():
         print("Parsing")
-        print(input.bait)
-        print(input.prey)
-        print(input.interaction)
+        print(input.bait.get()[0]['datapath'])
+        print(input.prey.get()[0]['datapath'])
+        print(input.interaction.get()[0]['datapath'])
 
+        # Check if the dataset name is valid
+        dataset_name = input.st_dataset_name.get()
+        check_result = parse.validate_name(dataset_name, datasets.get()['Dataset Name'].tolist())
+        if check_result != 0:
+            print(check_result)
+            ui.notification_show(
+                    f"Parser: {check_result}",
+                    type="error",
+                )            
+            return "Error: " + check_result
+        
+        # Create the output directory if it doesn't exist
+        if not os.path.exists(out_dir + '/' + dataset_name):
+            os.makedirs(out_dir + '/' + dataset_name)
+        
+        n_expts, n_ctrls = parse.parse_from_saint(
+            bait_table.data_view(),
+            input.prey.get()[0]['datapath'],
+            input.interaction.get()[0]['datapath'],
+            out_dir + '/' + input.st_dataset_name.get()
+        )
+
+        # Copy the bait, prey, and interaction files to the output directory
+        shutil.copy(input.bait.get()[0]['datapath'], out_dir + '/' + dataset_name + '/bait.txt')
+        shutil.copy(input.prey.get()[0]['datapath'], out_dir + '/' + dataset_name + '/prey.txt')
+        shutil.copy(input.interaction.get()[0]['datapath'], out_dir + '/' + dataset_name + '/interaction.txt')
+
+        # Update the datasets dataframe
+        new_row = pd.DataFrame([[dataset_name, 'SAINT', input.saint_quant_type.get(), n_expts, n_ctrls, '', '', '']], columns=datasets.get().columns)
+
+        updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+        datasets.set(updated_datasets)
+        print("Parsed SAINT inputs. Updated datasets.")
+
+        print("Edited bait table:", bait_table.data_view())
         # Code for parsing goes here
+
+
 
     def do_clear_datasets():
         datasets.set(pd.DataFrame(columns=['Dataset Name', 'Input Type', 'Quant Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']))

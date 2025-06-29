@@ -67,6 +67,36 @@ def parse_ed_pg(proteinGroups, experimentalDesign, quantType, outputPath):
 
     return num_expts, num_ctrls
 
+def parse_from_saint(bait_df, preyfile, interactionfile, outputPath):
+
+    # bait = pd.read_csv(baitfile, sep="\t", header=None, names=["Experiment Name", "Bait", "Type", ])
+    prey = pd.read_csv(preyfile, sep="\t", header=None, names=["Prey", "Prey.Name"])
+    interaction = pd.read_csv(interactionfile, sep="\t", header=None, names=["Experiment.ID", "Bait", "Prey", "Spectral.Count"])
+    print('Parsing SAINT files...')
+
+    # Recreate the experimental design file
+    new_ed = bait_df.copy()[["Experiment Name", "Type", "Bait", "Bait ID"]]
+    # Add replicate numbers
+    new_ed["Replicate"] = new_ed.groupby("Bait").cumcount() + 1
+    # new_ed["Bait ID"] = "None"
+    new_ed.to_csv(os.path.join(outputPath, "ED.csv"), index=False)
+
+    # Recreate the proteinGroups file
+    # Apparently, I might not need to do this...
+
+    # Recreate the to_compass file
+    compass = interaction.copy()
+    compass = pd.merge(compass, new_ed.drop(columns=["Bait"]), left_on="Experiment.ID", right_on="Experiment Name", how="left")
+    compass = pd.merge(compass, prey, on="Prey", how="left")
+
+    to_compass = compass[["Bait", "Replicate", "Bait ID", "Prey", "Prey.Name", "Spectral.Count"]].rename(columns={"Bait ID": "Bait", "Bait": "Experiment.ID"})
+    to_compass.to_csv(os.path.join(outputPath, "to_CompPASS.csv"), index=False)
+
+    # Return information needed for the GUI Datasets table
+    n_expts = len(new_ed["Experiment Name"].unique())
+    n_ctrls = len(new_ed[new_ed["Type"] == "C"]["Experiment Name"].unique())
+    return n_expts, n_ctrls
+
 def main():
 
     description = "This is the entry point to the program. It will execute the requested tasks."
@@ -126,4 +156,9 @@ def main():
         print("Error: No proteinGroups file provided.")
 
 if __name__ == "__main__":
-    main()
+    basedir = "C:/Users/isaac/Work/Ilah_testdata/SAINT"
+    # For testing parse from saint
+    bait_df = pd.read_csv(basedir + "/bait.txt", sep="\t", header=None, names=["Experiment Name", "Bait", "Type", "Bait ID"])
+    parse_from_saint(bait_df, basedir + "/prey.txt", basedir + "/interaction.txt", basedir)
+
+    # main()
