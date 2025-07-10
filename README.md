@@ -5,7 +5,7 @@ All-in-one GUI and scripts for analyzing proximity labelling data.
 ### Running the GUI locally (easiest)
 1. Download and install Docker: https://www.docker.com/products/docker-desktop/
 2. Run the pre-built container from dockerhub, exposing the 3838 port
-    `docker run -p 3838:3838 plutzer/score_apms`
+    `docker run -p 3838:3838 plutzer/proximate`
 3. Access the GUI through a web browswer at localhost:3838
 
 ### Running the docker container interactively (experienced users)
