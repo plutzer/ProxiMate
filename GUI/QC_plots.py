@@ -101,7 +101,7 @@ def saint_known_retention(results_path, ctrl_experiments=None):
 
     # If ctrl is used, filter the results
     if ctrl_experiments is not None:
-        results = results[results['Experiment'].isin(ctrl_experiments)]
+        results = results[results['Experiment.ID'].isin(ctrl_experiments)]
 
     thresholds = np.arange(0, 1.05, 0.05)
 
@@ -144,7 +144,7 @@ def roc_plot(results_path, known_type, ctrl_experiments=None):
 
     # If ctrl is used, filter the results
     if ctrl_experiments is not None:
-        scores = scores[scores['Experiment'].isin(ctrl_experiments)]
+        scores = scores[scores['Experiment.ID'].isin(ctrl_experiments)]
 
     # Get the true positives and false positives
     if known_type == 'BioGRID':

@@ -83,7 +83,10 @@ app_ui = ui.page_navbar(
                     # ui.output_text_verbatim("log_text"),
     ),
     ui.nav_panel("Quality Controls",
-                    ui.input_select("qc_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
+                    ui.layout_columns(
+                        ui.input_select("qc_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
+                        ui.input_select("qc_bait", "Select Control Bait", choices=["All"]), # Need this to be dynamic
+                    ),
                     ui.layout_columns(
                         ui.card(
                             ui.card_header("Raw Data UMAP"),
@@ -123,8 +126,25 @@ app_ui = ui.page_navbar(
                     "Page E content"
     ),
     ui.nav_panel("Downloads",
-                    ui.input_select("download_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
-                    # Add download buttons for all the files
+                    ui.input_select("download_dataset", "Select Dataset", choices=[]),
+                    ui.layout_columns(
+                        ui.card(
+                            ui.card_header("Create a Custom Dataset"),
+                            "Select Columns for the Custom Dataset",
+                            ui.input_selectize("custom_columns", "Select Columns", choices=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"], multiple=True, selected=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"]),
+                        ),
+                        ui.card(
+                            ui.card_header("Custom Dataset"),
+                            # Render the custom dataset table here
+                            ui.output_data_frame("custom_table"), # This dataset should not be editable
+                            ui.download_button("download_custom_dataset", "Download Custom Dataset"),
+                        ),
+                        col_widths=(4,8)
+                    ),
+                    ui.card(
+                        ui.card_header("Download Internal Datasets"),
+                        "Premade datasets used internally by ProxiMate.",
+                    )
     ),
     sidebar=ui.sidebar(
         "Sidebar content"
@@ -408,11 +428,18 @@ def server(input: Inputs, output: Outputs, session: Session):
         
         results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
 
+        ctrls = None
+        if input.qc_bait.get() != "All":
+            ctrls = [input.qc_bait.get()]
+            print(ctrls)
+        
         if not os.path.exists(results_path):
+            print(f"File not found for dataset {dataset_name}. Resetting bait selection.")
+            ctrls = None
             return None
         else:
             # Call the saint_known_retention function to generate the plot
-            fig = saint_known_retention(results_path)
+            fig = saint_known_retention(results_path, ctrl_experiments=ctrls)
 
             # Return the figure widget
             return fig
@@ -428,8 +455,14 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         if not os.path.exists(results_path):
             return None
+        
+        ctrls = None
+        if input.qc_bait.get() != "All":
+            ctrls = [input.qc_bait.get()]
+            print(ctrls)
+        
 
-        fig = roc_plot(results_path, known_type=input.roc_known_type.get()) # Add selected ctrls
+        fig = roc_plot(results_path, known_type=input.roc_known_type.get(), ctrl_experiments=ctrls) # Add selected ctrls
 
         # Return the figure widget
         return fig
@@ -515,6 +548,84 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_select("qc_dataset", choices=available_choices)
         ui.update_select("download_dataset", choices=available_choices)
         ui.update_select("feature_dataset", choices=scored_choices)
+
+    @reactive.Effect
+    def update_qc_bait():
+        # Update the bait dropdown choices dynamically based on the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if dataset_name:
+            # Check to see if the dataset has been scored
+            try:
+                scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
+                baits = scores['Experiment.ID'].unique().tolist()
+                print(baits)
+                baits.insert(0, "All")  # Add "All" option
+                ui.update_select("qc_bait", choices=baits)
+            except FileNotFoundError:
+                print(f"File not found for dataset {dataset_name}. Resetting bait selection.")
+                ui.update_select("qc_bait", choices=["All"])  # Reset to default if file not found
+        else:
+            ui.update_select("qc_bait", choices=["All"])  # Reset to default if no dataset is selected
+
+    @reactive.Effect
+    def update_selectize_custom_columns():
+        # Update the custom columns selectize input based on the available datasets
+        dataset_name = input.download_dataset.get()
+        if dataset_name:
+            # Read the dataset to get the columns
+            dataset_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+            if os.path.exists(dataset_path):
+                df = pd.read_csv(dataset_path)
+                available_columns = df.columns.tolist()
+                # Sort the columns alphabetically
+                available_columns.sort()
+                ui.update_selectize("custom_columns", choices=available_columns, selected=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"])
+
+    custom_dataset = reactive.Value(pd.DataFrame())
+
+    @render.data_frame
+    def custom_table():
+        dataset = input.download_dataset.get()
+        if not dataset:
+            return pd.DataFrame()
+        
+        # Custom cols will come from a user input
+        custom_cols = list(input.custom_columns.get())
+        print(custom_cols)
+        if not custom_cols:
+            # Default columns if none are selected
+            custom_cols = ["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"]
+        
+        # Load the dataset from the output directory
+        dataset_path = os.path.join(out_dir, dataset, "annotated_scores.csv")
+        if not os.path.exists(dataset_path):
+            return pd.DataFrame()
+        df = pd.read_csv(dataset_path)
+
+        print(df.columns)
+
+        custom_df = df[custom_cols]
+        custom_dataset.set(custom_df)
+
+        return custom_dataset.get()
+        return custom_dataset.get()
+    
+    # Add a download button for the custom dataset
+    @render.download()
+    def download_custom_dataset():
+        if custom_dataset.get().empty:
+            ui.notification_show(
+                "No custom dataset to download. Please select columns first.",
+                type="error",
+            )
+            return None
+        # Create a temporary file to save the custom dataset
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"custom_dataset_{timestamp}.csv"
+        savepath = os.path.join(out_dir, filename)
+        # temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=filename, suffix=".csv")
+        custom_dataset.get().to_csv(savepath, index=False)
+        return savepath
 
 app = App(app_ui, server)
 
