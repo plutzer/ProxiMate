@@ -156,9 +156,9 @@ def main():
         print("Error: No proteinGroups file provided.")
 
 if __name__ == "__main__":
-    basedir = "C:/Users/isaac/Work/Ilah_testdata/SAINT"
-    # For testing parse from saint
-    bait_df = pd.read_csv(basedir + "/bait.txt", sep="\t", header=None, names=["Experiment Name", "Bait", "Type", "Bait ID"])
-    parse_from_saint(bait_df, basedir + "/prey.txt", basedir + "/interaction.txt", basedir)
+    # basedir = "C:/Users/isaac/Work/Ilah_testdata/SAINT"
+    # # For testing parse from saint
+    # bait_df = pd.read_csv(basedir + "/bait.txt", sep="\t", header=None, names=["Experiment Name", "Bait", "Type", "Bait ID"])
+    # parse_from_saint(bait_df, basedir + "/prey.txt", basedir + "/interaction.txt", basedir)
 
-    # main()
+    main()
