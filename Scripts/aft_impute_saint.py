@@ -36,7 +36,7 @@ def likelihood(args, prey_intensities, Tlim, n, obs_mu, obs_sigma):
     '''
         Add documentation
     '''
-    return -np.sum([sample_likelihood(x, args[0], args[1], Tlim) for x in prey_intensities] + [np.log10(norm_pdf(args[0], obs_mu, obs_sigma / np.sqrt(n)) + 0.000001)])
+    return -np.sum([sample_likelihood(x, args[0], args[1], Tlim) for x in prey_intensities] + [n*np.log10(norm_pdf(args[0], obs_mu, obs_sigma) + 0.000001)])
 
 def get_initial_params(prey_intensities):
     '''
@@ -56,6 +56,21 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
     interaction = pd.read_csv(interaction_path, sep='\t',header=None)
     # Create column names
     interaction.columns = ['ExperimentID', 'Bait', 'Prey', 'Intensity']
+
+    df = interaction[interaction['Intensity'] > 0]
+    # y = df.groupby('Prey')['Intensity'].apply(lambda s: np.log10(s).mean())
+
+    # mu0 = float(y.median())
+    # mad = float((y - mu0).abs().median())
+    # tau  = float(max(1e-3, 1.4826 * mad))   # MAD→SD
+
+    # global_obs_mu    = mu0
+    # global_obs_sigma = tau
+    # print(f"Global prior (robust): mu0={mu0:.3f}, tau={tau:.3f}")
+
+    ### Code for tunable weight
+    prey_counts = interaction.groupby('Prey').agg({'Intensity': 'count'})
+    n0 = prey_counts['Intensity'].median()
 
     # Read in ED data
     ed = pd.read_csv(ed_path)
@@ -135,6 +150,9 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
 
             n = len(prey_intensities) - prey_intensities.count(0)
 
+            # Tunable weight
+            w = n/(n + n0)
+
             # Calculate the mean and sd of the log10 intensities excluding zeros
             log_prey_intensities = [np.log10(x) for x in prey_intensities if x != 0]
             obs_mu = np.mean(log_prey_intensities)
@@ -158,7 +176,7 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
                 b = bounds[1][1]
 
             # Optimize the parameters
-            res = minimize(likelihood, [a,b], args=(prey_intensities, Tlim, n, obs_mu, obs_sigma), method='Nelder-Mead', tol=1e-3, bounds = bounds)
+            res = minimize(likelihood, [a,b], args=(prey_intensities, Tlim, w, obs_mu, obs_sigma), method='Nelder-Mead', tol=1e-3, bounds = bounds)
 
             optimized_mu = res.x[0]
             optimized_sigma = res.x[1]
