@@ -297,7 +297,7 @@ def main():
 
     # TODO: GOGO subprocess call goes here
     p = subprocess.run(["perl",
-                        "gene_pair_comb.pl",
+                        "/Scripts/GOGO/gene_pair_comb.pl",
                         str(gogo_input_path),
                         str(args.outputDir) + "/gogo_output.txt"],
                         cwd="/Scripts/GOGO")
