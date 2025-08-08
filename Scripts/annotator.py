@@ -250,89 +250,89 @@ def main():
 
     # First need to write an input file for GOGO
     # Input file should be written to the same directory that the merged scores file came from. So from the scoreFile path remove everything after the last / and add gogo_input.txt
-    gogo_input_path = args.scoreFile.rsplit('/', 1)[0] + '/gogo_input.txt'
-    print("GOGO input: " + gogo_input_path)
+    # gogo_input_path = args.scoreFile.rsplit('/', 1)[0] + '/gogo_input.txt'
+    # print("GOGO input: " + gogo_input_path)
 
-    start_time = time.time()
-    bait_anns = {}
-    with open(gogo_input_path, "w") as f:
-        for index, row in annotated_scores.iterrows():
-            bait_id = row[bait_col]
-            prey_id = row[first_prey_col]
-            go_anns_raw = row['Gene Ontology (cellular component)'] # Go anns are in this format: cytosolic small ribosomal subunit [GO:0022627]; nucleus [GO:0005634]; plasma membrane [GO:0005886]
-            if pd.isnull(go_anns_raw):
-                # print(f"GO anns are null for {prey_id}")
-                # Skip this row
-                continue
-            else:
-                go_anns_split = go_anns_raw.split('; ')
-                # Now for each element get just the GO ID
-                go_ids = [ann.split(' [')[1].split(']')[0] for ann in go_anns_split]
+    # start_time = time.time()
+    # bait_anns = {}
+    # with open(gogo_input_path, "w") as f:
+    #     for index, row in annotated_scores.iterrows():
+    #         bait_id = row[bait_col]
+    #         prey_id = row[first_prey_col]
+    #         go_anns_raw = row['Gene Ontology (cellular component)'] # Go anns are in this format: cytosolic small ribosomal subunit [GO:0022627]; nucleus [GO:0005634]; plasma membrane [GO:0005886]
+    #         if pd.isnull(go_anns_raw):
+    #             # print(f"GO anns are null for {prey_id}")
+    #             # Skip this row
+    #             continue
+    #         else:
+    #             go_anns_split = go_anns_raw.split('; ')
+    #             # Now for each element get just the GO ID
+    #             go_ids = [ann.split(' [')[1].split(']')[0] for ann in go_anns_split]
 
-                # Now need the GO anns for the bait - use the uniprot dataframe for this
-                if bait_id in bait_anns:
-                    if bait_anns[bait_id] == []:
-                        # print(f"GO anns are empty for {bait_id}")
-                        continue
-                    else:
-                        bait_go_ids = bait_anns[bait_id]
-                else:
-                    bait_go_anns = uniprot[uniprot['Entry'] == bait_id]['Gene Ontology (cellular component)'].values
-                    if bait_go_anns.size == 0:
-                        bait_anns[bait_id] = []
-                        # print(f"GO anns are null for {bait_id}")
-                        continue
-                    elif pd.isnull(bait_go_anns):
-                        bait_anns[bait_id] = []
-                        # print(f"GO anns are null for {bait_id}")
-                        continue
-                    else:
-                        bait_go_anns_split = bait_go_anns[0].split('; ')
-                        bait_go_ids = [ann.split(' [')[1].split(']')[0] for ann in bait_go_anns_split]
-                        bait_anns[bait_id] = bait_go_ids
-            # Now append the line to the file
-            f.write(f"{bait_id} {' '.join(bait_go_ids)};{prey_id} {' '.join(go_ids)}\n")
+    #             # Now need the GO anns for the bait - use the uniprot dataframe for this
+    #             if bait_id in bait_anns:
+    #                 if bait_anns[bait_id] == []:
+    #                     # print(f"GO anns are empty for {bait_id}")
+    #                     continue
+    #                 else:
+    #                     bait_go_ids = bait_anns[bait_id]
+    #             else:
+    #                 bait_go_anns = uniprot[uniprot['Entry'] == bait_id]['Gene Ontology (cellular component)'].values
+    #                 if bait_go_anns.size == 0:
+    #                     bait_anns[bait_id] = []
+    #                     # print(f"GO anns are null for {bait_id}")
+    #                     continue
+    #                 elif pd.isnull(bait_go_anns):
+    #                     bait_anns[bait_id] = []
+    #                     # print(f"GO anns are null for {bait_id}")
+    #                     continue
+    #                 else:
+    #                     bait_go_anns_split = bait_go_anns[0].split('; ')
+    #                     bait_go_ids = [ann.split(' [')[1].split(']')[0] for ann in bait_go_anns_split]
+    #                     bait_anns[bait_id] = bait_go_ids
+    #         # Now append the line to the file
+    #         f.write(f"{bait_id} {' '.join(bait_go_ids)};{prey_id} {' '.join(go_ids)}\n")
 
-    print(f"Time taken to write GOGO input file: {time.time() - start_time}")
+    # print(f"Time taken to write GOGO input file: {time.time() - start_time}")
 
-    # TODO: GOGO subprocess call goes here
-    p = subprocess.run(["perl",
-                        "/Scripts/GOGO/gene_pair_comb.pl",
-                        str(gogo_input_path),
-                        str(args.outputDir) + "/gogo_output.txt"],
-                        cwd="/Scripts/GOGO")
+    # # TODO: GOGO subprocess call goes here
+    # p = subprocess.run(["perl",
+    #                     "/Scripts/GOGO/gene_pair_comb.pl",
+    #                     str(gogo_input_path),
+    #                     str(args.outputDir) + "/gogo_output.txt"],
+    #                     cwd="/Scripts/GOGO")
 
-    # Now read in the GOGO output file
-    print(f"Reading in GOGO output file... {str(args.outputDir)}")
-    output_filename = str(args.outputDir) + "/gogo_output.txt" # This will be the output file from GOGO
+    # # Now read in the GOGO output file
+    # print(f"Reading in GOGO output file... {str(args.outputDir)}")
+    # output_filename = str(args.outputDir) + "/gogo_output.txt" # This will be the output file from GOGO
 
-    # Initialize the dictionary
-    cc_dict = {}
+    # # Initialize the dictionary
+    # cc_dict = {}
 
-    counter = 0
+    # counter = 0
 
-    # Read in the output file line by line
-    with open(output_filename) as f:
-        content = f.readlines()
-        for item in content:
-            line = item.strip()
+    # # Read in the output file line by line
+    # with open(output_filename) as f:
+    #     content = f.readlines()
+    #     for item in content:
+    #         line = item.strip()
 
-            baitgene = line.split(' ') [0]
-            preygene = line.split(';')[1].split(' ')[0]
+    #         baitgene = line.split(' ') [0]
+    #         preygene = line.split(';')[1].split(' ')[0]
 
-            # Now I need to get the CCO score
-            # The score comes after 'CCO'
-            score = float(line.split('CCO')[1].strip().split(' ')[0])
+    #         # Now I need to get the CCO score
+    #         # The score comes after 'CCO'
+    #         score = float(line.split('CCO')[1].strip().split(' ')[0])
 
-            # Now I need to add this to the dictionary
-            if baitgene in cc_dict:
-                cc_dict[baitgene][preygene] = score
-            else:
-                cc_dict[baitgene] = {preygene: score}
+    #         # Now I need to add this to the dictionary
+    #         if baitgene in cc_dict:
+    #             cc_dict[baitgene][preygene] = score
+    #         else:
+    #             cc_dict[baitgene] = {preygene: score}
 
 
-    # Now I can add the CCO scores to the annotated scores
-    annotated_scores['CCO'] = annotated_scores.apply(lambda x: get_cco_score(x[bait_col], x[first_prey_col], cc_dict), axis=1)
+    # # Now I can add the CCO scores to the annotated scores
+    # annotated_scores['CCO'] = annotated_scores.apply(lambda x: get_cco_score(x[bait_col], x[first_prey_col], cc_dict), axis=1)
 
     # TODO: This is where we will filter the annotations based on user preference.
     # TODO: Also need to re-order the columns in a way that makes the most sense.
