@@ -8,3 +8,6 @@ SAINTexpress-custom/nlopt/
 SAINTexpress-custom/va/
 SAINTexpress-custom/Precompiled_binaries/
 Datasets/
+
+# Claude Code documentation
+CLAUDE.md
