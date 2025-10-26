@@ -6,6 +6,7 @@ from experimental_design import ExperimentalDesign
 from protein_groups import ProteinGroups
 import shutil
 import re
+import tempfile
 
 def validate_name(s: str, datasets):
     """
@@ -97,6 +98,108 @@ def parse_from_saint(bait_df, preyfile, interactionfile, outputPath):
     n_ctrls = len(new_ed[new_ed["Type"] == "C"]["Experiment Name"].unique())
     return n_expts, n_ctrls
 
+def convert_diann_to_maxquant_format(diann_file, experimental_design):
+    """
+    Convert DIA-NN report.pg_matrix.tsv to a MaxQuant-like proteinGroups format.
+
+    :param diann_file: path to DIA-NN report.pg_matrix.tsv file
+    :param experimental_design: ExperimentalDesign object
+    :return: DataFrame in MaxQuant-like format
+    """
+    print("Converting DIA-NN format to MaxQuant-compatible format...")
+
+    # Read DIA-NN file
+    diann_data = pd.read_csv(diann_file, sep="\t")
+
+    # Create a new DataFrame with MaxQuant-like columns
+    mq_data = pd.DataFrame()
+
+    # Map DIA-NN columns to MaxQuant columns
+    mq_data["Majority protein IDs"] = diann_data["Protein.Group"]
+    mq_data["Protein names"] = diann_data["Protein.Names"] if "Protein.Names" in diann_data.columns else ""
+    mq_data["Gene names"] = diann_data["Genes"] if "Genes" in diann_data.columns else ""
+
+    # Add fake filtering columns (DIA-NN doesn't have these, so set all to "-")
+    mq_data["Reverse"] = "-"
+    mq_data["Only identified by site"] = "-"
+    mq_data["Potential contaminant"] = "-"
+
+    # DIA-NN doesn't have sequence length in pg_matrix, but it's needed for spectral counts
+    # For now, set to 1 (this won't affect intensity-based quantification)
+    mq_data["Sequence length"] = 1
+
+    # Copy over the intensity columns - rename them to match MaxQuant format
+    # DIA-NN columns are the raw file paths, need to add "Intensity " prefix
+    for col in diann_data.columns:
+        # Skip the non-quantification columns
+        if col in ["Protein.Group", "Protein.Names", "Genes", "First.Protein.Description",
+                   "N.Sequences", "N.Proteotypic.Sequences"]:
+            continue
+
+        # Check if this column is in the experimental design
+        if col in experimental_design.name2experiment:
+            # Add with "Intensity " prefix to match MaxQuant format
+            mq_data[f"Intensity {col}"] = diann_data[col].fillna(0)
+
+    print(f"Converted {len(mq_data)} protein groups from DIA-NN format")
+
+    return mq_data
+
+def parse_diann(diannMatrix, experimentalDesign, quantType, outputPath):
+    """
+    Parse DIA-NN report.pg_matrix.tsv file and experimental design file.
+
+    :param diannMatrix: path to DIA-NN report.pg_matrix.tsv file
+    :param experimentalDesign: path to experimental design file
+    :param quantType: quantification type (should be "Intensity" for DIA-NN)
+    :param outputPath: path for the output directory
+    :return: tuple of (num_experiments, num_controls)
+    """
+    print("Parsing DIA-NN data...")
+    print("Experimental Design file: " + experimentalDesign)
+    print("DIA-NN Matrix file: " + diannMatrix)
+    print("Quantification type: " + quantType)
+
+    # Check to see if the output directory exists. If not, create it.
+    if not os.path.exists(outputPath):
+        print("Creating output directory: " + outputPath)
+        os.makedirs(outputPath)
+
+    # Copy the experimental design file to the output directory
+    shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
+
+    # Parse experimental design
+    experimental_design = ExperimentalDesign(experimentalDesign)
+
+    num_expts = experimental_design.num_experiments
+    num_ctrls = experimental_design.num_controls
+
+    # Convert DIA-NN format to MaxQuant-like format
+    mq_format_data = convert_diann_to_maxquant_format(diannMatrix, experimental_design)
+
+    # Save converted data to a temporary file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, newline='') as tmp_file:
+        tmp_path = tmp_file.name
+        mq_format_data.to_csv(tmp_file, sep="\t", index=False)
+
+    # Copy the temporary file to the output directory as proteinGroups.txt
+    shutil.copy(tmp_path, f"{outputPath}/proteinGroups.txt")
+
+    try:
+        # Process using the standard ProteinGroups class
+        # For DIA-NN, we always use "Intensity" as the quantification type
+        protein_groups = ProteinGroups(experimental_design, tmp_path,
+                                       "Intensity", "Intensity")
+
+        protein_groups.to_SAINT(outputPath)
+        protein_groups.to_CompPASS(outputPath)
+    finally:
+        # Clean up temporary file
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    return num_expts, num_ctrls
+
 def main():
 
     description = "This is the entry point to the program. It will execute the requested tasks."
@@ -109,6 +212,10 @@ def main():
                         help="path to MaxQuant ProteinGroups.txt",
                         default=None)
 
+    parser.add_argument("--diannMatrix",
+                        help="path to DIA-NN report.pg_matrix.tsv file",
+                        default=None)
+
     parser.add_argument("--experimentalDesign",
                         help="path to experimental design file",
                         default=None)
@@ -119,14 +226,21 @@ def main():
 
     # Argument for quantification type
     parser.add_argument("--quantType",
-                        help="SAINT: quantification type (Tntensity, Spectral Counts, LFQ)",
+                        help="SAINT: quantification type (Intensity, Spectral Counts, LFQ)",
                         default="Intensity")
 
     args = parser.parse_args()
 
     # MAIN
 
-    if args.proteinGroups is not None:
+    if args.diannMatrix is not None:
+        # DIA-NN input mode
+        if args.experimentalDesign is not None:
+            parse_diann(args.diannMatrix, args.experimentalDesign, args.quantType, args.outputPath)
+        else:
+            print("Error: No experimental design file provided.")
+    elif args.proteinGroups is not None:
+        # MaxQuant input mode
         if args.experimentalDesign is not None:
             # Check to see if the output directory exists. If not, create it.
             if not os.path.exists(args.outputPath):
@@ -153,7 +267,7 @@ def main():
         else:
             print("Error: No experimental design file provided.")
     else:
-        print("Error: No proteinGroups file provided.")
+        print("Error: No input file provided. Please specify either --proteinGroups or --diannMatrix.")
 
 if __name__ == "__main__":
     # basedir = "C:/Users/isaac/Work/Ilah_testdata/SAINT"

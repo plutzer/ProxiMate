@@ -24,17 +24,34 @@ app_ui = ui.page_navbar(
                  "Use either method to parse input data:",
                  ui.layout_columns(
                     ui.card(
-                        ui.card_header("MaxQuant & Experimental Design Input"),
-                        ui.input_text("mq_dataset_name", 
+                        ui.card_header("Proteomics Data Input"),
+                        ui.input_text("mq_dataset_name",
                                     "Dataset Name",
                                     placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
-                        ui.input_file("pg_file", "MaxQuant proteinGroups.txt file"),
+                        ui.input_select("input_format", "Input Format",
+                                       choices=["MaxQuant", "DIA-NN"],
+                                       selected="MaxQuant"),
+                        ui.panel_conditional(
+                            "input.input_format === 'MaxQuant'",
+                            ui.input_file("pg_file", "MaxQuant proteinGroups.txt file"),
+                            ui.input_select("mq_quant_type", "Quantification Type",
+                                          choices=["Intensity", "LFQ", "Spectral Counts"],
+                                          selected="Intensity")
+                        ),
+                        ui.panel_conditional(
+                            "input.input_format === 'DIA-NN'",
+                            ui.input_file("diann_matrix_file", "DIA-NN report.pg_matrix.tsv file"),
+                            ui.panel_well(
+                                "Note: DIA-NN uses intensity-based quantification."
+                            )
+                        ),
                         ui.input_file("ed_file", "Experimental Design File"),
-                        ui.input_select("mq_quant_type", "Quantification Type", choices=["Intensity", "LFQ", "Spectral Counts"]),
-                        "Experimental Design File Format:",
-                        "SampleName  Condition BiologicalReplicate",
-                        ui.input_action_button("parse_mq", "Parse MaxQuant Inputs")
-                        
+                        ui.panel_well(
+                            "Experimental Design File Format:",
+                            "Experiment Name, Type, Bait, Replicate, Bait ID"
+                        ),
+                        ui.input_action_button("parse_mq", "Parse Data")
+
                     ),
                     ui.card(
                         ui.card_header('SAINT Input'),
@@ -201,26 +218,83 @@ def server(input: Inputs, output: Outputs, session: Session):
             ui.notification_show(
                     f"Parser: {check_result}",
                     type="error",
-                )            
+                )
             return "Error: " + check_result
 
+        # Get the input format (MaxQuant or DIA-NN)
+        input_format = input.input_format.get()
+
         with ui.Progress(min=0, max=1) as progress:
-            progress.set(message="Parsing MaxQuant inputs", value=0.25)
-            print("Parsing MaxQuant and Experimental Design files")
-            print(input.pg_file.get()[0]['name'])
-            print(input.ed_file.get()[0]['name'])
-            curr_dataset = datasets.get()
-            progress.set(0.45)
-            print("Current directory:", os.getcwd())
+            if input_format == "MaxQuant":
+                progress.set(message="Parsing MaxQuant inputs", value=0.25)
+                print("Parsing MaxQuant and Experimental Design files")
 
-            n_exp, n_ctrl = parse.parse_ed_pg(input.pg_file.get()[0]['datapath'], input.ed_file.get()[0]['datapath'], input.mq_quant_type.get(), out_dir + '/' + input.mq_dataset_name.get())
-            progress.set(0.85)
+                # Check if files are uploaded
+                if not input.pg_file.get() or not input.ed_file.get():
+                    ui.notification_show(
+                        "Please upload both proteinGroups.txt and Experimental Design files",
+                        type="error"
+                    )
+                    return "Error: Missing files"
 
-            # Update the datasets dataframe
-            new_row = pd.DataFrame([[input.mq_dataset_name.get(), f'Protein Groups', input.mq_quant_type.get(), n_exp, n_ctrl, '', '', '']], columns=datasets.get().columns)
-            updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-            datasets.set(updated_datasets)
-            progress.set(1.0)
+                print(input.pg_file.get()[0]['name'])
+                print(input.ed_file.get()[0]['name'])
+                curr_dataset = datasets.get()
+                progress.set(0.45)
+                print("Current directory:", os.getcwd())
+
+                n_exp, n_ctrl = parse.parse_ed_pg(
+                    input.pg_file.get()[0]['datapath'],
+                    input.ed_file.get()[0]['datapath'],
+                    input.mq_quant_type.get(),
+                    out_dir + '/' + input.mq_dataset_name.get()
+                )
+                progress.set(0.85)
+
+                # Update the datasets dataframe
+                new_row = pd.DataFrame(
+                    [[input.mq_dataset_name.get(), 'MaxQuant', input.mq_quant_type.get(), n_exp, n_ctrl, '', '', '']],
+                    columns=datasets.get().columns
+                )
+                updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                datasets.set(updated_datasets)
+                progress.set(1.0)
+
+            elif input_format == "DIA-NN":
+                progress.set(message="Parsing DIA-NN inputs", value=0.25)
+                print("Parsing DIA-NN and Experimental Design files")
+
+                # Check if files are uploaded
+                if not input.diann_matrix_file.get() or not input.ed_file.get():
+                    ui.notification_show(
+                        "Please upload both DIA-NN matrix and Experimental Design files",
+                        type="error"
+                    )
+                    return "Error: Missing files"
+
+                print(input.diann_matrix_file.get()[0]['name'])
+                print(input.ed_file.get()[0]['name'])
+                curr_dataset = datasets.get()
+                progress.set(0.45)
+                print("Current directory:", os.getcwd())
+
+                n_exp, n_ctrl = parse.parse_diann(
+                    input.diann_matrix_file.get()[0]['datapath'],
+                    input.ed_file.get()[0]['datapath'],
+                    "Intensity",  # DIA-NN always uses intensity
+                    out_dir + '/' + input.mq_dataset_name.get()
+                )
+                progress.set(0.85)
+
+                # Update the datasets dataframe
+                new_row = pd.DataFrame(
+                    [[input.mq_dataset_name.get(), 'DIA-NN', 'Intensity', n_exp, n_ctrl, '', '', '']],
+                    columns=datasets.get().columns
+                )
+                updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                datasets.set(updated_datasets)
+                progress.set(1.0)
+
         return "Parsed!"
 
     @reactive.effect
