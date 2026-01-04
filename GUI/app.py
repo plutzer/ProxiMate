@@ -20,59 +20,76 @@ out_dir = "/Outputs"
 
 app_ui = ui.page_navbar(
     ui.nav_spacer(),
-    ui.nav_panel("Input Data",
-                 "Use either method to parse input data:",
+    ui.nav_panel("Network Scoring",
                  ui.layout_columns(
                     ui.card(
-                        ui.card_header("Proteomics Data Input"),
-                        ui.input_text("mq_dataset_name",
-                                    "Dataset Name",
-                                    placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
-                        ui.input_select("input_format", "Input Format",
-                                       choices=["MaxQuant", "DIA-NN"],
-                                       selected="MaxQuant"),
+                        ui.card_header("Data Parsing"),
+                        ui.layout_columns(
+                            ui.input_text("dataset_name",
+                                        "Dataset Name",
+                                        placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
+                            ui.input_select("input_format", "Input Format",
+                                           choices=["MaxQuant", "DIA-NN", "SAINT"],
+                                           selected="MaxQuant"),
+                            col_widths=[4, 8]
+                        ),
                         ui.panel_conditional(
                             "input.input_format === 'MaxQuant'",
-                            ui.input_file("pg_file", "MaxQuant proteinGroups.txt file"),
-                            ui.input_select("mq_quant_type", "Quantification Type",
-                                          choices=["Intensity", "LFQ", "Spectral Counts"],
-                                          selected="Intensity")
+                            ui.layout_columns(
+                                ui.div(
+                                    ui.input_file("pg_file", "MaxQuant proteinGroups.txt file"),
+                                    ui.tooltip(
+                                        ui.input_file("ed_file", "Experimental Design File"),
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                    ),
+                                    ui.input_select("quant_type", "Quantification Type",
+                                                  choices=["Intensity", "LFQ", "Spectral Counts"],
+                                                  selected="Intensity")
+                                ),
+                                ui.output_data_frame("ed_table_mq"),
+                                col_widths=[4, 8]
+                            )
                         ),
                         ui.panel_conditional(
                             "input.input_format === 'DIA-NN'",
-                            ui.input_file("diann_matrix_file", "DIA-NN report.pg_matrix.tsv file"),
-                            ui.panel_well(
-                                "Note: DIA-NN uses intensity-based quantification."
+                            ui.layout_columns(
+                                ui.div(
+                                    ui.input_file("diann_matrix_file", "DIA-NN report.pg_matrix.tsv file"),
+                                    ui.tooltip(
+                                        ui.input_file("ed_file", "Experimental Design File"),
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                    )
+                                ),
+                                ui.output_data_frame("ed_table_diann"),
+                                col_widths=[4, 8]
                             )
                         ),
-                        ui.input_file("ed_file", "Experimental Design File"),
-                        ui.panel_well(
-                            "Experimental Design File Format:",
-                            "Experiment Name, Type, Bait, Replicate, Bait ID"
+                        ui.panel_conditional(
+                            "input.input_format === 'SAINT'",
+                            ui.layout_columns(
+                                ui.div(
+                                    ui.input_file("bait", "SAINT bait.txt file"),
+                                    ui.input_file("prey", "SAINT prey.txt file"),
+                                    ui.input_file("interaction", "SAINT interaction.txt file"),
+                                    ui.input_select("quant_type", "Quantification Type",
+                                                  choices=["Intensity", "LFQ", "Spectral Counts"],
+                                                  selected="Intensity")
+                                ),
+                                ui.output_data_frame("bait_table"),
+                                col_widths=[4, 8]
+                            )
                         ),
-                        ui.input_action_button("parse_mq", "Parse Data")
-
+                        ui.input_action_button("parse_data", "Parse Data")
                     ),
                     ui.card(
-                        ui.card_header('SAINT Input'),
-                        ui.input_text("st_dataset_name", "Dataset Name"),
-                        ui.layout_columns(
-                            ui.panel_well(
-                                ui.input_file("bait", "SAINT bait.txt file"),
-                                ui.input_file("prey", "SAINT prey.txt file"),
-                                ui.input_file("interaction", "SAINT interaction.txt file"),
-                                # Add a link to the SAINT documentation for input formats
-                                # ui.link("Documentation for SAINT input format", "www.google.com"),# Placeholder
-                                ui.input_select("saint_quant_type", "Quantification Type", choices=["Intensity", "LFQ", "Spectral Counts"]),
-                                ui.input_action_button("parse_saint", "Parse SAINT Inputs")
-                            ),
-                            ui.panel_well(
-                                "CompPASS Scoring requires a mapping of Experiment IDs to their corresponding uniprot IDs. Edit the values in the Bait ID column for accurate CompPASS scoring.",
-                                ui.output_data_frame("bait_table"),
-                            ),
-                        ),
+                        ui.card_header('Scoring Parameters'),
+                        ui.input_select("score_dataset", "Select Dataset", choices=[]),
+                        ui.input_radio_buttons("imputation_method", "Imputation Method",
+                                              choices={0: "Default", 1: "Prey-specific"}),
+                        ui.input_numeric("wdfdr_iterations", "WDFDR Iterations", value=1000),
+                        ui.input_action_button("score_data", "Score Data")
                     ),
-                    col_widths=[4,8]
+                    col_widths=[8,4]
                  ),
                  # Render text if parse button has executed successfully
                  ui.card(
@@ -92,13 +109,6 @@ app_ui = ui.page_navbar(
                     ui.output_data_frame("render_datasets"),
                 ),
             ),
-    ui.nav_panel("Score Data",
-                    ui.input_select("score_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
-                    ui.input_radio_buttons("imputation_method", "Imputation Method", choices={0: "Default", 1: "Prey-specific"}),
-                    ui.input_numeric("wdfdr_iterations", "WDFDR Iterations", value=100),
-                    ui.input_action_button("score_data", "Score Data"),
-                    # ui.output_text_verbatim("log_text"),
-    ),
     ui.nav_panel("Quality Controls",
                     ui.layout_columns(
                         ui.input_select("qc_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
@@ -185,10 +195,28 @@ def server(input: Inputs, output: Outputs, session: Session):
         columns=["Experiment Name", "Bait", "Type", "Bait ID"]
     ))
 
+    ed_dataframe = reactive.Value(pd.DataFrame(
+        columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID"]
+    ))
+
     @render.data_frame
     def bait_table():
         # Return the bait table for SAINT input
         return render.DataGrid(saint_baits.get(), editable=True)
+
+    @render.data_frame
+    def ed_table_mq():
+        # Return the ED table for MaxQuant input
+        print("Rendering MaxQuant ED table")
+        print(ed_dataframe.get())
+        return render.DataGrid(ed_dataframe.get(), editable=True)
+
+    @render.data_frame
+    def ed_table_diann():
+        # Return the ED table for DIA-NN input
+        print("Rendering DIA-NN ED table")
+        print(ed_dataframe.get())
+        return render.DataGrid(ed_dataframe.get(), editable=True)
 
     @reactive.effect
     @reactive.event(input.bait)
@@ -208,10 +236,67 @@ def server(input: Inputs, output: Outputs, session: Session):
             print("Bait table updated with", len(saint_baits.get()), "rows.")
 
     @reactive.effect
-    @reactive.event(input.parse_mq)
-    def parse_mq():
+    @reactive.event(input.ed_file)
+    def update_ed_table():
+        # Check to see if the ED file has been uploaded
+        if input.ed_file.get():
+            # Read the ED file and set it to the ed_dataframe reactive value
+            print("ED file uploaded:", input.ed_file.get()[0]['name'])
+            try:
+                # Read the ED file into a DataFrame
+                ed_df = pd.read_csv(input.ed_file.get()[0]['datapath'])
+                print("ED file read with", len(ed_df), "rows.")
+
+                # Validate required columns
+                required_cols = ["Experiment Name", "Type", "Bait", "Replicate"]
+                missing_cols = [col for col in required_cols if col not in ed_df.columns]
+                if missing_cols:
+                    print("ED file is missing required columns:", missing_cols)
+                    ui.notification_show(
+                        f"ED file is missing required columns: {', '.join(missing_cols)}",
+                        type="error"
+                    )
+                    return
+
+                # Add Bait ID column if not present
+                if "Bait ID" not in ed_df.columns:
+                    ed_df['Bait ID'] = 'None'
+
+                # Validate Type values
+                invalid_types = ed_df[~ed_df['Type'].isin(['C', 'T'])]
+                if len(invalid_types) > 0:
+                    ui.notification_show(
+                        f"ED file contains invalid Type values. Must be 'C' or 'T'.",
+                        type="error"
+                    )
+                    return
+
+                ed_dataframe.set(ed_df)
+                print("ED table updated with", len(ed_dataframe.get()), "rows.")
+            except Exception as e:
+                ui.notification_show(
+                    f"Error reading ED file: {str(e)}",
+                    type="error"
+                )
+                print(f"Error reading ED file: {e}")
+
+    @reactive.effect
+    @reactive.event(input.input_format)
+    def clear_tables_on_format_change():
+        # Clear tables when format changes to avoid showing stale data
+        print(f"Input format changed to: {input.input_format.get()}")
+        if input.input_format.get() in ["MaxQuant", "DIA-NN"]:
+            # Clear SAINT bait table
+            saint_baits.set(pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"]))
+        elif input.input_format.get() == "SAINT":
+            # Clear ED table
+            ed_dataframe.set(pd.DataFrame(columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID"]))
+
+    @reactive.effect
+    @reactive.event(input.parse_data)
+    def parse_data():
         # Check if the dataset name is valid
-        dataset_name = input.mq_dataset_name.get()
+        dataset_name = input.dataset_name.get()
         check_result = parse.validate_name(dataset_name, datasets.get()['Dataset Name'].tolist())
         if check_result != 0:
             print(check_result)
@@ -221,8 +306,9 @@ def server(input: Inputs, output: Outputs, session: Session):
                 )
             return "Error: " + check_result
 
-        # Get the input format (MaxQuant or DIA-NN)
+        # Get the input format (MaxQuant, DIA-NN, or SAINT)
         input_format = input.input_format.get()
+        output_path = out_dir + '/' + dataset_name
 
         with ui.Progress(min=0, max=1) as progress:
             if input_format == "MaxQuant":
@@ -239,21 +325,26 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                 print(input.pg_file.get()[0]['name'])
                 print(input.ed_file.get()[0]['name'])
-                curr_dataset = datasets.get()
                 progress.set(0.45)
                 print("Current directory:", os.getcwd())
 
                 n_exp, n_ctrl = parse.parse_ed_pg(
                     input.pg_file.get()[0]['datapath'],
                     input.ed_file.get()[0]['datapath'],
-                    input.mq_quant_type.get(),
-                    out_dir + '/' + input.mq_dataset_name.get()
+                    input.quant_type.get(),
+                    output_path
                 )
+
+                # Overwrite ED.csv with edited table data
+                ed_df = ed_table_mq.data_view()
+                ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+                print("Overwrote ED.csv with edited table data.")
+
                 progress.set(0.85)
 
                 # Update the datasets dataframe
                 new_row = pd.DataFrame(
-                    [[input.mq_dataset_name.get(), 'MaxQuant', input.mq_quant_type.get(), n_exp, n_ctrl, '', '', '']],
+                    [[dataset_name, 'MaxQuant', input.quant_type.get(), n_exp, n_ctrl, '', '', '']],
                     columns=datasets.get().columns
                 )
                 updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
@@ -274,7 +365,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                 print(input.diann_matrix_file.get()[0]['name'])
                 print(input.ed_file.get()[0]['name'])
-                curr_dataset = datasets.get()
                 progress.set(0.45)
                 print("Current directory:", os.getcwd())
 
@@ -282,65 +372,70 @@ def server(input: Inputs, output: Outputs, session: Session):
                     input.diann_matrix_file.get()[0]['datapath'],
                     input.ed_file.get()[0]['datapath'],
                     "Intensity",  # DIA-NN always uses intensity
-                    out_dir + '/' + input.mq_dataset_name.get()
+                    output_path
                 )
+
+                # Overwrite ED.csv with edited table data
+                ed_df = ed_table_diann.data_view()
+                ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+                print("Overwrote ED.csv with edited table data.")
+
                 progress.set(0.85)
 
                 # Update the datasets dataframe
                 new_row = pd.DataFrame(
-                    [[input.mq_dataset_name.get(), 'DIA-NN', 'Intensity', n_exp, n_ctrl, '', '', '']],
+                    [[dataset_name, 'DIA-NN', 'Intensity', n_exp, n_ctrl, '', '', '']],
                     columns=datasets.get().columns
                 )
                 updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
                 datasets.set(updated_datasets)
                 progress.set(1.0)
 
+            elif input_format == "SAINT":
+                progress.set(message="Parsing SAINT inputs", value=0.25)
+                print("Parsing SAINT files")
+
+                # Check if files are uploaded
+                if not input.bait.get() or not input.prey.get() or not input.interaction.get():
+                    ui.notification_show(
+                        "Please upload all three SAINT files (bait, prey, interaction)",
+                        type="error"
+                    )
+                    return "Error: Missing files"
+
+                print(input.bait.get()[0]['datapath'])
+                print(input.prey.get()[0]['datapath'])
+                print(input.interaction.get()[0]['datapath'])
+                progress.set(0.45)
+
+                # Create the output directory if it doesn't exist
+                if not os.path.exists(output_path):
+                    os.makedirs(output_path)
+
+                n_expts, n_ctrls = parse.parse_from_saint(
+                    bait_table.data_view(),
+                    input.prey.get()[0]['datapath'],
+                    input.interaction.get()[0]['datapath'],
+                    output_path
+                )
+
+                # Copy the bait, prey, and interaction files to the output directory
+                shutil.copy(input.bait.get()[0]['datapath'], output_path + '/bait.txt')
+                shutil.copy(input.prey.get()[0]['datapath'], output_path + '/prey.txt')
+                shutil.copy(input.interaction.get()[0]['datapath'], output_path + '/interaction.txt')
+
+                progress.set(0.85)
+
+                # Update the datasets dataframe
+                new_row = pd.DataFrame([[dataset_name, 'SAINT', input.quant_type.get(), n_expts, n_ctrls, '', '', '']], columns=datasets.get().columns)
+
+                updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                datasets.set(updated_datasets)
+                print("Parsed SAINT inputs. Updated datasets.")
+                print("Edited bait table:", bait_table.data_view())
+                progress.set(1.0)
+
         return "Parsed!"
-
-    @reactive.effect
-    @reactive.event(input.parse_saint)
-    def parse_saint():
-        print("Parsing")
-        print(input.bait.get()[0]['datapath'])
-        print(input.prey.get()[0]['datapath'])
-        print(input.interaction.get()[0]['datapath'])
-
-        # Check if the dataset name is valid
-        dataset_name = input.st_dataset_name.get()
-        check_result = parse.validate_name(dataset_name, datasets.get()['Dataset Name'].tolist())
-        if check_result != 0:
-            print(check_result)
-            ui.notification_show(
-                    f"Parser: {check_result}",
-                    type="error",
-                )            
-            return "Error: " + check_result
-        
-        # Create the output directory if it doesn't exist
-        if not os.path.exists(out_dir + '/' + dataset_name):
-            os.makedirs(out_dir + '/' + dataset_name)
-        
-        n_expts, n_ctrls = parse.parse_from_saint(
-            bait_table.data_view(),
-            input.prey.get()[0]['datapath'],
-            input.interaction.get()[0]['datapath'],
-            out_dir + '/' + input.st_dataset_name.get()
-        )
-
-        # Copy the bait, prey, and interaction files to the output directory
-        shutil.copy(input.bait.get()[0]['datapath'], out_dir + '/' + dataset_name + '/bait.txt')
-        shutil.copy(input.prey.get()[0]['datapath'], out_dir + '/' + dataset_name + '/prey.txt')
-        shutil.copy(input.interaction.get()[0]['datapath'], out_dir + '/' + dataset_name + '/interaction.txt')
-
-        # Update the datasets dataframe
-        new_row = pd.DataFrame([[dataset_name, 'SAINT', input.saint_quant_type.get(), n_expts, n_ctrls, '', '', '']], columns=datasets.get().columns)
-
-        updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-        datasets.set(updated_datasets)
-        print("Parsed SAINT inputs. Updated datasets.")
-
-        print("Edited bait table:", bait_table.data_view())
-        # Code for parsing goes here
 
 
 
