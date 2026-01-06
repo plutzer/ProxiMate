@@ -7,6 +7,38 @@ from plotly.subplots import make_subplots
 from sklearn.metrics import roc_curve, auc
 
 
+# Module-level cache for BioGRID data to avoid repeated file I/O
+_biogrid_cache = None
+_biogrid_cache_path = None
+
+
+def _load_biogrid_cached(biogrid_path="/Datasets/biogrid_summary.csv"):
+    """
+    Load BioGRID data with caching to avoid repeated I/O.
+
+    The BioGRID file is ~2M rows and takes 2-3 seconds to load.
+    Cache it at module level so it's only loaded once per session.
+    """
+    global _biogrid_cache, _biogrid_cache_path
+
+    # Return cached data if path hasn't changed
+    if _biogrid_cache is not None and _biogrid_cache_path == biogrid_path:
+        return _biogrid_cache
+
+    # Load and cache the data
+    try:
+        _biogrid_cache = pd.read_csv(biogrid_path)
+        _biogrid_cache_path = biogrid_path
+
+        # Convert to string type for consistency (do this once)
+        _biogrid_cache['SWISS-PROT Accessions Interactor A'] = _biogrid_cache['SWISS-PROT Accessions Interactor A'].astype(str)
+        _biogrid_cache['SWISS-PROT Accessions Interactor B'] = _biogrid_cache['SWISS-PROT Accessions Interactor B'].astype(str)
+
+        return _biogrid_cache
+    except FileNotFoundError:
+        print(f"Warning: BioGRID file not found at {biogrid_path}")
+        return None
+
 
 def pca_plot(interaction, experimentalDesign):
 
@@ -225,6 +257,73 @@ def roc_plot(results_path, known_type, ctrl_experiments=None):
     return fig
 
 
+def calculate_network_degrees(passing_interactions, biogrid_path="/Datasets/biogrid_summary.csv"):
+    """
+    Calculate prey-prey network degree for each prey protein from BioGRID.
+
+    Network degree = number of OTHER prey proteins (in the passing set) that
+    this prey interacts with in BioGRID, excluding all bait proteins.
+
+    Parameters:
+    -----------
+    passing_interactions : pd.DataFrame
+        Filtered interactions with columns: First_ID (prey), Bait.ID (bait)
+    biogrid_path : str
+        Path to biogrid_summary.csv file
+
+    Returns:
+    --------
+    list of int
+        Network degrees for each unique prey (prey-prey interactions only)
+    """
+
+    # Handle edge cases
+    if len(passing_interactions) == 0:
+        return []
+
+    # Load BioGRID data using cache
+    biogrid = _load_biogrid_cached(biogrid_path)
+    if biogrid is None:
+        return [0] * len(passing_interactions)
+
+    # Get unique prey and bait IDs from the passing interactions
+    # Use set for O(1) lookup performance in filtering
+    prey_ids = set(str(pid) for pid in passing_interactions['First_ID'].unique()
+                   if pd.notna(pid) and str(pid) != 'nan')
+    bait_ids = set(str(bid) for bid in passing_interactions['Bait.ID'].unique()
+                   if pd.notna(bid) and str(bid) != 'nan')
+
+    if len(prey_ids) == 0:
+        return []
+
+    # Filter BioGRID for prey-prey interactions only
+    # Keep only edges where BOTH proteins are in prey set and NEITHER is in bait set
+    col_a = biogrid['SWISS-PROT Accessions Interactor A']
+    col_b = biogrid['SWISS-PROT Accessions Interactor B']
+
+    prey_prey_edges = biogrid[
+        col_a.isin(prey_ids) & col_b.isin(prey_ids) &
+        ~col_a.isin(bait_ids) & ~col_b.isin(bait_ids)
+    ]
+
+    # If no prey-prey edges found, return zeros
+    if len(prey_prey_edges) == 0:
+        return [0] * len(prey_ids)
+
+    # Count degree efficiently using value_counts on concatenated series
+    # This is faster than creating separate DataFrames and concatenating
+    all_proteins = pd.concat([
+        prey_prey_edges['SWISS-PROT Accessions Interactor A'],
+        prey_prey_edges['SWISS-PROT Accessions Interactor B']
+    ])
+    degree_counts = all_proteins.value_counts().to_dict()
+
+    # Calculate degrees for each unique prey
+    degrees = [degree_counts.get(prey_id, 0) for prey_id in prey_ids]
+
+    return degrees
+
+
 def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None):
     """
     Calculate metrics for interactions passing thresholds.
@@ -245,7 +344,8 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None)
         Dictionary containing:
         - median_network_size: Median number of interactions per bait after filtering
         - enrichment_ratio: Average enrichment of known interactions
-        - median_degree: Placeholder for median network degree
+        - mean_degree: Mean prey-prey network degree (average number of other
+                      passing prey proteins each prey interacts with in BioGRID)
         - total_before: Total interactions before filtering
         - total_after: Total interactions after filtering
     """
@@ -293,10 +393,17 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None)
     else:
         enrichment_ratio = 0
 
+    # Calculate mean prey-prey network degree from BioGRID
+    if total_after > 0:
+        degrees = calculate_network_degrees(passing_all)
+        mean_degree = np.mean(degrees) if len(degrees) > 0 else 0
+    else:
+        mean_degree = 0
+
     return {
         'median_network_size': median_network_size,
         'enrichment_ratio': enrichment_ratio,
-        'median_degree': 0,  # Placeholder
+        'mean_degree': mean_degree,
         'total_before': total_before,
         'total_after': total_after,
         'known_before': known_before,

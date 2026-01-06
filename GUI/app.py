@@ -14,7 +14,6 @@ import datetime
 import shutil
 from QC_plots import pca_plot, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
 from Ann_Enrichment import process_refactored, plot_results
-from nmf_plots import run_nmf_pipeline
 
 
 out_dir = "/Outputs"
@@ -114,42 +113,12 @@ app_ui = ui.page_navbar(
                     # Top row: Dataset selector only
                     ui.input_select("qc_dataset", "Select Dataset", choices=[]),
 
-                    # Row 1: PCA and NMF plots (50% width each)
+                    # Row 1: PCA and Threshold controls (50% width each)
                     ui.layout_columns(
                         ui.card(
                             ui.card_header("Raw Data PCA"),
                             output_widget("raw_pca_plot"),
                         ),
-                        ui.card(
-                            ui.card_header("NMF Clustering Visualization"),
-                            ui.layout_columns(
-                                ui.div(
-                                    ui.input_slider("nmf_bfdr_threshold", "BFDR Pre-filter Threshold",
-                                                  min=0.0, max=1.0, value=0.05, step=0.01),
-                                    ui.input_slider("nmf_n_components", "Number of NMF Components",
-                                                  min=5, max=25, value=10, step=1),
-                                    ui.p("Clustering is automatically updated when dataset or parameters change.",
-                                         style="font-style: italic; color: #666; margin-top: 10px; font-size: 0.9em;"),
-                                ),
-                                col_widths=12
-                            ),
-                            ui.layout_columns(
-                                ui.div(
-                                    ui.h6("Prey Clustering", style="text-align: center; margin-bottom: 10px;"),
-                                    output_widget("nmf_prey_plot")
-                                ),
-                                ui.div(
-                                    ui.h6("Bait Clustering", style="text-align: center; margin-bottom: 10px;"),
-                                    output_widget("nmf_bait_plot")
-                                ),
-                                col_widths=(6, 6)
-                            )
-                        ),
-                        col_widths=(6, 6),
-                    ),
-
-                    # Row 2: Threshold controls and metrics side-by-side
-                    ui.layout_columns(
                         ui.card(
                             ui.card_header("Threshold Settings"),
                             ui.input_select("qc_bait", "Select Control Bait", choices=["All"]),
@@ -164,6 +133,15 @@ app_ui = ui.page_navbar(
                             ui.p("Note: Thresholds are shown as reference lines on plots. Data is not filtered.",
                                  style="font-style: italic; color: #666; margin-top: 10px;"),
                         ),
+                        col_widths=(6, 6),
+                    ),
+
+                    # Row 2: SAINT scatter plot and metrics side-by-side
+                    ui.layout_columns(
+                        ui.card(
+                            ui.card_header("SAINT Score vs Fold Change"),
+                            output_widget("saint_scatter_plot"),
+                        ),
                         ui.div(
                             ui.output_ui("metric_bait_label"),
                             ui.output_ui("metric_network_size"),
@@ -171,12 +149,6 @@ app_ui = ui.page_navbar(
                             ui.output_ui("metric_degree"),
                         ),
                         col_widths=(6, 6),
-                    ),
-
-                    # Row 4: SAINT Score scatter plot (full width)
-                    ui.card(
-                        ui.card_header("SAINT Score vs Fold Change"),
-                        output_widget("saint_scatter_plot"),
                     ),
 
                     # Keep these plots in code but hide them (for potential future use)
@@ -628,24 +600,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             print("Dataset updated.")
             progress.set(message="Scoring data", detail="Done!", value=100)
 
-    # Helper function for NMF empty plots
-    def _create_empty_nmf_plot(message):
-        """Create placeholder figure with centered message for NMF plots"""
-        fig = go.Figure()
-        fig.add_annotation(
-            text=message,
-            xref="paper", yref="paper",
-            x=0.5, y=0.5, showarrow=False,
-            font=dict(size=14, color="#666")
-        )
-        fig.update_layout(
-            xaxis=dict(visible=False),
-            yaxis=dict(visible=False),
-            height=400,
-            margin=dict(l=20, r=20, t=20, b=20)
-        )
-        return fig
-
     # Quality controls tab
     @render_plotly
     def raw_pca_plot():
@@ -798,9 +752,35 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.ui
     def metric_degree():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return ui.value_box("Mean Prey-Prey Degree", "No data", showcase=None)
+
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+
+        if not os.path.exists(results_path):
+            return ui.value_box("Mean Prey-Prey Degree", "No data", showcase=None)
+
+        # Get threshold values
+        thresholds = {
+            'SaintScore': input.threshold_saintscore.get(),
+            'BFDR': input.threshold_bfdr.get(),
+            'WD': input.threshold_wd.get(),
+            'WDFDR': input.threshold_wdfdr.get()
+        }
+
+        # Filter by bait if not "All"
+        ctrls = None
+        if input.qc_bait.get() != "All":
+            ctrls = [input.qc_bait.get()]
+
+        # Call the metrics calculation function
+        metrics = calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=ctrls)
+
         return ui.value_box(
-            "Median Network Degree",
-            "Coming soon",
+            "Mean Prey-Prey Degree",
+            f"{metrics['mean_degree']:.1f}",
             showcase=None,
             theme="info"
         )
@@ -841,76 +821,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig = plot_saint_scatter(results_path, bait_selection, saintscore_threshold)
 
         return fig
-
-    # NMF Clustering Visualization
-    @reactive.Calc
-    def _get_nmf_results():
-        """
-        Compute or retrieve cached NMF results.
-        Automatically recalculates when dataset, BFDR threshold, or n_components changes.
-        """
-        dataset_name = input.qc_dataset.get()
-        bfdr_threshold = input.nmf_bfdr_threshold.get()
-        n_components = input.nmf_n_components.get()
-
-        if not dataset_name:
-            return None
-
-        # Check if dataset is scored
-        if dataset_name not in scored_datasets():
-            return {'error': 'Dataset must be scored first'}
-
-        csv_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
-
-        if not os.path.exists(csv_path):
-            return {'error': 'Annotated scores file not found'}
-
-        # Run the pipeline
-        try:
-            results = run_nmf_pipeline(csv_path, bfdr_threshold, n_components)
-            return results
-        except Exception as e:
-            return {'error': f'NMF analysis failed: {str(e)}'}
-
-    @render_widget
-    def nmf_prey_plot():
-        """Render prey t-SNE clustering plot"""
-        dataset_name = input.qc_dataset.get()
-        if not dataset_name:
-            return _create_empty_nmf_plot("No dataset selected")
-
-        if dataset_name not in scored_datasets():
-            return _create_empty_nmf_plot("Dataset must be scored first.\nRun scoring in the Network Scoring tab.")
-
-        results = _get_nmf_results()
-
-        if results is None:
-            return _create_empty_nmf_plot("No data available")
-
-        if results.get('error'):
-            return _create_empty_nmf_plot(results['error'])
-
-        return results.get('prey_fig')
-
-    @render_widget
-    def nmf_bait_plot():
-        """Render bait t-SNE clustering plot"""
-        dataset_name = input.qc_dataset.get()
-        if not dataset_name:
-            return _create_empty_nmf_plot("No dataset selected")
-
-        if dataset_name not in scored_datasets():
-            return _create_empty_nmf_plot("Dataset must be scored first.\nRun scoring in the Network Scoring tab.")
-
-        results = _get_nmf_results()
-
-        if results is None:
-            return _create_empty_nmf_plot("No data available")
-
-        if results.get('error'):
-            return _create_empty_nmf_plot(results['error'])
-
-        return results.get('bait_fig')
 
     feature_enrichment = reactive.Value(pd.DataFrame())
 
