@@ -54,11 +54,19 @@ class ProteinGroups:
                         self.data[col] = self.data[col].astype(float)
                     self.quant_cols_comppass.append(col)
 
-        for name in self.experimental_design.name2experiment:
-            if (self.quant_col_prefix_saint + name) not in self.quant_cols_saint or \
-                    (self.quant_col_prefix_comppass + name) not in self.quant_cols_comppass:
-                print("ERROR: Experiment found in experimental design, but missing from proteinGroups:", name)
-                exit(1)
+        # Check if all ED experiments exist in proteinGroups
+        ed_names = set(self.experimental_design.name2experiment.keys())
+        pg_saint_names = set(col.replace(self.quant_col_prefix_saint, '')
+                            for col in self.quant_cols_saint)
+        pg_comppass_names = set(col.replace(self.quant_col_prefix_comppass, '')
+                               for col in self.quant_cols_comppass)
+        pg_names = pg_saint_names.intersection(pg_comppass_names)
+
+        ed_only = sorted(list(ed_names - pg_names))
+
+        if ed_only:
+            from ed_exceptions import EDPGMismatchError
+            raise EDPGMismatchError(ed_only, [])
 
         print("Removed", sum(self.data["Reverse"] == "+"), "reverses")
         print("Removed", sum(self.data["Only identified by site"] == "+"), "only identified by site")

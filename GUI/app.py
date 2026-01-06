@@ -6,6 +6,9 @@ import plotly.express as px
 from shinywidgets import output_widget, render_widget, render_plotly
 import pandas as pd
 import os
+import sys
+sys.path.append('/Scripts')
+from ed_exceptions import ProxiMateError
 import parse
 import subprocess
 import zipfile
@@ -255,6 +258,21 @@ def get_cytoscape_base_url():
         return "http://127.0.0.1:1234/v1"
 
 
+def format_error_notification(error):
+    """
+    Format a ProxiMateError into a user-friendly notification message.
+    Returns formatted string with message and suggestions.
+    """
+    if isinstance(error, ProxiMateError):
+        msg_parts = [error.user_message]
+        if error.suggestions:
+            msg_parts.append("\n\nHow to fix:")
+            for i, suggestion in enumerate(error.suggestions, 1):
+                msg_parts.append(f"{i}. {suggestion}")
+        return "\n".join(msg_parts)
+    return str(error)
+
+
 def server(input: Inputs, output: Outputs, session: Session):
     print("Server started")
 
@@ -386,130 +404,188 @@ def server(input: Inputs, output: Outputs, session: Session):
         input_format = input.input_format.get()
         output_path = out_dir + '/' + dataset_name
 
-        with ui.Progress(min=0, max=1) as progress:
-            if input_format == "MaxQuant":
-                progress.set(message="Parsing MaxQuant inputs", value=0.25)
-                print("Parsing MaxQuant and Experimental Design files")
+        try:
+            with ui.Progress(min=0, max=1) as progress:
+                if input_format == "MaxQuant":
+                    progress.set(message="Parsing MaxQuant inputs", value=0.25)
+                    print("Parsing MaxQuant and Experimental Design files")
 
-                # Check if files are uploaded
-                if not input.pg_file.get() or not input.ed_file.get():
-                    ui.notification_show(
-                        "Please upload both proteinGroups.txt and Experimental Design files",
-                        type="error"
+                    # Check if files are uploaded
+                    if not input.pg_file.get() or not input.ed_file.get():
+                        ui.notification_show(
+                            "Please upload both proteinGroups.txt and Experimental Design files",
+                            type="error"
+                        )
+                        return "Error: Missing files"
+
+                    print(input.pg_file.get()[0]['name'])
+                    print(input.ed_file.get()[0]['name'])
+                    progress.set(0.45)
+                    print("Current directory:", os.getcwd())
+
+                    n_exp, n_ctrl = parse.parse_ed_pg(
+                        input.pg_file.get()[0]['datapath'],
+                        input.ed_file.get()[0]['datapath'],
+                        input.quant_type.get(),
+                        output_path
                     )
-                    return "Error: Missing files"
 
-                print(input.pg_file.get()[0]['name'])
-                print(input.ed_file.get()[0]['name'])
-                progress.set(0.45)
-                print("Current directory:", os.getcwd())
+                    # Overwrite ED.csv with edited table data
+                    ed_df = ed_table_mq.data_view()
+                    ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+                    print("Overwrote ED.csv with edited table data.")
 
-                n_exp, n_ctrl = parse.parse_ed_pg(
-                    input.pg_file.get()[0]['datapath'],
-                    input.ed_file.get()[0]['datapath'],
-                    input.quant_type.get(),
-                    output_path
-                )
+                    progress.set(0.85)
 
-                # Overwrite ED.csv with edited table data
-                ed_df = ed_table_mq.data_view()
-                ed_df.to_csv(f"{output_path}/ED.csv", index=False)
-                print("Overwrote ED.csv with edited table data.")
-
-                progress.set(0.85)
-
-                # Update the datasets dataframe
-                new_row = pd.DataFrame(
-                    [[dataset_name, 'MaxQuant', input.quant_type.get(), n_exp, n_ctrl, '', '', '']],
-                    columns=datasets.get().columns
-                )
-                updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-                datasets.set(updated_datasets)
-                progress.set(1.0)
-
-            elif input_format == "DIA-NN":
-                progress.set(message="Parsing DIA-NN inputs", value=0.25)
-                print("Parsing DIA-NN and Experimental Design files")
-
-                # Check if files are uploaded
-                if not input.diann_matrix_file.get() or not input.ed_file.get():
-                    ui.notification_show(
-                        "Please upload both DIA-NN matrix and Experimental Design files",
-                        type="error"
+                    # Update the datasets dataframe
+                    new_row = pd.DataFrame(
+                        [[dataset_name, 'MaxQuant', input.quant_type.get(), n_exp, n_ctrl, '', '', '']],
+                        columns=datasets.get().columns
                     )
-                    return "Error: Missing files"
+                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                    datasets.set(updated_datasets)
+                    progress.set(1.0)
 
-                print(input.diann_matrix_file.get()[0]['name'])
-                print(input.ed_file.get()[0]['name'])
-                progress.set(0.45)
-                print("Current directory:", os.getcwd())
+                elif input_format == "DIA-NN":
+                    progress.set(message="Parsing DIA-NN inputs", value=0.25)
+                    print("Parsing DIA-NN and Experimental Design files")
 
-                n_exp, n_ctrl = parse.parse_diann(
-                    input.diann_matrix_file.get()[0]['datapath'],
-                    input.ed_file.get()[0]['datapath'],
-                    "Intensity",  # DIA-NN always uses intensity
-                    output_path
-                )
+                    # Check if files are uploaded
+                    if not input.diann_matrix_file.get() or not input.ed_file.get():
+                        ui.notification_show(
+                            "Please upload both DIA-NN matrix and Experimental Design files",
+                            type="error"
+                        )
+                        return "Error: Missing files"
 
-                # Overwrite ED.csv with edited table data
-                ed_df = ed_table_diann.data_view()
-                ed_df.to_csv(f"{output_path}/ED.csv", index=False)
-                print("Overwrote ED.csv with edited table data.")
+                    print(input.diann_matrix_file.get()[0]['name'])
+                    print(input.ed_file.get()[0]['name'])
+                    progress.set(0.45)
+                    print("Current directory:", os.getcwd())
 
-                progress.set(0.85)
-
-                # Update the datasets dataframe
-                new_row = pd.DataFrame(
-                    [[dataset_name, 'DIA-NN', 'Intensity', n_exp, n_ctrl, '', '', '']],
-                    columns=datasets.get().columns
-                )
-                updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-                datasets.set(updated_datasets)
-                progress.set(1.0)
-
-            elif input_format == "SAINT":
-                progress.set(message="Parsing SAINT inputs", value=0.25)
-                print("Parsing SAINT files")
-
-                # Check if files are uploaded
-                if not input.bait.get() or not input.prey.get() or not input.interaction.get():
-                    ui.notification_show(
-                        "Please upload all three SAINT files (bait, prey, interaction)",
-                        type="error"
+                    n_exp, n_ctrl = parse.parse_diann(
+                        input.diann_matrix_file.get()[0]['datapath'],
+                        input.ed_file.get()[0]['datapath'],
+                        "Intensity",  # DIA-NN always uses intensity
+                        output_path
                     )
-                    return "Error: Missing files"
 
-                print(input.bait.get()[0]['datapath'])
-                print(input.prey.get()[0]['datapath'])
-                print(input.interaction.get()[0]['datapath'])
-                progress.set(0.45)
+                    # Overwrite ED.csv with edited table data
+                    ed_df = ed_table_diann.data_view()
+                    ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+                    print("Overwrote ED.csv with edited table data.")
 
-                # Create the output directory if it doesn't exist
-                if not os.path.exists(output_path):
-                    os.makedirs(output_path)
+                    progress.set(0.85)
 
-                n_expts, n_ctrls = parse.parse_from_saint(
-                    bait_table.data_view(),
-                    input.prey.get()[0]['datapath'],
-                    input.interaction.get()[0]['datapath'],
-                    output_path
-                )
+                    # Update the datasets dataframe
+                    new_row = pd.DataFrame(
+                        [[dataset_name, 'DIA-NN', 'Intensity', n_exp, n_ctrl, '', '', '']],
+                        columns=datasets.get().columns
+                    )
+                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                    datasets.set(updated_datasets)
+                    progress.set(1.0)
 
-                # Copy the bait, prey, and interaction files to the output directory
-                shutil.copy(input.bait.get()[0]['datapath'], output_path + '/bait.txt')
-                shutil.copy(input.prey.get()[0]['datapath'], output_path + '/prey.txt')
-                shutil.copy(input.interaction.get()[0]['datapath'], output_path + '/interaction.txt')
+                elif input_format == "SAINT":
+                    progress.set(message="Parsing SAINT inputs", value=0.25)
+                    print("Parsing SAINT files")
 
-                progress.set(0.85)
+                    # Check if files are uploaded
+                    if not input.bait.get() or not input.prey.get() or not input.interaction.get():
+                        ui.notification_show(
+                            "Please upload all three SAINT files (bait, prey, interaction)",
+                            type="error"
+                        )
+                        return "Error: Missing files"
 
-                # Update the datasets dataframe
-                new_row = pd.DataFrame([[dataset_name, 'SAINT', input.quant_type.get(), n_expts, n_ctrls, '', '', '']], columns=datasets.get().columns)
+                    print(input.bait.get()[0]['datapath'])
+                    print(input.prey.get()[0]['datapath'])
+                    print(input.interaction.get()[0]['datapath'])
+                    progress.set(0.45)
 
-                updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-                datasets.set(updated_datasets)
-                print("Parsed SAINT inputs. Updated datasets.")
-                print("Edited bait table:", bait_table.data_view())
-                progress.set(1.0)
+                    # Create the output directory if it doesn't exist
+                    if not os.path.exists(output_path):
+                        os.makedirs(output_path)
+
+                    n_expts, n_ctrls = parse.parse_from_saint(
+                        bait_table.data_view(),
+                        input.prey.get()[0]['datapath'],
+                        input.interaction.get()[0]['datapath'],
+                        output_path
+                    )
+
+                    # Copy the bait, prey, and interaction files to the output directory
+                    shutil.copy(input.bait.get()[0]['datapath'], output_path + '/bait.txt')
+                    shutil.copy(input.prey.get()[0]['datapath'], output_path + '/prey.txt')
+                    shutil.copy(input.interaction.get()[0]['datapath'], output_path + '/interaction.txt')
+
+                    progress.set(0.85)
+
+                    # Update the datasets dataframe
+                    new_row = pd.DataFrame([[dataset_name, 'SAINT', input.quant_type.get(), n_expts, n_ctrls, '', '', '']], columns=datasets.get().columns)
+
+                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                    datasets.set(updated_datasets)
+                    print("Parsed SAINT inputs. Updated datasets.")
+                    print("Edited bait table:", bait_table.data_view())
+                    progress.set(1.0)
+
+            # Success notification
+            ui.notification_show(
+                f"Successfully parsed dataset '{dataset_name}'",
+                type="message",
+                duration=5
+            )
+
+        except ProxiMateError as e:
+            # Handle our custom exceptions with user-friendly messages
+            print(f"Validation error: {e.message}")
+            error_msg = format_error_notification(e)
+            ui.notification_show(
+                error_msg,
+                type="error",
+                duration=None  # Keep error visible until dismissed
+            )
+            return f"Error: {e.user_message}"
+
+        except FileNotFoundError as e:
+            print(f"File not found: {e}")
+            ui.notification_show(
+                f"File not found: {str(e)}",
+                type="error",
+                duration=10
+            )
+            return "Error: File not found"
+
+        except PermissionError as e:
+            print(f"Permission error: {e}")
+            ui.notification_show(
+                f"Permission denied accessing file: {str(e)}",
+                type="error",
+                duration=10
+            )
+            return "Error: Permission denied"
+
+        except pd.errors.ParserError as e:
+            print(f"File parsing error: {e}")
+            ui.notification_show(
+                f"Error parsing file: {str(e)}\n\nEnsure files are in correct format.",
+                type="error",
+                duration=10
+            )
+            return "Error: File parsing failed"
+
+        except Exception as e:
+            # Catch-all for unexpected errors
+            print(f"Unexpected error during parsing: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            ui.notification_show(
+                f"An unexpected error occurred:\n{str(e)}\n\nPlease check the console for details.",
+                type="error",
+                duration=None
+            )
+            return f"Error: {str(e)}"
 
         return "Parsed!"
 
@@ -901,18 +977,21 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.plot
     def feature_enrichment_plot():
-        
+        # Trigger re-render when feature analysis completes
+        _ = feature_enrichment.get()
+
         # Set the feature enrichment to whatever dataset is selected
         dataset = input.feature_dataset.get()
         if not dataset:
             return None
-        
+
         feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
         if not os.path.exists(feature_file):
             return None
 
-        feature_enrichment.set(pd.read_csv(feature_file))
-        
+        # Load the feature enrichment data from file
+        feature_data = pd.read_csv(feature_file)
+
         feature_type = input.feature_type.get()
         if not feature_type:
             feature_type = 'GO_CC'  # Default feature type if none is selected
@@ -923,9 +1002,17 @@ def server(input: Inputs, output: Outputs, session: Session):
             num_features = 30
 
         # Call the plot_results function to generate the heatmap
-        heatmap = plot_results(feature_enrichment.get(), feature_type, num_features)
-
-        return heatmap
+        try:
+            heatmap = plot_results(feature_data, feature_type, num_features)
+            return heatmap
+        except ValueError as e:
+            # Handle case where there aren't enough features to cluster
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.text(0.5, 0.5, f'Insufficient data to generate plot for {feature_type}\n\nTry selecting a different feature type or lowering the SAINT threshold.',
+                    ha='center', va='center', fontsize=14, wrap=True)
+            ax.axis('off')
+            return fig
     
 
 
@@ -938,6 +1025,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         return datasets.get()[datasets.get()['Scored'] == 'Yes']["Dataset Name"].tolist()
 
     @reactive.Effect
+    @reactive.event(datasets)
     def update_score_dataset():
         # Update the dropdown choices dynamically
         available_choices = available_datasets()
