@@ -14,6 +14,7 @@ import datetime
 import shutil
 from QC_plots import pca_plot, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
 from Ann_Enrichment import process_refactored, plot_results
+import py4cytoscape as p4c
 
 
 out_dir = "/Outputs"
@@ -185,7 +186,25 @@ app_ui = ui.page_navbar(
                 ),
     ),
     ui.nav_panel("Cytoscape",
-                    "Page E content"
+        ui.layout_columns(
+            ui.card(
+                ui.card_header("Cytoscape Connection Test"),
+                ui.p("This tab tests communication between ProxiMate and Cytoscape via py4cytoscape."),
+                ui.p("Requirements:", style="font-weight: bold; margin-top: 15px;"),
+                ui.tags.ul(
+                    ui.tags.li("Cytoscape must be running on your host machine"),
+                    ui.tags.li("Windows/Mac Docker Desktop: Use standard docker run -p 3838:3838"),
+                    ui.tags.li("Native Linux: Use docker run --network host"),
+                ),
+                ui.hr(),
+                ui.input_action_button("test_create_node", "Create Test Node", class_="btn-primary"),
+                ui.input_action_button("test_delete_node", "Delete Test Node", class_="btn-danger",
+                                      style="margin-left: 10px;"),
+                ui.hr(),
+                ui.output_text_verbatim("cytoscape_status"),
+            ),
+            col_widths=(12,),
+        ),
     ),
     ui.nav_panel("Downloads",
                     ui.input_select("download_dataset", "Select Dataset", choices=[]),
@@ -213,6 +232,28 @@ app_ui = ui.page_navbar(
     ),
     title="ProxiMate",
 )
+
+
+def get_cytoscape_base_url():
+    """
+    Get the Cytoscape base URL based on platform.
+
+    For Docker containers:
+    - Docker Desktop (Windows/Mac): host.docker.internal:1234
+    - Native Linux: Use --network host and localhost:1234
+    """
+    # Check if running in Docker by looking for /.dockerenv
+    in_docker = os.path.exists('/.dockerenv')
+
+    if in_docker:
+        # Running in Docker container
+        # Try host.docker.internal first (works on Docker Desktop for Windows/Mac)
+        # On native Linux, this won't resolve unless using --add-host or --network host
+        return "http://host.docker.internal:1234/v1"
+    else:
+        # Running natively (for local development)
+        return "http://127.0.0.1:1234/v1"
+
 
 def server(input: Inputs, output: Outputs, session: Session):
     print("Server started")
@@ -824,6 +865,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     feature_enrichment = reactive.Value(pd.DataFrame())
 
+    _cytoscape_status_msg = reactive.Value("Click a button to test Cytoscape connection...")
+
     # Feature analysis tab
     @reactive.effect
     @reactive.event(input.feature_analysis)
@@ -985,6 +1028,67 @@ def server(input: Inputs, output: Outputs, session: Session):
         # temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=filename, suffix=".csv")
         custom_dataset.get().to_csv(savepath, index=False)
         return savepath
+
+    # Cytoscape tab
+    @reactive.effect
+    @reactive.event(input.test_create_node)
+    def create_test_node():
+        """Create a test node in Cytoscape."""
+        try:
+            base_url = get_cytoscape_base_url()
+
+            # Try to connect to Cytoscape
+            version = p4c.cytoscape_version_info(base_url=base_url)
+
+            # Create a simple network if none exists
+            try:
+                current_network = p4c.get_network_name(base_url=base_url)
+            except:
+                # No network exists, create one
+                nodes_df = pd.DataFrame({'id': ['InitialNode']})
+                edges_df = pd.DataFrame({'source': [], 'target': []})
+                p4c.create_network_from_data_frames(
+                    nodes=nodes_df,
+                    edges=edges_df,
+                    title="ProxiMate Test Network",
+                    base_url=base_url
+                )
+
+            # Add a test node
+            p4c.add_cy_nodes(['TestNode_ProxiMate'], base_url=base_url)
+
+            # Update status
+            status_message = f"✓ Successfully created 'TestNode_ProxiMate' in Cytoscape\nCytoscape version: {version['cytoscapeVersion']}"
+
+        except Exception as e:
+            status_message = f"✗ Error connecting to Cytoscape:\n{str(e)}\n\nMake sure Cytoscape is running on your host machine."
+
+        # Store status in reactive value for display
+        _cytoscape_status_msg.set(status_message)
+
+    @reactive.effect
+    @reactive.event(input.test_delete_node)
+    def delete_test_node():
+        """Delete the test node from Cytoscape."""
+        try:
+            base_url = get_cytoscape_base_url()
+
+            # Select the test node
+            p4c.select_nodes(['TestNode_ProxiMate'], by_col='name', base_url=base_url)
+
+            # Delete selected nodes
+            p4c.delete_selected_nodes(base_url=base_url)
+
+            status_message = "✓ Successfully deleted 'TestNode_ProxiMate' from Cytoscape"
+
+        except Exception as e:
+            status_message = f"✗ Error deleting node:\n{str(e)}\n\nMake sure the node exists and Cytoscape is running."
+
+        _cytoscape_status_msg.set(status_message)
+
+    @render.text
+    def cytoscape_status():
+        return _cytoscape_status_msg.get()
 
 app = App(app_ui, server)
 

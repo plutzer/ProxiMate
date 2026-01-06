@@ -13,3 +13,4 @@ scikit-learn
 ipywidgets
 shinywidgets
 anywidget
+py4cytoscape>=1.12.0
