@@ -8,6 +8,7 @@ SAINTexpress-custom/nlopt/
 SAINTexpress-custom/va/
 SAINTexpress-custom/Precompiled_binaries/
 Datasets/
+DIANN_example/
 
 # Claude Code documentation
 CLAUDE.md

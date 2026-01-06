@@ -12,7 +12,7 @@ import zipfile
 import tempfile
 import datetime
 import shutil
-from QC_plots import pca_plot, saint_known_retention, roc_plot
+from QC_plots import pca_plot, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
 from Ann_Enrichment import process_refactored, plot_results
 
 
@@ -109,27 +109,62 @@ app_ui = ui.page_navbar(
                     ui.output_data_frame("render_datasets"),
                 ),
             ),
-    ui.nav_panel("Quality Controls",
-                    ui.layout_columns(
-                        ui.input_select("qc_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
-                        ui.input_select("qc_bait", "Select Control Bait", choices=["All"]), # Need this to be dynamic
-                    ),
+    ui.nav_panel("Data Thresholding",
+                    # Top row: Dataset selector only
+                    ui.input_select("qc_dataset", "Select Dataset", choices=[]),
+
+                    # Row 1: PCA and Threshold controls (50% width each)
                     ui.layout_columns(
                         ui.card(
-                            ui.card_header("Raw Data UMAP"),
+                            ui.card_header("Raw Data PCA"),
                             output_widget("raw_pca_plot"),
                         ),
                         ui.card(
-                            # Add dropdown to select bait
+                            ui.card_header("Threshold Settings"),
+                            ui.input_select("qc_bait", "Select Control Bait", choices=["All"]),
+                            ui.input_slider("threshold_saintscore", "SAINT Score Threshold",
+                                          min=0.0, max=1.0, value=0.7, step=0.01),
+                            ui.input_slider("threshold_bfdr", "BFDR Threshold",
+                                          min=0.0, max=1.0, value=0.05, step=0.01),
+                            ui.input_slider("threshold_wd", "WD Score Threshold",
+                                          min=0.0, max=10.0, value=0.0, step=0.1),
+                            ui.input_slider("threshold_wdfdr", "WDFDR Threshold",
+                                          min=0.0, max=1.0, value=0.05, step=0.01),
+                            ui.p("Note: Thresholds are shown as reference lines on plots. Data is not filtered.",
+                                 style="font-style: italic; color: #666; margin-top: 10px;"),
+                        ),
+                        col_widths=(6, 6),
+                    ),
+
+                    # Row 2: SAINT scatter plot and metrics side-by-side
+                    ui.layout_columns(
+                        ui.card(
+                            ui.card_header("SAINT Score vs Fold Change"),
+                            output_widget("saint_scatter_plot"),
+                        ),
+                        ui.div(
+                            ui.output_ui("metric_bait_label"),
+                            ui.output_ui("metric_network_size"),
+                            ui.output_ui("metric_enrichment"),
+                            ui.output_ui("metric_degree"),
+                        ),
+                        col_widths=(6, 6),
+                    ),
+
+                    # Keep these plots in code but hide them (for potential future use)
+                    ui.panel_conditional(
+                        "false",  # Never show
+                        ui.card(
                             ui.card_header("Known Physical Interactions"),
                             output_widget("known_retention_plot")
                         ),
                         ui.card(
                             ui.card_header("ROC Curve for BioGRID Interactions"),
-                            ui.input_radio_buttons("roc_known_type", "True Positive Type", choices={"BioGRID":"All Physical Interactions", "Multivalidated":"Multivalidated Physical Interactions"}),
+                            ui.input_radio_buttons("roc_known_type", "True Positive Type",
+                                                   choices={"BioGRID":"All Physical Interactions",
+                                                           "Multivalidated":"Multivalidated Physical Interactions"}),
                             output_widget("roc_curve_plot")
                         ),
-                        col_widths=(4,4,4),
                     ),
     ),
     ui.nav_panel("Protein Feature Analysis",
@@ -636,6 +671,157 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Return the figure widget
         return fig
 
+    @render.ui
+    def metric_bait_label():
+        bait_selection = input.qc_bait.get()
+        if bait_selection == "All":
+            label_text = "Metrics for All Baits"
+        else:
+            label_text = f"Metrics for {bait_selection}"
+        return ui.h5(label_text, style="margin-bottom: 15px; margin-top: 0px; font-weight: 600;")
+
+    @render.ui
+    def metric_network_size():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return ui.value_box("Median Network Size", "No data", showcase=None)
+
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+
+        if not os.path.exists(results_path):
+            return ui.value_box("Median Network Size", "No data", showcase=None)
+
+        # Get threshold values
+        thresholds = {
+            'SaintScore': input.threshold_saintscore.get(),
+            'BFDR': input.threshold_bfdr.get(),
+            'WD': input.threshold_wd.get(),
+            'WDFDR': input.threshold_wdfdr.get()
+        }
+
+        # Filter by bait if not "All"
+        ctrls = None
+        if input.qc_bait.get() != "All":
+            ctrls = [input.qc_bait.get()]
+
+        # Call the metrics calculation function
+        metrics = calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=ctrls)
+
+        return ui.value_box(
+            "Median Network Size",
+            f"{metrics['median_network_size']:.1f}",
+            showcase=None,
+            theme="primary"
+        )
+
+    @render.ui
+    def metric_enrichment():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return ui.value_box("Known Enrichment", "No data", showcase=None)
+
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+
+        if not os.path.exists(results_path):
+            return ui.value_box("Known Enrichment", "No data", showcase=None)
+
+        # Get threshold values
+        thresholds = {
+            'SaintScore': input.threshold_saintscore.get(),
+            'BFDR': input.threshold_bfdr.get(),
+            'WD': input.threshold_wd.get(),
+            'WDFDR': input.threshold_wdfdr.get()
+        }
+
+        # Filter by bait if not "All"
+        ctrls = None
+        if input.qc_bait.get() != "All":
+            ctrls = [input.qc_bait.get()]
+
+        # Call the metrics calculation function
+        metrics = calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=ctrls)
+
+        return ui.value_box(
+            "Known Enrichment",
+            f"{metrics['enrichment_ratio']:.2f}x",
+            showcase=None,
+            theme="success"
+        )
+
+    @render.ui
+    def metric_degree():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return ui.value_box("Mean Prey-Prey Degree", "No data", showcase=None)
+
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+
+        if not os.path.exists(results_path):
+            return ui.value_box("Mean Prey-Prey Degree", "No data", showcase=None)
+
+        # Get threshold values
+        thresholds = {
+            'SaintScore': input.threshold_saintscore.get(),
+            'BFDR': input.threshold_bfdr.get(),
+            'WD': input.threshold_wd.get(),
+            'WDFDR': input.threshold_wdfdr.get()
+        }
+
+        # Filter by bait if not "All"
+        ctrls = None
+        if input.qc_bait.get() != "All":
+            ctrls = [input.qc_bait.get()]
+
+        # Call the metrics calculation function
+        metrics = calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=ctrls)
+
+        return ui.value_box(
+            "Mean Prey-Prey Degree",
+            f"{metrics['mean_degree']:.1f}",
+            showcase=None,
+            theme="info"
+        )
+
+    @render_widget
+    def saint_scatter_plot():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return None
+
+        # Only show for individual baits, not "All"
+        bait_selection = input.qc_bait.get()
+        if bait_selection == "All":
+            # Return a message figure
+            fig = go.Figure()
+            fig.add_annotation(
+                text="Please select a specific bait to view this plot",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=16)
+            )
+            fig.update_layout(
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False)
+            )
+            return fig
+
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+
+        if not os.path.exists(results_path):
+            return None
+
+        # Get threshold value for reference line
+        saintscore_threshold = input.threshold_saintscore.get()
+
+        # Call the scatter plot function
+        fig = plot_saint_scatter(results_path, bait_selection, saintscore_threshold)
+
+        return fig
+
     feature_enrichment = reactive.Value(pd.DataFrame())
 
     # Feature analysis tab
@@ -718,21 +904,25 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_select("download_dataset", choices=available_choices)
         ui.update_select("feature_dataset", choices=scored_choices)
 
-    @reactive.Effect
+    @reactive.effect
+    @reactive.event(input.qc_dataset, datasets)
     def update_qc_bait():
         # Update the bait dropdown choices dynamically based on the selected dataset
-        dataset_name = input.qc_dataset.get()
+        dataset_name = input.qc_dataset()
         if dataset_name:
             # Check to see if the dataset has been scored
             try:
                 scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
                 baits = scores['Experiment.ID'].unique().tolist()
-                print(baits)
+                print(f"Found baits: {baits}")
                 baits.insert(0, "All")  # Add "All" option
                 ui.update_select("qc_bait", choices=baits)
             except FileNotFoundError:
                 print(f"File not found for dataset {dataset_name}. Resetting bait selection.")
                 ui.update_select("qc_bait", choices=["All"])  # Reset to default if file not found
+            except Exception as e:
+                print(f"Error reading annotated_scores.csv: {e}")
+                ui.update_select("qc_bait", choices=["All"])
         else:
             ui.update_select("qc_bait", choices=["All"])  # Reset to default if no dataset is selected
 
