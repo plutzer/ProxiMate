@@ -6,73 +6,100 @@ import plotly.express as px
 from shinywidgets import output_widget, render_widget, render_plotly
 import pandas as pd
 import os
+import sys
+sys.path.append('/Scripts')
+from ed_exceptions import ProxiMateError
 import parse
 import subprocess
 import zipfile
 import tempfile
 import datetime
 import shutil
-from QC_plots import pca_plot, saint_known_retention, roc_plot
+from QC_plots import pca_plot, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
 from Ann_Enrichment import process_refactored, plot_results
+from network_comparison import (
+    load_and_filter_bait_data,
+    calculate_volcano_data,
+    create_volcano_plot,
+    create_venn_diagram
+)
+import py4cytoscape as p4c
 
 
 out_dir = "/Outputs"
 
 app_ui = ui.page_navbar(
     ui.nav_spacer(),
-    ui.nav_panel("Input Data",
-                 "Use either method to parse input data:",
+    ui.nav_panel("Network Scoring",
                  ui.layout_columns(
                     ui.card(
-                        ui.card_header("Proteomics Data Input"),
-                        ui.input_text("mq_dataset_name",
-                                    "Dataset Name",
-                                    placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
-                        ui.input_select("input_format", "Input Format",
-                                       choices=["MaxQuant", "DIA-NN"],
-                                       selected="MaxQuant"),
+                        ui.card_header("Data Parsing"),
+                        ui.layout_columns(
+                            ui.input_text("dataset_name",
+                                        "Dataset Name",
+                                        placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
+                            ui.input_select("input_format", "Input Format",
+                                           choices=["MaxQuant", "DIA-NN", "SAINT"],
+                                           selected="MaxQuant"),
+                            col_widths=[4, 8]
+                        ),
                         ui.panel_conditional(
                             "input.input_format === 'MaxQuant'",
-                            ui.input_file("pg_file", "MaxQuant proteinGroups.txt file"),
-                            ui.input_select("mq_quant_type", "Quantification Type",
-                                          choices=["Intensity", "LFQ", "Spectral Counts"],
-                                          selected="Intensity")
+                            ui.layout_columns(
+                                ui.div(
+                                    ui.input_file("pg_file", "MaxQuant proteinGroups.txt file"),
+                                    ui.tooltip(
+                                        ui.input_file("ed_file", "Experimental Design File"),
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                    ),
+                                    ui.input_select("quant_type", "Quantification Type",
+                                                  choices=["Intensity", "LFQ", "Spectral Counts"],
+                                                  selected="Intensity")
+                                ),
+                                ui.output_data_frame("ed_table_mq"),
+                                col_widths=[4, 8]
+                            )
                         ),
                         ui.panel_conditional(
                             "input.input_format === 'DIA-NN'",
-                            ui.input_file("diann_matrix_file", "DIA-NN report.pg_matrix.tsv file"),
-                            ui.panel_well(
-                                "Note: DIA-NN uses intensity-based quantification."
+                            ui.layout_columns(
+                                ui.div(
+                                    ui.input_file("diann_matrix_file", "DIA-NN report.pg_matrix.tsv file"),
+                                    ui.tooltip(
+                                        ui.input_file("ed_file", "Experimental Design File"),
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                    )
+                                ),
+                                ui.output_data_frame("ed_table_diann"),
+                                col_widths=[4, 8]
                             )
                         ),
-                        ui.input_file("ed_file", "Experimental Design File"),
-                        ui.panel_well(
-                            "Experimental Design File Format:",
-                            "Experiment Name, Type, Bait, Replicate, Bait ID"
+                        ui.panel_conditional(
+                            "input.input_format === 'SAINT'",
+                            ui.layout_columns(
+                                ui.div(
+                                    ui.input_file("bait", "SAINT bait.txt file"),
+                                    ui.input_file("prey", "SAINT prey.txt file"),
+                                    ui.input_file("interaction", "SAINT interaction.txt file"),
+                                    ui.input_select("quant_type", "Quantification Type",
+                                                  choices=["Intensity", "LFQ", "Spectral Counts"],
+                                                  selected="Intensity")
+                                ),
+                                ui.output_data_frame("bait_table"),
+                                col_widths=[4, 8]
+                            )
                         ),
-                        ui.input_action_button("parse_mq", "Parse Data")
-
+                        ui.input_action_button("parse_data", "Parse Data")
                     ),
                     ui.card(
-                        ui.card_header('SAINT Input'),
-                        ui.input_text("st_dataset_name", "Dataset Name"),
-                        ui.layout_columns(
-                            ui.panel_well(
-                                ui.input_file("bait", "SAINT bait.txt file"),
-                                ui.input_file("prey", "SAINT prey.txt file"),
-                                ui.input_file("interaction", "SAINT interaction.txt file"),
-                                # Add a link to the SAINT documentation for input formats
-                                # ui.link("Documentation for SAINT input format", "www.google.com"),# Placeholder
-                                ui.input_select("saint_quant_type", "Quantification Type", choices=["Intensity", "LFQ", "Spectral Counts"]),
-                                ui.input_action_button("parse_saint", "Parse SAINT Inputs")
-                            ),
-                            ui.panel_well(
-                                "CompPASS Scoring requires a mapping of Experiment IDs to their corresponding uniprot IDs. Edit the values in the Bait ID column for accurate CompPASS scoring.",
-                                ui.output_data_frame("bait_table"),
-                            ),
-                        ),
+                        ui.card_header('Scoring Parameters'),
+                        ui.input_select("score_dataset", "Select Dataset", choices=[]),
+                        ui.input_radio_buttons("imputation_method", "Imputation Method",
+                                              choices={0: "Default", 1: "Prey-specific"}),
+                        ui.input_numeric("wdfdr_iterations", "WDFDR Iterations", value=1000),
+                        ui.input_action_button("score_data", "Score Data")
                     ),
-                    col_widths=[4,8]
+                    col_widths=[8,4]
                  ),
                  # Render text if parse button has executed successfully
                  ui.card(
@@ -92,34 +119,62 @@ app_ui = ui.page_navbar(
                     ui.output_data_frame("render_datasets"),
                 ),
             ),
-    ui.nav_panel("Score Data",
-                    ui.input_select("score_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
-                    ui.input_radio_buttons("imputation_method", "Imputation Method", choices={0: "Default", 1: "Prey-specific"}),
-                    ui.input_numeric("wdfdr_iterations", "WDFDR Iterations", value=100),
-                    ui.input_action_button("score_data", "Score Data"),
-                    # ui.output_text_verbatim("log_text"),
-    ),
-    ui.nav_panel("Quality Controls",
-                    ui.layout_columns(
-                        ui.input_select("qc_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
-                        ui.input_select("qc_bait", "Select Control Bait", choices=["All"]), # Need this to be dynamic
-                    ),
+    ui.nav_panel("Data Thresholding",
+                    # Top row: Dataset selector only
+                    ui.input_select("qc_dataset", "Select Dataset", choices=[]),
+
+                    # Row 1: PCA and Threshold controls (50% width each)
                     ui.layout_columns(
                         ui.card(
-                            ui.card_header("Raw Data UMAP"),
+                            ui.card_header("Raw Data PCA"),
                             output_widget("raw_pca_plot"),
                         ),
                         ui.card(
-                            # Add dropdown to select bait
+                            ui.card_header("Threshold Settings"),
+                            ui.input_select("qc_bait", "Select Control Bait", choices=["All"]),
+                            ui.input_slider("threshold_saintscore", "SAINT Score Threshold",
+                                          min=0.0, max=1.0, value=0.7, step=0.01),
+                            ui.input_slider("threshold_bfdr", "BFDR Threshold",
+                                          min=0.0, max=1.0, value=0.05, step=0.01),
+                            ui.input_slider("threshold_wd", "WD Score Threshold",
+                                          min=0.0, max=10.0, value=0.0, step=0.1),
+                            ui.input_slider("threshold_wdfdr", "WDFDR Threshold",
+                                          min=0.0, max=1.0, value=0.05, step=0.01),
+                            ui.p("Note: Thresholds are shown as reference lines on plots. Data is not filtered.",
+                                 style="font-style: italic; color: #666; margin-top: 10px;"),
+                        ),
+                        col_widths=(6, 6),
+                    ),
+
+                    # Row 2: SAINT scatter plot and metrics side-by-side
+                    ui.layout_columns(
+                        ui.card(
+                            ui.card_header("SAINT Score vs Fold Change"),
+                            output_widget("saint_scatter_plot"),
+                        ),
+                        ui.div(
+                            ui.output_ui("metric_bait_label"),
+                            ui.output_ui("metric_network_size"),
+                            ui.output_ui("metric_enrichment"),
+                            ui.output_ui("metric_degree"),
+                        ),
+                        col_widths=(6, 6),
+                    ),
+
+                    # Keep these plots in code but hide them (for potential future use)
+                    ui.panel_conditional(
+                        "false",  # Never show
+                        ui.card(
                             ui.card_header("Known Physical Interactions"),
                             output_widget("known_retention_plot")
                         ),
                         ui.card(
                             ui.card_header("ROC Curve for BioGRID Interactions"),
-                            ui.input_radio_buttons("roc_known_type", "True Positive Type", choices={"BioGRID":"All Physical Interactions", "Multivalidated":"Multivalidated Physical Interactions"}),
+                            ui.input_radio_buttons("roc_known_type", "True Positive Type",
+                                                   choices={"BioGRID":"All Physical Interactions",
+                                                           "Multivalidated":"Multivalidated Physical Interactions"}),
                             output_widget("roc_curve_plot")
                         ),
-                        col_widths=(4,4,4),
                     ),
     ),
     ui.nav_panel("Protein Feature Analysis",
@@ -139,8 +194,97 @@ app_ui = ui.page_navbar(
                     ),
                 ),
     ),
+    ui.nav_panel("Network Comparison",
+        # Top section: Bait selectors for A and B
+        ui.layout_columns(
+            # Bait A selector card
+            ui.card(
+                ui.card_header("Network A"),
+                ui.input_select("comp_dataset_a", "Dataset A", choices=[]),
+                ui.input_select("comp_bait_a", "Bait A", choices=[]),
+                ui.input_slider("comp_saintscore_a", "SAINT Score (≥)",
+                              min=0.0, max=1.0, value=0.7, step=0.01),
+                ui.input_slider("comp_bfdr_a", "BFDR (≤)",
+                              min=0.0, max=1.0, value=0.05, step=0.01),
+                ui.input_slider("comp_wd_a", "WD Score (≥)",
+                              min=0.0, max=10.0, value=0.0, step=0.1),
+                ui.input_slider("comp_wdfdr_a", "WDFDR (≤)",
+                              min=0.0, max=1.0, value=0.05, step=0.01),
+            ),
+            # Bait B selector card
+            ui.card(
+                ui.card_header("Network B"),
+                ui.input_select("comp_dataset_b", "Dataset B", choices=[]),
+                ui.input_select("comp_bait_b", "Bait B", choices=[]),
+                ui.input_slider("comp_saintscore_b", "SAINT Score (≥)",
+                              min=0.0, max=1.0, value=0.7, step=0.01),
+                ui.input_slider("comp_bfdr_b", "BFDR (≤)",
+                              min=0.0, max=1.0, value=0.05, step=0.01),
+                ui.input_slider("comp_wd_b", "WD Score (≥)",
+                              min=0.0, max=10.0, value=0.0, step=0.1),
+                ui.input_slider("comp_wdfdr_b", "WDFDR (≤)",
+                              min=0.0, max=1.0, value=0.05, step=0.01),
+            ),
+            col_widths=(6, 6),
+        ),
+
+        # Compare button
+        ui.div(
+            ui.input_action_button("compare_networks", "Compare Networks", class_="btn-primary"),
+            style="text-align: center; margin: 20px 0;"
+        ),
+
+        # Middle section: Volcano plot
+        ui.card(
+            ui.card_header("Differential Abundance Volcano Plot"),
+            output_widget("volcano_plot"),
+            ui.p("Volcano plot only shown when baits are from the same dataset.",
+                 style="font-style: italic; color: #666; margin-top: 10px;"),
+        ),
+
+        # Bottom section: Venn diagram and gene lists
+        ui.layout_columns(
+            ui.card(
+                ui.card_header("Network Overlap"),
+                output_widget("venn_diagram"),
+            ),
+            ui.card(
+                ui.card_header("Gene Lists"),
+                ui.navset_tab(
+                    ui.nav_panel("Network A Only",
+                        ui.output_text_verbatim("genes_a_only"),
+                    ),
+                    ui.nav_panel("Network B Only",
+                        ui.output_text_verbatim("genes_b_only"),
+                    ),
+                    ui.nav_panel("Both Networks",
+                        ui.output_text_verbatim("genes_both"),
+                    ),
+                ),
+            ),
+            col_widths=(6, 6),
+        ),
+    ),
     ui.nav_panel("Cytoscape",
-                    "Page E content"
+        ui.layout_columns(
+            ui.card(
+                ui.card_header("Cytoscape Connection Test"),
+                ui.p("This tab tests communication between ProxiMate and Cytoscape via py4cytoscape."),
+                ui.p("Requirements:", style="font-weight: bold; margin-top: 15px;"),
+                ui.tags.ul(
+                    ui.tags.li("Cytoscape must be running on your host machine"),
+                    ui.tags.li("Windows/Mac Docker Desktop: Use standard docker run -p 3838:3838"),
+                    ui.tags.li("Native Linux: Use docker run --network host"),
+                ),
+                ui.hr(),
+                ui.input_action_button("test_create_node", "Create Test Node", class_="btn-primary"),
+                ui.input_action_button("test_delete_node", "Delete Test Node", class_="btn-danger",
+                                      style="margin-left: 10px;"),
+                ui.hr(),
+                ui.output_text_verbatim("cytoscape_status"),
+            ),
+            col_widths=(12,),
+        ),
     ),
     ui.nav_panel("Downloads",
                     ui.input_select("download_dataset", "Select Dataset", choices=[]),
@@ -169,6 +313,43 @@ app_ui = ui.page_navbar(
     title="ProxiMate",
 )
 
+
+def get_cytoscape_base_url():
+    """
+    Get the Cytoscape base URL based on platform.
+
+    For Docker containers:
+    - Docker Desktop (Windows/Mac): host.docker.internal:1234
+    - Native Linux: Use --network host and localhost:1234
+    """
+    # Check if running in Docker by looking for /.dockerenv
+    in_docker = os.path.exists('/.dockerenv')
+
+    if in_docker:
+        # Running in Docker container
+        # Try host.docker.internal first (works on Docker Desktop for Windows/Mac)
+        # On native Linux, this won't resolve unless using --add-host or --network host
+        return "http://host.docker.internal:1234/v1"
+    else:
+        # Running natively (for local development)
+        return "http://127.0.0.1:1234/v1"
+
+
+def format_error_notification(error):
+    """
+    Format a ProxiMateError into a user-friendly notification message.
+    Returns formatted string with message and suggestions.
+    """
+    if isinstance(error, ProxiMateError):
+        msg_parts = [error.user_message]
+        if error.suggestions:
+            msg_parts.append("\n\nHow to fix:")
+            for i, suggestion in enumerate(error.suggestions, 1):
+                msg_parts.append(f"{i}. {suggestion}")
+        return "\n".join(msg_parts)
+    return str(error)
+
+
 def server(input: Inputs, output: Outputs, session: Session):
     print("Server started")
 
@@ -185,10 +366,28 @@ def server(input: Inputs, output: Outputs, session: Session):
         columns=["Experiment Name", "Bait", "Type", "Bait ID"]
     ))
 
+    ed_dataframe = reactive.Value(pd.DataFrame(
+        columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID"]
+    ))
+
     @render.data_frame
     def bait_table():
         # Return the bait table for SAINT input
         return render.DataGrid(saint_baits.get(), editable=True)
+
+    @render.data_frame
+    def ed_table_mq():
+        # Return the ED table for MaxQuant input
+        print("Rendering MaxQuant ED table")
+        print(ed_dataframe.get())
+        return render.DataGrid(ed_dataframe.get(), editable=True)
+
+    @render.data_frame
+    def ed_table_diann():
+        # Return the ED table for DIA-NN input
+        print("Rendering DIA-NN ED table")
+        print(ed_dataframe.get())
+        return render.DataGrid(ed_dataframe.get(), editable=True)
 
     @reactive.effect
     @reactive.event(input.bait)
@@ -208,139 +407,264 @@ def server(input: Inputs, output: Outputs, session: Session):
             print("Bait table updated with", len(saint_baits.get()), "rows.")
 
     @reactive.effect
-    @reactive.event(input.parse_mq)
-    def parse_mq():
-        # Check if the dataset name is valid
-        dataset_name = input.mq_dataset_name.get()
-        check_result = parse.validate_name(dataset_name, datasets.get()['Dataset Name'].tolist())
-        if check_result != 0:
-            print(check_result)
-            ui.notification_show(
-                    f"Parser: {check_result}",
-                    type="error",
-                )
-            return "Error: " + check_result
+    @reactive.event(input.ed_file)
+    def update_ed_table():
+        # Check to see if the ED file has been uploaded
+        if input.ed_file.get():
+            # Read the ED file and set it to the ed_dataframe reactive value
+            print("ED file uploaded:", input.ed_file.get()[0]['name'])
+            try:
+                # Read the ED file into a DataFrame
+                ed_df = pd.read_csv(input.ed_file.get()[0]['datapath'])
+                print("ED file read with", len(ed_df), "rows.")
 
-        # Get the input format (MaxQuant or DIA-NN)
-        input_format = input.input_format.get()
-
-        with ui.Progress(min=0, max=1) as progress:
-            if input_format == "MaxQuant":
-                progress.set(message="Parsing MaxQuant inputs", value=0.25)
-                print("Parsing MaxQuant and Experimental Design files")
-
-                # Check if files are uploaded
-                if not input.pg_file.get() or not input.ed_file.get():
+                # Validate required columns
+                required_cols = ["Experiment Name", "Type", "Bait", "Replicate"]
+                missing_cols = [col for col in required_cols if col not in ed_df.columns]
+                if missing_cols:
+                    print("ED file is missing required columns:", missing_cols)
                     ui.notification_show(
-                        "Please upload both proteinGroups.txt and Experimental Design files",
+                        f"ED file is missing required columns: {', '.join(missing_cols)}",
                         type="error"
                     )
-                    return "Error: Missing files"
+                    return
 
-                print(input.pg_file.get()[0]['name'])
-                print(input.ed_file.get()[0]['name'])
-                curr_dataset = datasets.get()
-                progress.set(0.45)
-                print("Current directory:", os.getcwd())
+                # Add Bait ID column if not present
+                if "Bait ID" not in ed_df.columns:
+                    ed_df['Bait ID'] = 'None'
 
-                n_exp, n_ctrl = parse.parse_ed_pg(
-                    input.pg_file.get()[0]['datapath'],
-                    input.ed_file.get()[0]['datapath'],
-                    input.mq_quant_type.get(),
-                    out_dir + '/' + input.mq_dataset_name.get()
-                )
-                progress.set(0.85)
-
-                # Update the datasets dataframe
-                new_row = pd.DataFrame(
-                    [[input.mq_dataset_name.get(), 'MaxQuant', input.mq_quant_type.get(), n_exp, n_ctrl, '', '', '']],
-                    columns=datasets.get().columns
-                )
-                updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-                datasets.set(updated_datasets)
-                progress.set(1.0)
-
-            elif input_format == "DIA-NN":
-                progress.set(message="Parsing DIA-NN inputs", value=0.25)
-                print("Parsing DIA-NN and Experimental Design files")
-
-                # Check if files are uploaded
-                if not input.diann_matrix_file.get() or not input.ed_file.get():
+                # Validate Type values
+                invalid_types = ed_df[~ed_df['Type'].isin(['C', 'T'])]
+                if len(invalid_types) > 0:
                     ui.notification_show(
-                        "Please upload both DIA-NN matrix and Experimental Design files",
+                        f"ED file contains invalid Type values. Must be 'C' or 'T'.",
                         type="error"
                     )
-                    return "Error: Missing files"
+                    return
 
-                print(input.diann_matrix_file.get()[0]['name'])
-                print(input.ed_file.get()[0]['name'])
-                curr_dataset = datasets.get()
-                progress.set(0.45)
-                print("Current directory:", os.getcwd())
-
-                n_exp, n_ctrl = parse.parse_diann(
-                    input.diann_matrix_file.get()[0]['datapath'],
-                    input.ed_file.get()[0]['datapath'],
-                    "Intensity",  # DIA-NN always uses intensity
-                    out_dir + '/' + input.mq_dataset_name.get()
+                ed_dataframe.set(ed_df)
+                print("ED table updated with", len(ed_dataframe.get()), "rows.")
+            except Exception as e:
+                ui.notification_show(
+                    f"Error reading ED file: {str(e)}",
+                    type="error"
                 )
-                progress.set(0.85)
-
-                # Update the datasets dataframe
-                new_row = pd.DataFrame(
-                    [[input.mq_dataset_name.get(), 'DIA-NN', 'Intensity', n_exp, n_ctrl, '', '', '']],
-                    columns=datasets.get().columns
-                )
-                updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-                datasets.set(updated_datasets)
-                progress.set(1.0)
-
-        return "Parsed!"
+                print(f"Error reading ED file: {e}")
 
     @reactive.effect
-    @reactive.event(input.parse_saint)
-    def parse_saint():
-        print("Parsing")
-        print(input.bait.get()[0]['datapath'])
-        print(input.prey.get()[0]['datapath'])
-        print(input.interaction.get()[0]['datapath'])
+    @reactive.event(input.input_format)
+    def clear_tables_on_format_change():
+        # Clear tables when format changes to avoid showing stale data
+        print(f"Input format changed to: {input.input_format.get()}")
+        if input.input_format.get() in ["MaxQuant", "DIA-NN"]:
+            # Clear SAINT bait table
+            saint_baits.set(pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"]))
+        elif input.input_format.get() == "SAINT":
+            # Clear ED table
+            ed_dataframe.set(pd.DataFrame(columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID"]))
 
+    @reactive.effect
+    @reactive.event(input.parse_data)
+    def parse_data():
         # Check if the dataset name is valid
-        dataset_name = input.st_dataset_name.get()
+        dataset_name = input.dataset_name.get()
         check_result = parse.validate_name(dataset_name, datasets.get()['Dataset Name'].tolist())
         if check_result != 0:
             print(check_result)
             ui.notification_show(
                     f"Parser: {check_result}",
                     type="error",
-                )            
+                )
             return "Error: " + check_result
-        
-        # Create the output directory if it doesn't exist
-        if not os.path.exists(out_dir + '/' + dataset_name):
-            os.makedirs(out_dir + '/' + dataset_name)
-        
-        n_expts, n_ctrls = parse.parse_from_saint(
-            bait_table.data_view(),
-            input.prey.get()[0]['datapath'],
-            input.interaction.get()[0]['datapath'],
-            out_dir + '/' + input.st_dataset_name.get()
-        )
 
-        # Copy the bait, prey, and interaction files to the output directory
-        shutil.copy(input.bait.get()[0]['datapath'], out_dir + '/' + dataset_name + '/bait.txt')
-        shutil.copy(input.prey.get()[0]['datapath'], out_dir + '/' + dataset_name + '/prey.txt')
-        shutil.copy(input.interaction.get()[0]['datapath'], out_dir + '/' + dataset_name + '/interaction.txt')
+        # Get the input format (MaxQuant, DIA-NN, or SAINT)
+        input_format = input.input_format.get()
+        output_path = out_dir + '/' + dataset_name
 
-        # Update the datasets dataframe
-        new_row = pd.DataFrame([[dataset_name, 'SAINT', input.saint_quant_type.get(), n_expts, n_ctrls, '', '', '']], columns=datasets.get().columns)
+        try:
+            with ui.Progress(min=0, max=1) as progress:
+                if input_format == "MaxQuant":
+                    progress.set(message="Parsing MaxQuant inputs", value=0.25)
+                    print("Parsing MaxQuant and Experimental Design files")
 
-        updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-        datasets.set(updated_datasets)
-        print("Parsed SAINT inputs. Updated datasets.")
+                    # Check if files are uploaded
+                    if not input.pg_file.get() or not input.ed_file.get():
+                        ui.notification_show(
+                            "Please upload both proteinGroups.txt and Experimental Design files",
+                            type="error"
+                        )
+                        return "Error: Missing files"
 
-        print("Edited bait table:", bait_table.data_view())
-        # Code for parsing goes here
+                    print(input.pg_file.get()[0]['name'])
+                    print(input.ed_file.get()[0]['name'])
+                    progress.set(0.45)
+                    print("Current directory:", os.getcwd())
+
+                    n_exp, n_ctrl = parse.parse_ed_pg(
+                        input.pg_file.get()[0]['datapath'],
+                        input.ed_file.get()[0]['datapath'],
+                        input.quant_type.get(),
+                        output_path
+                    )
+
+                    # Overwrite ED.csv with edited table data
+                    ed_df = ed_table_mq.data_view()
+                    ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+                    print("Overwrote ED.csv with edited table data.")
+
+                    progress.set(0.85)
+
+                    # Update the datasets dataframe
+                    new_row = pd.DataFrame(
+                        [[dataset_name, 'MaxQuant', input.quant_type.get(), n_exp, n_ctrl, '', '', '']],
+                        columns=datasets.get().columns
+                    )
+                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                    datasets.set(updated_datasets)
+                    progress.set(1.0)
+
+                elif input_format == "DIA-NN":
+                    progress.set(message="Parsing DIA-NN inputs", value=0.25)
+                    print("Parsing DIA-NN and Experimental Design files")
+
+                    # Check if files are uploaded
+                    if not input.diann_matrix_file.get() or not input.ed_file.get():
+                        ui.notification_show(
+                            "Please upload both DIA-NN matrix and Experimental Design files",
+                            type="error"
+                        )
+                        return "Error: Missing files"
+
+                    print(input.diann_matrix_file.get()[0]['name'])
+                    print(input.ed_file.get()[0]['name'])
+                    progress.set(0.45)
+                    print("Current directory:", os.getcwd())
+
+                    n_exp, n_ctrl = parse.parse_diann(
+                        input.diann_matrix_file.get()[0]['datapath'],
+                        input.ed_file.get()[0]['datapath'],
+                        "Intensity",  # DIA-NN always uses intensity
+                        output_path
+                    )
+
+                    # Overwrite ED.csv with edited table data
+                    ed_df = ed_table_diann.data_view()
+                    ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+                    print("Overwrote ED.csv with edited table data.")
+
+                    progress.set(0.85)
+
+                    # Update the datasets dataframe
+                    new_row = pd.DataFrame(
+                        [[dataset_name, 'DIA-NN', 'Intensity', n_exp, n_ctrl, '', '', '']],
+                        columns=datasets.get().columns
+                    )
+                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                    datasets.set(updated_datasets)
+                    progress.set(1.0)
+
+                elif input_format == "SAINT":
+                    progress.set(message="Parsing SAINT inputs", value=0.25)
+                    print("Parsing SAINT files")
+
+                    # Check if files are uploaded
+                    if not input.bait.get() or not input.prey.get() or not input.interaction.get():
+                        ui.notification_show(
+                            "Please upload all three SAINT files (bait, prey, interaction)",
+                            type="error"
+                        )
+                        return "Error: Missing files"
+
+                    print(input.bait.get()[0]['datapath'])
+                    print(input.prey.get()[0]['datapath'])
+                    print(input.interaction.get()[0]['datapath'])
+                    progress.set(0.45)
+
+                    # Create the output directory if it doesn't exist
+                    if not os.path.exists(output_path):
+                        os.makedirs(output_path)
+
+                    n_expts, n_ctrls = parse.parse_from_saint(
+                        bait_table.data_view(),
+                        input.prey.get()[0]['datapath'],
+                        input.interaction.get()[0]['datapath'],
+                        output_path
+                    )
+
+                    # Copy the bait, prey, and interaction files to the output directory
+                    shutil.copy(input.bait.get()[0]['datapath'], output_path + '/bait.txt')
+                    shutil.copy(input.prey.get()[0]['datapath'], output_path + '/prey.txt')
+                    shutil.copy(input.interaction.get()[0]['datapath'], output_path + '/interaction.txt')
+
+                    progress.set(0.85)
+
+                    # Update the datasets dataframe
+                    new_row = pd.DataFrame([[dataset_name, 'SAINT', input.quant_type.get(), n_expts, n_ctrls, '', '', '']], columns=datasets.get().columns)
+
+                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                    datasets.set(updated_datasets)
+                    print("Parsed SAINT inputs. Updated datasets.")
+                    print("Edited bait table:", bait_table.data_view())
+                    progress.set(1.0)
+
+            # Success notification
+            ui.notification_show(
+                f"Successfully parsed dataset '{dataset_name}'",
+                type="message",
+                duration=5
+            )
+
+        except ProxiMateError as e:
+            # Handle our custom exceptions with user-friendly messages
+            print(f"Validation error: {e.message}")
+            error_msg = format_error_notification(e)
+            ui.notification_show(
+                error_msg,
+                type="error",
+                duration=None  # Keep error visible until dismissed
+            )
+            return f"Error: {e.user_message}"
+
+        except FileNotFoundError as e:
+            print(f"File not found: {e}")
+            ui.notification_show(
+                f"File not found: {str(e)}",
+                type="error",
+                duration=10
+            )
+            return "Error: File not found"
+
+        except PermissionError as e:
+            print(f"Permission error: {e}")
+            ui.notification_show(
+                f"Permission denied accessing file: {str(e)}",
+                type="error",
+                duration=10
+            )
+            return "Error: Permission denied"
+
+        except pd.errors.ParserError as e:
+            print(f"File parsing error: {e}")
+            ui.notification_show(
+                f"Error parsing file: {str(e)}\n\nEnsure files are in correct format.",
+                type="error",
+                duration=10
+            )
+            return "Error: File parsing failed"
+
+        except Exception as e:
+            # Catch-all for unexpected errors
+            print(f"Unexpected error during parsing: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            ui.notification_show(
+                f"An unexpected error occurred:\n{str(e)}\n\nPlease check the console for details.",
+                type="error",
+                duration=None
+            )
+            return f"Error: {str(e)}"
+
+        return "Parsed!"
 
 
 
@@ -541,7 +865,160 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Return the figure widget
         return fig
 
+    @render.ui
+    def metric_bait_label():
+        bait_selection = input.qc_bait.get()
+        if bait_selection == "All":
+            label_text = "Metrics for All Baits"
+        else:
+            label_text = f"Metrics for {bait_selection}"
+        return ui.h5(label_text, style="margin-bottom: 15px; margin-top: 0px; font-weight: 600;")
+
+    @render.ui
+    def metric_network_size():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return ui.value_box("Median Network Size", "No data", showcase=None)
+
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+
+        if not os.path.exists(results_path):
+            return ui.value_box("Median Network Size", "No data", showcase=None)
+
+        # Get threshold values
+        thresholds = {
+            'SaintScore': input.threshold_saintscore.get(),
+            'BFDR': input.threshold_bfdr.get(),
+            'WD': input.threshold_wd.get(),
+            'WDFDR': input.threshold_wdfdr.get()
+        }
+
+        # Filter by bait if not "All"
+        ctrls = None
+        if input.qc_bait.get() != "All":
+            ctrls = [input.qc_bait.get()]
+
+        # Call the metrics calculation function
+        metrics = calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=ctrls)
+
+        return ui.value_box(
+            "Median Network Size",
+            f"{metrics['median_network_size']:.1f}",
+            showcase=None,
+            theme="primary"
+        )
+
+    @render.ui
+    def metric_enrichment():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return ui.value_box("Known Enrichment", "No data", showcase=None)
+
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+
+        if not os.path.exists(results_path):
+            return ui.value_box("Known Enrichment", "No data", showcase=None)
+
+        # Get threshold values
+        thresholds = {
+            'SaintScore': input.threshold_saintscore.get(),
+            'BFDR': input.threshold_bfdr.get(),
+            'WD': input.threshold_wd.get(),
+            'WDFDR': input.threshold_wdfdr.get()
+        }
+
+        # Filter by bait if not "All"
+        ctrls = None
+        if input.qc_bait.get() != "All":
+            ctrls = [input.qc_bait.get()]
+
+        # Call the metrics calculation function
+        metrics = calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=ctrls)
+
+        return ui.value_box(
+            "Known Enrichment",
+            f"{metrics['enrichment_ratio']:.2f}x",
+            showcase=None,
+            theme="success"
+        )
+
+    @render.ui
+    def metric_degree():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return ui.value_box("Mean Prey-Prey Degree", "No data", showcase=None)
+
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+
+        if not os.path.exists(results_path):
+            return ui.value_box("Mean Prey-Prey Degree", "No data", showcase=None)
+
+        # Get threshold values
+        thresholds = {
+            'SaintScore': input.threshold_saintscore.get(),
+            'BFDR': input.threshold_bfdr.get(),
+            'WD': input.threshold_wd.get(),
+            'WDFDR': input.threshold_wdfdr.get()
+        }
+
+        # Filter by bait if not "All"
+        ctrls = None
+        if input.qc_bait.get() != "All":
+            ctrls = [input.qc_bait.get()]
+
+        # Call the metrics calculation function
+        metrics = calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=ctrls)
+
+        return ui.value_box(
+            "Mean Prey-Prey Degree",
+            f"{metrics['mean_degree']:.1f}",
+            showcase=None,
+            theme="info"
+        )
+
+    @render_widget
+    def saint_scatter_plot():
+        # Get the selected dataset
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            return None
+
+        # Only show for individual baits, not "All"
+        bait_selection = input.qc_bait.get()
+        if bait_selection == "All":
+            # Return a message figure
+            fig = go.Figure()
+            fig.add_annotation(
+                text="Please select a specific bait to view this plot",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=16)
+            )
+            fig.update_layout(
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False)
+            )
+            return fig
+
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+
+        if not os.path.exists(results_path):
+            return None
+
+        # Get threshold value for reference line
+        saintscore_threshold = input.threshold_saintscore.get()
+
+        # Call the scatter plot function
+        fig = plot_saint_scatter(results_path, bait_selection, saintscore_threshold)
+
+        return fig
+
     feature_enrichment = reactive.Value(pd.DataFrame())
+
+    _cytoscape_status_msg = reactive.Value("Click a button to test Cytoscape connection...")
 
     # Feature analysis tab
     @reactive.effect
@@ -577,18 +1054,21 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.plot
     def feature_enrichment_plot():
-        
+        # Trigger re-render when feature analysis completes
+        _ = feature_enrichment.get()
+
         # Set the feature enrichment to whatever dataset is selected
         dataset = input.feature_dataset.get()
         if not dataset:
             return None
-        
+
         feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
         if not os.path.exists(feature_file):
             return None
 
-        feature_enrichment.set(pd.read_csv(feature_file))
-        
+        # Load the feature enrichment data from file
+        feature_data = pd.read_csv(feature_file)
+
         feature_type = input.feature_type.get()
         if not feature_type:
             feature_type = 'GO_CC'  # Default feature type if none is selected
@@ -599,9 +1079,17 @@ def server(input: Inputs, output: Outputs, session: Session):
             num_features = 30
 
         # Call the plot_results function to generate the heatmap
-        heatmap = plot_results(feature_enrichment.get(), feature_type, num_features)
-
-        return heatmap
+        try:
+            heatmap = plot_results(feature_data, feature_type, num_features)
+            return heatmap
+        except ValueError as e:
+            # Handle case where there aren't enough features to cluster
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.text(0.5, 0.5, f'Insufficient data to generate plot for {feature_type}\n\nTry selecting a different feature type or lowering the SAINT threshold.',
+                    ha='center', va='center', fontsize=14, wrap=True)
+            ax.axis('off')
+            return fig
     
 
 
@@ -614,6 +1102,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         return datasets.get()[datasets.get()['Scored'] == 'Yes']["Dataset Name"].tolist()
 
     @reactive.Effect
+    @reactive.event(datasets)
     def update_score_dataset():
         # Update the dropdown choices dynamically
         available_choices = available_datasets()
@@ -622,24 +1111,329 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_select("qc_dataset", choices=available_choices)
         ui.update_select("download_dataset", choices=available_choices)
         ui.update_select("feature_dataset", choices=scored_choices)
+        ui.update_select("comp_dataset_a", choices=scored_choices)
+        ui.update_select("comp_dataset_b", choices=scored_choices)
 
-    @reactive.Effect
+    @reactive.effect
+    @reactive.event(input.qc_dataset, datasets)
     def update_qc_bait():
         # Update the bait dropdown choices dynamically based on the selected dataset
-        dataset_name = input.qc_dataset.get()
+        dataset_name = input.qc_dataset()
         if dataset_name:
             # Check to see if the dataset has been scored
             try:
                 scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
                 baits = scores['Experiment.ID'].unique().tolist()
-                print(baits)
+                print(f"Found baits: {baits}")
                 baits.insert(0, "All")  # Add "All" option
                 ui.update_select("qc_bait", choices=baits)
             except FileNotFoundError:
                 print(f"File not found for dataset {dataset_name}. Resetting bait selection.")
                 ui.update_select("qc_bait", choices=["All"])  # Reset to default if file not found
+            except Exception as e:
+                print(f"Error reading annotated_scores.csv: {e}")
+                ui.update_select("qc_bait", choices=["All"])
         else:
             ui.update_select("qc_bait", choices=["All"])  # Reset to default if no dataset is selected
+
+    # Network Comparison Tab - Reactive Effects and Renderers
+
+    # Cached data loaders for Network Comparison
+    @reactive.Calc
+    def comp_volcano_data_cached():
+        """Cache volcano data calculation to avoid recomputing."""
+        # Get all inputs
+        dataset_a = input.comp_dataset_a()
+        dataset_b = input.comp_dataset_b()
+        bait_a = input.comp_bait_a()
+        bait_b = input.comp_bait_b()
+
+        # Return empty if not all selected or datasets don't match
+        if not all([dataset_a, dataset_b, bait_a, bait_b]) or dataset_a != dataset_b:
+            return pd.DataFrame()
+
+        # Get thresholds
+        thresholds_a = {
+            'SaintScore': input.comp_saintscore_a(),
+            'BFDR': input.comp_bfdr_a(),
+            'WD': input.comp_wd_a(),
+            'WDFDR': input.comp_wdfdr_a()
+        }
+        thresholds_b = {
+            'SaintScore': input.comp_saintscore_b(),
+            'BFDR': input.comp_bfdr_b(),
+            'WD': input.comp_wd_b(),
+            'WDFDR': input.comp_wdfdr_b()
+        }
+
+        # Calculate and return volcano data
+        return calculate_volcano_data(
+            dataset_a, bait_a, bait_b,
+            thresholds_a, thresholds_b,
+            out_dir
+        )
+
+    @reactive.Calc
+    def comp_filtered_data_a_cached():
+        """Cache filtered data for bait A."""
+        dataset_a = input.comp_dataset_a()
+        bait_a = input.comp_bait_a()
+
+        if not dataset_a or not bait_a:
+            return pd.DataFrame()
+
+        thresholds_a = {
+            'SaintScore': input.comp_saintscore_a(),
+            'BFDR': input.comp_bfdr_a(),
+            'WD': input.comp_wd_a(),
+            'WDFDR': input.comp_wdfdr_a()
+        }
+
+        return load_and_filter_bait_data(dataset_a, bait_a, thresholds_a, out_dir)
+
+    @reactive.Calc
+    def comp_filtered_data_b_cached():
+        """Cache filtered data for bait B."""
+        dataset_b = input.comp_dataset_b()
+        bait_b = input.comp_bait_b()
+
+        if not dataset_b or not bait_b:
+            return pd.DataFrame()
+
+        thresholds_b = {
+            'SaintScore': input.comp_saintscore_b(),
+            'BFDR': input.comp_bfdr_b(),
+            'WD': input.comp_wd_b(),
+            'WDFDR': input.comp_wdfdr_b()
+        }
+
+        return load_and_filter_bait_data(dataset_b, bait_b, thresholds_b, out_dir)
+
+    @reactive.effect
+    @reactive.event(input.comp_dataset_a, datasets)
+    def update_comp_bait_a():
+        """Update bait A dropdown based on selected dataset."""
+        dataset_name = input.comp_dataset_a()
+        if dataset_name:
+            try:
+                scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
+                baits = scores['Experiment.ID'].unique().tolist()
+                ui.update_select("comp_bait_a", choices=baits)
+            except FileNotFoundError:
+                ui.update_select("comp_bait_a", choices=[])
+            except Exception as e:
+                print(f"Error reading annotated_scores.csv for comp_bait_a: {e}")
+                ui.update_select("comp_bait_a", choices=[])
+        else:
+            ui.update_select("comp_bait_a", choices=[])
+
+    @reactive.effect
+    @reactive.event(input.comp_dataset_b, datasets)
+    def update_comp_bait_b():
+        """Update bait B dropdown based on selected dataset."""
+        dataset_name = input.comp_dataset_b()
+        if dataset_name:
+            try:
+                scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
+                baits = scores['Experiment.ID'].unique().tolist()
+                ui.update_select("comp_bait_b", choices=baits)
+            except FileNotFoundError:
+                ui.update_select("comp_bait_b", choices=[])
+            except Exception as e:
+                print(f"Error reading annotated_scores.csv for comp_bait_b: {e}")
+                ui.update_select("comp_bait_b", choices=[])
+        else:
+            ui.update_select("comp_bait_b", choices=[])
+
+    @render_widget
+    @reactive.event(input.compare_networks)
+    def volcano_plot():
+        """Render volcano plot comparing two baits."""
+        with ui.Progress(min=0, max=100) as progress:
+            progress.set(message="Comparing networks...", detail="Initializing", value=0)
+
+            # Get selections
+            dataset_a = input.comp_dataset_a()
+            dataset_b = input.comp_dataset_b()
+            bait_a = input.comp_bait_a()
+            bait_b = input.comp_bait_b()
+
+            # Validate inputs
+            if not all([dataset_a, dataset_b, bait_a, bait_b]):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="Please select datasets and baits for comparison",
+                    xref="paper", yref="paper",
+                    x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=16)
+                )
+                fig.update_layout(
+                    xaxis=dict(visible=False),
+                    yaxis=dict(visible=False),
+                    height=500
+                )
+                return fig
+
+            # Check if datasets match
+            if dataset_a != dataset_b:
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="Volcano plot only available when comparing baits from the same dataset.<br>Please select the same dataset for both networks.",
+                    xref="paper", yref="paper",
+                    x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=14, color="orange")
+                )
+                fig.update_layout(
+                    xaxis=dict(visible=False),
+                    yaxis=dict(visible=False),
+                    height=500
+                )
+                return fig
+
+            progress.set(message="Comparing networks...", detail="Loading cached data", value=33)
+
+            # Get cached volcano data
+            volcano_data = comp_volcano_data_cached()
+
+            progress.set(message="Comparing networks...", detail="Generating visualization", value=66)
+
+            # Create plot
+            fig = create_volcano_plot(volcano_data, bait_a, bait_b)
+
+            progress.set(value=100)
+            return fig
+
+    @render_widget
+    @reactive.event(input.compare_networks)
+    def venn_diagram():
+        """Render Venn diagram showing network overlap."""
+        # Get selections
+        dataset_a = input.comp_dataset_a()
+        dataset_b = input.comp_dataset_b()
+        bait_a = input.comp_bait_a()
+        bait_b = input.comp_bait_b()
+
+        # Validate inputs
+        if not all([dataset_a, dataset_b, bait_a, bait_b]):
+            fig = go.Figure()
+            fig.add_annotation(
+                text="Select datasets and baits to view overlap",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=16)
+            )
+            fig.update_layout(
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                height=400
+            )
+            return fig
+
+        # Get cached filtered data
+        data_a = comp_filtered_data_a_cached()
+        data_b = comp_filtered_data_b_cached()
+
+        # Get sets of Prey.IDs
+        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
+        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
+
+        # Create Venn diagram
+        fig = create_venn_diagram(set_a, set_b, bait_a, bait_b)
+
+        return fig
+
+    @render.text
+    @reactive.event(input.compare_networks)
+    def genes_a_only():
+        """Render list of genes only in network A."""
+        # Get selections
+        dataset_a = input.comp_dataset_a()
+        dataset_b = input.comp_dataset_b()
+        bait_a = input.comp_bait_a()
+        bait_b = input.comp_bait_b()
+
+        if not all([dataset_a, dataset_b, bait_a, bait_b]):
+            return "Select datasets and baits to view gene lists"
+
+        # Get cached filtered data
+        data_a = comp_filtered_data_a_cached()
+        data_b = comp_filtered_data_b_cached()
+
+        # Get sets
+        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
+        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
+        only_a = set_a - set_b
+
+        if len(only_a) == 0:
+            return "No unique genes in Network A"
+
+        # Get gene names
+        genes_only_a = data_a[data_a['Prey.ID'].isin(only_a)]['First_Prey_Gene'].unique()
+        genes_sorted = sorted(genes_only_a)
+
+        return f"Network A only ({len(genes_sorted)} genes):\n\n" + "\n".join(genes_sorted)
+
+    @render.text
+    @reactive.event(input.compare_networks)
+    def genes_b_only():
+        """Render list of genes only in network B."""
+        # Get selections
+        dataset_a = input.comp_dataset_a()
+        dataset_b = input.comp_dataset_b()
+        bait_a = input.comp_bait_a()
+        bait_b = input.comp_bait_b()
+
+        if not all([dataset_a, dataset_b, bait_a, bait_b]):
+            return "Select datasets and baits to view gene lists"
+
+        # Get cached filtered data
+        data_a = comp_filtered_data_a_cached()
+        data_b = comp_filtered_data_b_cached()
+
+        # Get sets
+        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
+        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
+        only_b = set_b - set_a
+
+        if len(only_b) == 0:
+            return "No unique genes in Network B"
+
+        # Get gene names
+        genes_only_b = data_b[data_b['Prey.ID'].isin(only_b)]['First_Prey_Gene'].unique()
+        genes_sorted = sorted(genes_only_b)
+
+        return f"Network B only ({len(genes_sorted)} genes):\n\n" + "\n".join(genes_sorted)
+
+    @render.text
+    @reactive.event(input.compare_networks)
+    def genes_both():
+        """Render list of genes in both networks."""
+        # Get selections
+        dataset_a = input.comp_dataset_a()
+        dataset_b = input.comp_dataset_b()
+        bait_a = input.comp_bait_a()
+        bait_b = input.comp_bait_b()
+
+        if not all([dataset_a, dataset_b, bait_a, bait_b]):
+            return "Select datasets and baits to view gene lists"
+
+        # Get cached filtered data
+        data_a = comp_filtered_data_a_cached()
+        data_b = comp_filtered_data_b_cached()
+
+        # Get sets
+        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
+        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
+        both = set_a & set_b
+
+        if len(both) == 0:
+            return "No shared genes between networks"
+
+        # Get gene names (use data_a arbitrarily since they're in both)
+        genes_both = data_a[data_a['Prey.ID'].isin(both)]['First_Prey_Gene'].unique()
+        genes_sorted = sorted(genes_both)
+
+        return f"Both networks ({len(genes_sorted)} genes):\n\n" + "\n".join(genes_sorted)
 
     @reactive.Effect
     def update_selectize_custom_columns():
@@ -700,6 +1494,67 @@ def server(input: Inputs, output: Outputs, session: Session):
         # temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=filename, suffix=".csv")
         custom_dataset.get().to_csv(savepath, index=False)
         return savepath
+
+    # Cytoscape tab
+    @reactive.effect
+    @reactive.event(input.test_create_node)
+    def create_test_node():
+        """Create a test node in Cytoscape."""
+        try:
+            base_url = get_cytoscape_base_url()
+
+            # Try to connect to Cytoscape
+            version = p4c.cytoscape_version_info(base_url=base_url)
+
+            # Create a simple network if none exists
+            try:
+                current_network = p4c.get_network_name(base_url=base_url)
+            except:
+                # No network exists, create one
+                nodes_df = pd.DataFrame({'id': ['InitialNode']})
+                edges_df = pd.DataFrame({'source': [], 'target': []})
+                p4c.create_network_from_data_frames(
+                    nodes=nodes_df,
+                    edges=edges_df,
+                    title="ProxiMate Test Network",
+                    base_url=base_url
+                )
+
+            # Add a test node
+            p4c.add_cy_nodes(['TestNode_ProxiMate'], base_url=base_url)
+
+            # Update status
+            status_message = f"✓ Successfully created 'TestNode_ProxiMate' in Cytoscape\nCytoscape version: {version['cytoscapeVersion']}"
+
+        except Exception as e:
+            status_message = f"✗ Error connecting to Cytoscape:\n{str(e)}\n\nMake sure Cytoscape is running on your host machine."
+
+        # Store status in reactive value for display
+        _cytoscape_status_msg.set(status_message)
+
+    @reactive.effect
+    @reactive.event(input.test_delete_node)
+    def delete_test_node():
+        """Delete the test node from Cytoscape."""
+        try:
+            base_url = get_cytoscape_base_url()
+
+            # Select the test node
+            p4c.select_nodes(['TestNode_ProxiMate'], by_col='name', base_url=base_url)
+
+            # Delete selected nodes
+            p4c.delete_selected_nodes(base_url=base_url)
+
+            status_message = "✓ Successfully deleted 'TestNode_ProxiMate' from Cytoscape"
+
+        except Exception as e:
+            status_message = f"✗ Error deleting node:\n{str(e)}\n\nMake sure the node exists and Cytoscape is running."
+
+        _cytoscape_status_msg.set(status_message)
+
+    @render.text
+    def cytoscape_status():
+        return _cytoscape_status_msg.get()
 
 app = App(app_ui, server)
 

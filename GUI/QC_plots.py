@@ -3,8 +3,41 @@ import pandas as pd
 import numpy as np
 from sklearn.decomposition import PCA
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from sklearn.metrics import roc_curve, auc
 
+
+# Module-level cache for BioGRID data to avoid repeated file I/O
+_biogrid_cache = None
+_biogrid_cache_path = None
+
+
+def _load_biogrid_cached(biogrid_path="/Datasets/biogrid_summary.csv"):
+    """
+    Load BioGRID data with caching to avoid repeated I/O.
+
+    The BioGRID file is ~2M rows and takes 2-3 seconds to load.
+    Cache it at module level so it's only loaded once per session.
+    """
+    global _biogrid_cache, _biogrid_cache_path
+
+    # Return cached data if path hasn't changed
+    if _biogrid_cache is not None and _biogrid_cache_path == biogrid_path:
+        return _biogrid_cache
+
+    # Load and cache the data
+    try:
+        _biogrid_cache = pd.read_csv(biogrid_path)
+        _biogrid_cache_path = biogrid_path
+
+        # Convert to string type for consistency (do this once)
+        _biogrid_cache['SWISS-PROT Accessions Interactor A'] = _biogrid_cache['SWISS-PROT Accessions Interactor A'].astype(str)
+        _biogrid_cache['SWISS-PROT Accessions Interactor B'] = _biogrid_cache['SWISS-PROT Accessions Interactor B'].astype(str)
+
+        return _biogrid_cache
+    except FileNotFoundError:
+        print(f"Warning: BioGRID file not found at {biogrid_path}")
+        return None
 
 
 def pca_plot(interaction, experimentalDesign):
@@ -224,6 +257,370 @@ def roc_plot(results_path, known_type, ctrl_experiments=None):
     return fig
 
 
+def calculate_network_degrees(passing_interactions, biogrid_path="/Datasets/biogrid_summary.csv"):
+    """
+    Calculate prey-prey network degree for each prey protein from BioGRID.
+
+    Network degree = number of OTHER prey proteins (in the passing set) that
+    this prey interacts with in BioGRID, excluding all bait proteins.
+
+    Parameters:
+    -----------
+    passing_interactions : pd.DataFrame
+        Filtered interactions with columns: First_ID (prey), Bait.ID (bait)
+    biogrid_path : str
+        Path to biogrid_summary.csv file
+
+    Returns:
+    --------
+    list of int
+        Network degrees for each unique prey (prey-prey interactions only)
+    """
+
+    # Handle edge cases
+    if len(passing_interactions) == 0:
+        return []
+
+    # Load BioGRID data using cache
+    biogrid = _load_biogrid_cached(biogrid_path)
+    if biogrid is None:
+        return [0] * len(passing_interactions)
+
+    # Get unique prey and bait IDs from the passing interactions
+    # Use set for O(1) lookup performance in filtering
+    prey_ids = set(str(pid) for pid in passing_interactions['First_ID'].unique()
+                   if pd.notna(pid) and str(pid) != 'nan')
+    bait_ids = set(str(bid) for bid in passing_interactions['Bait.ID'].unique()
+                   if pd.notna(bid) and str(bid) != 'nan')
+
+    if len(prey_ids) == 0:
+        return []
+
+    # Filter BioGRID for prey-prey interactions only
+    # Keep only edges where BOTH proteins are in prey set and NEITHER is in bait set
+    col_a = biogrid['SWISS-PROT Accessions Interactor A']
+    col_b = biogrid['SWISS-PROT Accessions Interactor B']
+
+    prey_prey_edges = biogrid[
+        col_a.isin(prey_ids) & col_b.isin(prey_ids) &
+        ~col_a.isin(bait_ids) & ~col_b.isin(bait_ids)
+    ]
+
+    # If no prey-prey edges found, return zeros
+    if len(prey_prey_edges) == 0:
+        return [0] * len(prey_ids)
+
+    # Count degree efficiently using value_counts on concatenated series
+    # This is faster than creating separate DataFrames and concatenating
+    all_proteins = pd.concat([
+        prey_prey_edges['SWISS-PROT Accessions Interactor A'],
+        prey_prey_edges['SWISS-PROT Accessions Interactor B']
+    ])
+    degree_counts = all_proteins.value_counts().to_dict()
+
+    # Calculate degrees for each unique prey
+    degrees = [degree_counts.get(prey_id, 0) for prey_id in prey_ids]
+
+    return degrees
+
+
+def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None):
+    """
+    Calculate metrics for interactions passing thresholds.
+
+    Parameters:
+    -----------
+    results_path : str
+        Path to annotated_scores.csv file
+    thresholds : dict
+        Dictionary with threshold values: {'SaintScore': float, 'BFDR': float,
+                                           'WD': float, 'WDFDR': float}
+    ctrl_experiments : list, optional
+        List of control experiment IDs to filter by
+
+    Returns:
+    --------
+    dict
+        Dictionary containing:
+        - median_network_size: Median number of interactions per bait after filtering
+        - enrichment_ratio: Average enrichment of known interactions
+        - mean_degree: Mean prey-prey network degree (average number of other
+                      passing prey proteins each prey interacts with in BioGRID)
+        - total_before: Total interactions before filtering
+        - total_after: Total interactions after filtering
+    """
+
+    # Load data
+    results = pd.read_csv(results_path, sep=",")
+
+    # Filter by control experiments if specified
+    if ctrl_experiments is not None:
+        results = results[results['Experiment.ID'].isin(ctrl_experiments)]
+
+    # Total interactions before filtering
+    total_before = len(results)
+
+    # Known interactions before filtering
+    known_before = results['In.BioGRID'].sum() if 'In.BioGRID' in results.columns else 0
+
+    # Combined threshold (all conditions must pass using AND logic)
+    passing_all = results[
+        (results['SaintScore'] >= thresholds['SaintScore']) &
+        (results['BFDR'] <= thresholds['BFDR']) &
+        (results['WD'] >= thresholds['WD']) &
+        (results['WDFDR'] <= thresholds['WDFDR'])
+    ]
+
+    # Total interactions after filtering
+    total_after = len(passing_all)
+
+    # Known interactions after filtering
+    known_after = passing_all['In.BioGRID'].sum() if 'In.BioGRID' in passing_all.columns else 0
+
+    # Calculate median network size (interactions per bait)
+    if total_after > 0:
+        network_sizes = passing_all.groupby('Experiment.ID').size()
+        median_network_size = network_sizes.median()
+    else:
+        median_network_size = 0
+
+    # Calculate average enrichment of known interactions
+    # Enrichment = (known_after / total_after) / (known_before / total_before)
+    if total_before > 0 and total_after > 0 and known_before > 0:
+        pct_before = known_before / total_before
+        pct_after = known_after / total_after
+        enrichment_ratio = pct_after / pct_before
+    else:
+        enrichment_ratio = 0
+
+    # Calculate mean prey-prey network degree from BioGRID
+    if total_after > 0:
+        degrees = calculate_network_degrees(passing_all)
+        mean_degree = np.mean(degrees) if len(degrees) > 0 else 0
+    else:
+        mean_degree = 0
+
+    return {
+        'median_network_size': median_network_size,
+        'enrichment_ratio': enrichment_ratio,
+        'mean_degree': mean_degree,
+        'total_before': total_before,
+        'total_after': total_after,
+        'known_before': known_before,
+        'known_after': known_after
+    }
+
+
+def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
+    """
+    Create scatter plot of SAINT Score vs Fold Change for a specific bait.
+
+    Parameters:
+    -----------
+    results_path : str
+        Path to annotated_scores.csv file
+    bait_name : str
+        Name of the bait to visualize
+    saintscore_threshold : float
+        Threshold value to draw as horizontal reference line
+
+    Returns:
+    --------
+    plotly.graph_objects.Figure
+        Interactive scatter plot
+    """
+
+    # Load data
+    results = pd.read_csv(results_path, sep=",")
+
+    # Filter for specific bait
+    bait_data = results[results['Experiment.ID'] == bait_name].copy()
+
+    if len(bait_data) == 0:
+        # Return empty figure with message
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"No data available for bait: {bait_name}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16, color="red")
+        )
+        return fig
+
+    # Helper function to calculate average control intensity
+    def calculate_avg_ctrl_intensity(ctrl_intensity_str):
+        """
+        Parse control intensity string, filter out missing values ('.'),
+        and calculate average.
+        """
+        if pd.isnull(ctrl_intensity_str):
+            return np.nan
+
+        # Split by '|' and filter out '.' values
+        values = [v.strip() for v in str(ctrl_intensity_str).split('|') if v.strip() != '.']
+
+        if len(values) == 0:
+            return np.nan
+
+        try:
+            # Convert to float and calculate mean
+            numeric_values = [float(v) for v in values]
+            return np.mean(numeric_values)
+        except (ValueError, TypeError):
+            return np.nan
+
+    # Separate data by BioGRID status
+    # Handle missing columns gracefully
+    has_biogrid = 'In.BioGRID' in bait_data.columns
+    has_multivalidated = 'Multivalidated' in bait_data.columns
+
+    if has_multivalidated:
+        multivalidated = bait_data[bait_data['Multivalidated'] == True].copy()
+        in_biogrid = bait_data[(bait_data['In.BioGRID'] == True) & (bait_data['Multivalidated'] != True)].copy()
+        not_in_biogrid = bait_data[bait_data['In.BioGRID'] != True].copy()
+    elif has_biogrid:
+        multivalidated = pd.DataFrame()
+        in_biogrid = bait_data[bait_data['In.BioGRID'] == True].copy()
+        not_in_biogrid = bait_data[bait_data['In.BioGRID'] != True].copy()
+    else:
+        multivalidated = pd.DataFrame()
+        in_biogrid = pd.DataFrame()
+        not_in_biogrid = bait_data.copy()
+
+    # Create scatter plot
+    fig = go.Figure()
+
+    # Add not in BioGRID (blue) - plot first so it's in the background
+    if len(not_in_biogrid) > 0:
+        hover_text = []
+        for idx, row in not_in_biogrid.iterrows():
+            avg_ctrl = calculate_avg_ctrl_intensity(row['ctrlIntensity'])
+            if np.isnan(avg_ctrl):
+                ctrl_text = "NaN"
+            else:
+                ctrl_text = f"{avg_ctrl:.2e}"
+
+            text = (
+                f"<b>{row['First_Prey_Gene']}</b><br>"
+                f"SAINT Score: {row['SaintScore']:.3f}<br>"
+                f"BFDR: {row['BFDR']:.3f}<br>"
+                f"Fold Change: {row['FoldChange']:.3f}<br>"
+                f"Avg Intensity: {row['AvgIntensity']:.2e}<br>"
+                f"Avg Ctrl Intensity: {ctrl_text}"
+            )
+            hover_text.append(text)
+
+        fig.add_trace(go.Scatter(
+            x=not_in_biogrid['FoldChange'],
+            y=not_in_biogrid['SaintScore'],
+            mode='markers',
+            marker=dict(
+                size=8,
+                color='#1f77b4',  # Blue
+                line=dict(width=0.5, color='white')
+            ),
+            text=hover_text,
+            hovertemplate='%{text}<extra></extra>',
+            name='Not in BioGRID'
+        ))
+
+    # Add in BioGRID (orange)
+    if len(in_biogrid) > 0:
+        hover_text = []
+        for idx, row in in_biogrid.iterrows():
+            avg_ctrl = calculate_avg_ctrl_intensity(row['ctrlIntensity'])
+            if np.isnan(avg_ctrl):
+                ctrl_text = "NaN"
+            else:
+                ctrl_text = f"{avg_ctrl:.2e}"
+
+            text = (
+                f"<b>{row['First_Prey_Gene']}</b><br>"
+                f"SAINT Score: {row['SaintScore']:.3f}<br>"
+                f"BFDR: {row['BFDR']:.3f}<br>"
+                f"Fold Change: {row['FoldChange']:.3f}<br>"
+                f"Avg Intensity: {row['AvgIntensity']:.2e}<br>"
+                f"Avg Ctrl Intensity: {ctrl_text}"
+            )
+            hover_text.append(text)
+
+        fig.add_trace(go.Scatter(
+            x=in_biogrid['FoldChange'],
+            y=in_biogrid['SaintScore'],
+            mode='markers',
+            marker=dict(
+                size=8,
+                color='#ff7f0e',  # Orange
+                line=dict(width=0.5, color='white')
+            ),
+            text=hover_text,
+            hovertemplate='%{text}<extra></extra>',
+            name='In BioGRID'
+        ))
+
+    # Add multivalidated (red) - plot last so it's on top
+    if len(multivalidated) > 0:
+        hover_text = []
+        for idx, row in multivalidated.iterrows():
+            avg_ctrl = calculate_avg_ctrl_intensity(row['ctrlIntensity'])
+            if np.isnan(avg_ctrl):
+                ctrl_text = "NaN"
+            else:
+                ctrl_text = f"{avg_ctrl:.2e}"
+
+            text = (
+                f"<b>{row['First_Prey_Gene']}</b><br>"
+                f"SAINT Score: {row['SaintScore']:.3f}<br>"
+                f"BFDR: {row['BFDR']:.3f}<br>"
+                f"Fold Change: {row['FoldChange']:.3f}<br>"
+                f"Avg Intensity: {row['AvgIntensity']:.2e}<br>"
+                f"Avg Ctrl Intensity: {ctrl_text}"
+            )
+            hover_text.append(text)
+
+        fig.add_trace(go.Scatter(
+            x=multivalidated['FoldChange'],
+            y=multivalidated['SaintScore'],
+            mode='markers',
+            marker=dict(
+                size=8,
+                color='#d62728',  # Red
+                line=dict(width=0.5, color='white')
+            ),
+            text=hover_text,
+            hovertemplate='%{text}<extra></extra>',
+            name='Multivalidated'
+        ))
+
+    # Add horizontal threshold line
+    fig.add_hline(
+        y=saintscore_threshold,
+        line_dash="dot",
+        line_color="red",
+        line_width=2,
+        annotation_text=f"SAINT Score Threshold: {saintscore_threshold}",
+        annotation_position="right"
+    )
+
+    # Update layout
+    fig.update_layout(
+        title=f"SAINT Score vs Fold Change - {bait_name}",
+        xaxis_title="Fold Change (log2)",
+        yaxis_title="SAINT Score",
+        xaxis=dict(zeroline=True, zerolinewidth=1, zerolinecolor='lightgray'),
+        yaxis=dict(range=[-0.05, 1.05]),
+        hovermode='closest',
+        height=500,
+        template='plotly_white',
+        legend=dict(
+            yanchor="bottom",
+            y=0.01,
+            xanchor="right",
+            x=0.99
+        )
+    )
+
+    return fig
 
 
 def main():

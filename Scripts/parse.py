@@ -7,6 +7,8 @@ from protein_groups import ProteinGroups
 import shutil
 import re
 import tempfile
+from ed_validation import validate_maxquant_inputs, validate_diann_inputs
+from ed_exceptions import ProxiMateError
 
 def validate_name(s: str, datasets):
     """
@@ -41,6 +43,13 @@ def parse_ed_pg(proteinGroups, experimentalDesign, quantType, outputPath):
 
     # Print the quantification type
     print("Quantification type: " + quantType)
+
+    # VALIDATE INPUTS FIRST
+    try:
+        ed_df, pg_df = validate_maxquant_inputs(experimentalDesign, proteinGroups, quantType)
+    except ProxiMateError:
+        # Re-raise validation errors to be caught by app.py
+        raise
 
     # Check to see if the output directory exists. If not, create it.
     if not os.path.exists(outputPath):
@@ -159,6 +168,13 @@ def parse_diann(diannMatrix, experimentalDesign, quantType, outputPath):
     print("Experimental Design file: " + experimentalDesign)
     print("DIA-NN Matrix file: " + diannMatrix)
     print("Quantification type: " + quantType)
+
+    # VALIDATE INPUTS FIRST
+    try:
+        ed_df, diann_df = validate_diann_inputs(experimentalDesign, diannMatrix)
+    except ProxiMateError:
+        # Re-raise validation errors to be caught by app.py
+        raise
 
     # Check to see if the output directory exists. If not, create it.
     if not os.path.exists(outputPath):

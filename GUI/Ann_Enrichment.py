@@ -143,32 +143,32 @@ def plot_results(results, feature_type, num_features=30):
     # Initialize the plot with custom size
     # plt.figure(figsize=(10, 28))
 
-    heatmap = sns.clustermap(filtered_results, cmap='viridis', cbar_kws={'label': 'Enrichment Score'}, figsize =  (28, 10))
+    heatmap = sns.clustermap(filtered_results, cmap='viridis', cbar_kws={'label': 'Enrichment Score'}, figsize =  (12, 8))
     # plt.title(f"Enrichment Analysis for {feature_type}")
     plt.xlabel("Bait")
     plt.ylabel("Feature")
     heatmap.cax.set_ylabel('log2 Enrichment Score', rotation=270, labelpad=15)
 
     ax = heatmap.ax_heatmap
-    # ax.set_xticklabels(ax.get_xticklabels(), fontsize=5, rotation=45, ha='right')
-    # ax.set_yticklabels(ax.get_yticklabels(), fontsize=8)
 
     # Use the reordered DataFrame from the clustermap (data2d holds the data with proper ordering)
     ordered_columns = heatmap.data2d.columns
+    ordered_rows = heatmap.data2d.index
 
-    # # Set tick positions corresponding to every column
+    # Set tick positions and labels for x-axis (baits)
     ax.set_xticks(np.arange(len(ordered_columns)) + 0.5)
-    ax.set_xticklabels(ordered_columns, rotation=45, ha='right', fontsize=5)
+    ax.set_xticklabels(ordered_columns, rotation=45, ha='right', fontsize=8)
 
+    # Set tick positions and labels for y-axis (features) with truncation
+    ax.set_yticks(np.arange(len(ordered_rows)) + 0.5)
+    # Truncate long feature names to prevent cutoff
+    truncated_rows = [label[:60] + '...' if len(label) > 60 else label for label in ordered_rows]
+    ax.set_yticklabels(truncated_rows, fontsize=7)
 
-    # Force the locator to show every tick
-    # ax.xaxis.set_major_locator(ticker.FixedLocator(np.arange(len(ordered_columns))))
+    # Adjust layout to give more space for labels
+    plt.subplots_adjust(left=0.25, bottom=0.15, right=0.95, top=0.95)
 
-    # plt.xticks(rotation=45, ha='right', fontsize=8)
-    # plt.yticks(fontsize=8)
-    # plt.tight_layout()
-
-    return heatmap
+    return heatmap.fig
 
 
 def main():   
