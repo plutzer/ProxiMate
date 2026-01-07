@@ -17,6 +17,12 @@ import datetime
 import shutil
 from QC_plots import pca_plot, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
 from Ann_Enrichment import process_refactored, plot_results
+from network_comparison import (
+    load_and_filter_bait_data,
+    calculate_volcano_data,
+    create_volcano_plot,
+    create_venn_diagram
+)
 import py4cytoscape as p4c
 
 
@@ -187,6 +193,77 @@ app_ui = ui.page_navbar(
                         ui.output_plot("feature_enrichment_plot"),
                     ),
                 ),
+    ),
+    ui.nav_panel("Network Comparison",
+        # Top section: Bait selectors for A and B
+        ui.layout_columns(
+            # Bait A selector card
+            ui.card(
+                ui.card_header("Network A"),
+                ui.input_select("comp_dataset_a", "Dataset A", choices=[]),
+                ui.input_select("comp_bait_a", "Bait A", choices=[]),
+                ui.input_slider("comp_saintscore_a", "SAINT Score (≥)",
+                              min=0.0, max=1.0, value=0.7, step=0.01),
+                ui.input_slider("comp_bfdr_a", "BFDR (≤)",
+                              min=0.0, max=1.0, value=0.05, step=0.01),
+                ui.input_slider("comp_wd_a", "WD Score (≥)",
+                              min=0.0, max=10.0, value=0.0, step=0.1),
+                ui.input_slider("comp_wdfdr_a", "WDFDR (≤)",
+                              min=0.0, max=1.0, value=0.05, step=0.01),
+            ),
+            # Bait B selector card
+            ui.card(
+                ui.card_header("Network B"),
+                ui.input_select("comp_dataset_b", "Dataset B", choices=[]),
+                ui.input_select("comp_bait_b", "Bait B", choices=[]),
+                ui.input_slider("comp_saintscore_b", "SAINT Score (≥)",
+                              min=0.0, max=1.0, value=0.7, step=0.01),
+                ui.input_slider("comp_bfdr_b", "BFDR (≤)",
+                              min=0.0, max=1.0, value=0.05, step=0.01),
+                ui.input_slider("comp_wd_b", "WD Score (≥)",
+                              min=0.0, max=10.0, value=0.0, step=0.1),
+                ui.input_slider("comp_wdfdr_b", "WDFDR (≤)",
+                              min=0.0, max=1.0, value=0.05, step=0.01),
+            ),
+            col_widths=(6, 6),
+        ),
+
+        # Compare button
+        ui.div(
+            ui.input_action_button("compare_networks", "Compare Networks", class_="btn-primary"),
+            style="text-align: center; margin: 20px 0;"
+        ),
+
+        # Middle section: Volcano plot
+        ui.card(
+            ui.card_header("Differential Abundance Volcano Plot"),
+            output_widget("volcano_plot"),
+            ui.p("Volcano plot only shown when baits are from the same dataset.",
+                 style="font-style: italic; color: #666; margin-top: 10px;"),
+        ),
+
+        # Bottom section: Venn diagram and gene lists
+        ui.layout_columns(
+            ui.card(
+                ui.card_header("Network Overlap"),
+                output_widget("venn_diagram"),
+            ),
+            ui.card(
+                ui.card_header("Gene Lists"),
+                ui.navset_tab(
+                    ui.nav_panel("Network A Only",
+                        ui.output_text_verbatim("genes_a_only"),
+                    ),
+                    ui.nav_panel("Network B Only",
+                        ui.output_text_verbatim("genes_b_only"),
+                    ),
+                    ui.nav_panel("Both Networks",
+                        ui.output_text_verbatim("genes_both"),
+                    ),
+                ),
+            ),
+            col_widths=(6, 6),
+        ),
     ),
     ui.nav_panel("Cytoscape",
         ui.layout_columns(
@@ -1034,6 +1111,8 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_select("qc_dataset", choices=available_choices)
         ui.update_select("download_dataset", choices=available_choices)
         ui.update_select("feature_dataset", choices=scored_choices)
+        ui.update_select("comp_dataset_a", choices=scored_choices)
+        ui.update_select("comp_dataset_b", choices=scored_choices)
 
     @reactive.effect
     @reactive.event(input.qc_dataset, datasets)
@@ -1056,6 +1135,305 @@ def server(input: Inputs, output: Outputs, session: Session):
                 ui.update_select("qc_bait", choices=["All"])
         else:
             ui.update_select("qc_bait", choices=["All"])  # Reset to default if no dataset is selected
+
+    # Network Comparison Tab - Reactive Effects and Renderers
+
+    # Cached data loaders for Network Comparison
+    @reactive.Calc
+    def comp_volcano_data_cached():
+        """Cache volcano data calculation to avoid recomputing."""
+        # Get all inputs
+        dataset_a = input.comp_dataset_a()
+        dataset_b = input.comp_dataset_b()
+        bait_a = input.comp_bait_a()
+        bait_b = input.comp_bait_b()
+
+        # Return empty if not all selected or datasets don't match
+        if not all([dataset_a, dataset_b, bait_a, bait_b]) or dataset_a != dataset_b:
+            return pd.DataFrame()
+
+        # Get thresholds
+        thresholds_a = {
+            'SaintScore': input.comp_saintscore_a(),
+            'BFDR': input.comp_bfdr_a(),
+            'WD': input.comp_wd_a(),
+            'WDFDR': input.comp_wdfdr_a()
+        }
+        thresholds_b = {
+            'SaintScore': input.comp_saintscore_b(),
+            'BFDR': input.comp_bfdr_b(),
+            'WD': input.comp_wd_b(),
+            'WDFDR': input.comp_wdfdr_b()
+        }
+
+        # Calculate and return volcano data
+        return calculate_volcano_data(
+            dataset_a, bait_a, bait_b,
+            thresholds_a, thresholds_b,
+            out_dir
+        )
+
+    @reactive.Calc
+    def comp_filtered_data_a_cached():
+        """Cache filtered data for bait A."""
+        dataset_a = input.comp_dataset_a()
+        bait_a = input.comp_bait_a()
+
+        if not dataset_a or not bait_a:
+            return pd.DataFrame()
+
+        thresholds_a = {
+            'SaintScore': input.comp_saintscore_a(),
+            'BFDR': input.comp_bfdr_a(),
+            'WD': input.comp_wd_a(),
+            'WDFDR': input.comp_wdfdr_a()
+        }
+
+        return load_and_filter_bait_data(dataset_a, bait_a, thresholds_a, out_dir)
+
+    @reactive.Calc
+    def comp_filtered_data_b_cached():
+        """Cache filtered data for bait B."""
+        dataset_b = input.comp_dataset_b()
+        bait_b = input.comp_bait_b()
+
+        if not dataset_b or not bait_b:
+            return pd.DataFrame()
+
+        thresholds_b = {
+            'SaintScore': input.comp_saintscore_b(),
+            'BFDR': input.comp_bfdr_b(),
+            'WD': input.comp_wd_b(),
+            'WDFDR': input.comp_wdfdr_b()
+        }
+
+        return load_and_filter_bait_data(dataset_b, bait_b, thresholds_b, out_dir)
+
+    @reactive.effect
+    @reactive.event(input.comp_dataset_a, datasets)
+    def update_comp_bait_a():
+        """Update bait A dropdown based on selected dataset."""
+        dataset_name = input.comp_dataset_a()
+        if dataset_name:
+            try:
+                scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
+                baits = scores['Experiment.ID'].unique().tolist()
+                ui.update_select("comp_bait_a", choices=baits)
+            except FileNotFoundError:
+                ui.update_select("comp_bait_a", choices=[])
+            except Exception as e:
+                print(f"Error reading annotated_scores.csv for comp_bait_a: {e}")
+                ui.update_select("comp_bait_a", choices=[])
+        else:
+            ui.update_select("comp_bait_a", choices=[])
+
+    @reactive.effect
+    @reactive.event(input.comp_dataset_b, datasets)
+    def update_comp_bait_b():
+        """Update bait B dropdown based on selected dataset."""
+        dataset_name = input.comp_dataset_b()
+        if dataset_name:
+            try:
+                scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
+                baits = scores['Experiment.ID'].unique().tolist()
+                ui.update_select("comp_bait_b", choices=baits)
+            except FileNotFoundError:
+                ui.update_select("comp_bait_b", choices=[])
+            except Exception as e:
+                print(f"Error reading annotated_scores.csv for comp_bait_b: {e}")
+                ui.update_select("comp_bait_b", choices=[])
+        else:
+            ui.update_select("comp_bait_b", choices=[])
+
+    @render_widget
+    @reactive.event(input.compare_networks)
+    def volcano_plot():
+        """Render volcano plot comparing two baits."""
+        with ui.Progress(min=0, max=100) as progress:
+            progress.set(message="Comparing networks...", detail="Initializing", value=0)
+
+            # Get selections
+            dataset_a = input.comp_dataset_a()
+            dataset_b = input.comp_dataset_b()
+            bait_a = input.comp_bait_a()
+            bait_b = input.comp_bait_b()
+
+            # Validate inputs
+            if not all([dataset_a, dataset_b, bait_a, bait_b]):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="Please select datasets and baits for comparison",
+                    xref="paper", yref="paper",
+                    x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=16)
+                )
+                fig.update_layout(
+                    xaxis=dict(visible=False),
+                    yaxis=dict(visible=False),
+                    height=500
+                )
+                return fig
+
+            # Check if datasets match
+            if dataset_a != dataset_b:
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="Volcano plot only available when comparing baits from the same dataset.<br>Please select the same dataset for both networks.",
+                    xref="paper", yref="paper",
+                    x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=14, color="orange")
+                )
+                fig.update_layout(
+                    xaxis=dict(visible=False),
+                    yaxis=dict(visible=False),
+                    height=500
+                )
+                return fig
+
+            progress.set(message="Comparing networks...", detail="Loading cached data", value=33)
+
+            # Get cached volcano data
+            volcano_data = comp_volcano_data_cached()
+
+            progress.set(message="Comparing networks...", detail="Generating visualization", value=66)
+
+            # Create plot
+            fig = create_volcano_plot(volcano_data, bait_a, bait_b)
+
+            progress.set(value=100)
+            return fig
+
+    @render_widget
+    @reactive.event(input.compare_networks)
+    def venn_diagram():
+        """Render Venn diagram showing network overlap."""
+        # Get selections
+        dataset_a = input.comp_dataset_a()
+        dataset_b = input.comp_dataset_b()
+        bait_a = input.comp_bait_a()
+        bait_b = input.comp_bait_b()
+
+        # Validate inputs
+        if not all([dataset_a, dataset_b, bait_a, bait_b]):
+            fig = go.Figure()
+            fig.add_annotation(
+                text="Select datasets and baits to view overlap",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=16)
+            )
+            fig.update_layout(
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                height=400
+            )
+            return fig
+
+        # Get cached filtered data
+        data_a = comp_filtered_data_a_cached()
+        data_b = comp_filtered_data_b_cached()
+
+        # Get sets of Prey.IDs
+        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
+        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
+
+        # Create Venn diagram
+        fig = create_venn_diagram(set_a, set_b, bait_a, bait_b)
+
+        return fig
+
+    @render.text
+    @reactive.event(input.compare_networks)
+    def genes_a_only():
+        """Render list of genes only in network A."""
+        # Get selections
+        dataset_a = input.comp_dataset_a()
+        dataset_b = input.comp_dataset_b()
+        bait_a = input.comp_bait_a()
+        bait_b = input.comp_bait_b()
+
+        if not all([dataset_a, dataset_b, bait_a, bait_b]):
+            return "Select datasets and baits to view gene lists"
+
+        # Get cached filtered data
+        data_a = comp_filtered_data_a_cached()
+        data_b = comp_filtered_data_b_cached()
+
+        # Get sets
+        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
+        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
+        only_a = set_a - set_b
+
+        if len(only_a) == 0:
+            return "No unique genes in Network A"
+
+        # Get gene names
+        genes_only_a = data_a[data_a['Prey.ID'].isin(only_a)]['First_Prey_Gene'].unique()
+        genes_sorted = sorted(genes_only_a)
+
+        return f"Network A only ({len(genes_sorted)} genes):\n\n" + "\n".join(genes_sorted)
+
+    @render.text
+    @reactive.event(input.compare_networks)
+    def genes_b_only():
+        """Render list of genes only in network B."""
+        # Get selections
+        dataset_a = input.comp_dataset_a()
+        dataset_b = input.comp_dataset_b()
+        bait_a = input.comp_bait_a()
+        bait_b = input.comp_bait_b()
+
+        if not all([dataset_a, dataset_b, bait_a, bait_b]):
+            return "Select datasets and baits to view gene lists"
+
+        # Get cached filtered data
+        data_a = comp_filtered_data_a_cached()
+        data_b = comp_filtered_data_b_cached()
+
+        # Get sets
+        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
+        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
+        only_b = set_b - set_a
+
+        if len(only_b) == 0:
+            return "No unique genes in Network B"
+
+        # Get gene names
+        genes_only_b = data_b[data_b['Prey.ID'].isin(only_b)]['First_Prey_Gene'].unique()
+        genes_sorted = sorted(genes_only_b)
+
+        return f"Network B only ({len(genes_sorted)} genes):\n\n" + "\n".join(genes_sorted)
+
+    @render.text
+    @reactive.event(input.compare_networks)
+    def genes_both():
+        """Render list of genes in both networks."""
+        # Get selections
+        dataset_a = input.comp_dataset_a()
+        dataset_b = input.comp_dataset_b()
+        bait_a = input.comp_bait_a()
+        bait_b = input.comp_bait_b()
+
+        if not all([dataset_a, dataset_b, bait_a, bait_b]):
+            return "Select datasets and baits to view gene lists"
+
+        # Get cached filtered data
+        data_a = comp_filtered_data_a_cached()
+        data_b = comp_filtered_data_b_cached()
+
+        # Get sets
+        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
+        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
+        both = set_a & set_b
+
+        if len(both) == 0:
+            return "No shared genes between networks"
+
+        # Get gene names (use data_a arbitrarily since they're in both)
+        genes_both = data_a[data_a['Prey.ID'].isin(both)]['First_Prey_Gene'].unique()
+        genes_sorted = sorted(genes_both)
+
+        return f"Both networks ({len(genes_sorted)} genes):\n\n" + "\n".join(genes_sorted)
 
     @reactive.Effect
     def update_selectize_custom_columns():
