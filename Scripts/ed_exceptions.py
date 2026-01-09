@@ -228,9 +228,10 @@ class EDPGMismatchError(ProxiMateError):
 
         user_message = "Experiment names don't match between files:\n" + "\n".join(details)
         suggestions = [
-            "Experiment Names in ED file must exactly match column names in proteinGroups",
-            "Check for typos, extra spaces, or different capitalization",
-            "For MaxQuant: column names typically look like 'Intensity [ExperimentName]'",
-            "Ensure both files are from the same analysis"
+            "All Experiment Names in ED must have matching columns in the data file",
+            "Extra experiments in the data file are OK (they will be ignored)",
+            "Check for typos, extra spaces, or different capitalization in ED file",
+            "For MaxQuant: column names look like 'Intensity [ExperimentName]'",
+            "For DIA-NN: column names are raw file names"
         ]
         super().__init__(message, user_message, suggestions)

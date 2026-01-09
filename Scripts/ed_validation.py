@@ -213,8 +213,16 @@ class EDPGCrossValidator:
         ed_only = sorted(list(ed_experiments - pg_experiments))
         pg_only = sorted(list(pg_experiments - ed_experiments))
 
-        if ed_only or pg_only:
-            raise EDPGMismatchError(ed_only, pg_only)
+        # Warn about extra experiments in data file (not an error)
+        if pg_only:
+            pg_examples = ", ".join(pg_only[:5])
+            if len(pg_only) > 5:
+                pg_examples += f" (and {len(pg_only) - 5} more)"
+            print(f"WARNING: {len(pg_only)} experiment(s) in proteinGroups will be ignored (not in ED): {pg_examples}")
+
+        # Error only if ED experiments are missing from data file
+        if ed_only:
+            raise EDPGMismatchError(ed_only, [])
 
     @staticmethod
     def validate_diann_match(ed_df, diann_df):
@@ -235,8 +243,16 @@ class EDPGCrossValidator:
         ed_only = sorted(list(ed_experiments - diann_experiments))
         diann_only = sorted(list(diann_experiments - ed_experiments))
 
-        if ed_only or diann_only:
-            raise EDPGMismatchError(ed_only, diann_only)
+        # Warn about extra experiments in data file (not an error)
+        if diann_only:
+            diann_examples = ", ".join(diann_only[:5])
+            if len(diann_only) > 5:
+                diann_examples += f" (and {len(diann_only) - 5} more)"
+            print(f"WARNING: {len(diann_only)} experiment(s) in DIA-NN will be ignored (not in ED): {diann_examples}")
+
+        # Error only if ED experiments are missing from data file
+        if ed_only:
+            raise EDPGMismatchError(ed_only, [])
 
 
 def validate_maxquant_inputs(ed_file, pg_file, quant_type):
