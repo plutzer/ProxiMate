@@ -10,6 +10,7 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import ttest_ind
 import os
+from QC_plots import apply_score_thresholds
 
 
 def parse_intensity_string(intensity_str):
@@ -82,14 +83,8 @@ def load_and_filter_bait_data(dataset_name, bait_name, thresholds, out_dir="/Out
     if len(bait_data) == 0:
         return pd.DataFrame()
 
-    # Apply thresholds (AND logic)
-    # Handle NaN values in WDFDR (when n_iterations=0)
-    filtered = bait_data[
-        (bait_data['SaintScore'] >= thresholds['SaintScore']) &
-        (bait_data['BFDR'] <= thresholds['BFDR']) &
-        (bait_data['WD'] >= thresholds['WD']) &
-        (bait_data['WDFDR'].fillna(1.0) <= thresholds['WDFDR'])  # Treat NaN as 1.0 (not passing)
-    ]
+    # Apply thresholds (AND logic) using centralized function
+    filtered = apply_score_thresholds(bait_data, thresholds)
 
     return filtered
 
@@ -468,5 +463,136 @@ def create_venn_diagram(set_a, set_b, label_a, label_b):
         showlegend=False,
         margin=dict(l=20, r=20, t=20, b=20)
     )
+
+    return fig
+
+
+def create_venn_diagram_matplotlib(set_a, set_b, label_a, label_b):
+    """
+    Create a simple matplotlib-based Venn diagram.
+
+    Parameters:
+    -----------
+    set_a : set
+        Set of Prey.IDs passing thresholds for bait A
+    set_b : set
+        Set of Prey.IDs passing thresholds for bait B
+    label_a : str
+        Label for set A (bait name)
+    label_b : str
+        Label for set B (bait name)
+
+    Returns:
+    --------
+    matplotlib.figure.Figure
+        Venn diagram visualization
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Circle
+
+    # Calculate set sizes
+    only_a = len(set_a - set_b)
+    only_b = len(set_b - set_a)
+    both = len(set_a & set_b)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Draw circles
+    circle_a = Circle((0.35, 0.5), 0.3, fill=True, facecolor='#ff7f0e33',
+                       edgecolor='#ff7f0e', linewidth=2.5, label=label_a)
+    circle_b = Circle((0.65, 0.5), 0.3, fill=True, facecolor='#2ca02c33',
+                       edgecolor='#2ca02c', linewidth=2.5, label=label_b)
+
+    ax.add_patch(circle_a)
+    ax.add_patch(circle_b)
+
+    # Add count labels
+    ax.text(0.22, 0.5, str(only_a), ha='center', va='center', fontsize=20, fontweight='bold')
+    ax.text(0.5, 0.5, str(both), ha='center', va='center', fontsize=20, fontweight='bold')
+    ax.text(0.78, 0.5, str(only_b), ha='center', va='center', fontsize=20, fontweight='bold')
+
+    # Add bait labels
+    ax.text(0.22, 0.9, label_a, ha='center', va='center', fontsize=14, fontweight='bold', color='#ff7f0e')
+    ax.text(0.78, 0.9, label_b, ha='center', va='center', fontsize=14, fontweight='bold', color='#2ca02c')
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    plt.tight_layout()
+    return fig
+
+
+def create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b):
+    """
+    Create a matplotlib volcano plot for export.
+
+    Parameters:
+    -----------
+    volcano_data : pd.DataFrame
+        Output from calculate_volcano_data()
+    bait_a : str
+        Name of bait A
+    bait_b : str
+        Name of bait B
+
+    Returns:
+    --------
+    matplotlib.figure.Figure
+        Volcano plot
+    """
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    if len(volcano_data) == 0:
+        ax.text(0.5, 0.5, "No common prey proteins between selected baits",
+                ha='center', va='center', fontsize=14, color='#666',
+                transform=ax.transAxes)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis('off')
+        return fig
+
+    # Define colors for categories
+    category_colors = {
+        'Both': '#9467bd',       # Purple
+        'Network A only': '#ff7f0e',  # Orange
+        'Network B only': '#2ca02c',  # Green
+        'Neither': '#d3d3d3'     # Light gray
+    }
+
+    # Plot each category in order (Neither first so it's in background)
+    for category in ['Neither', 'Network B only', 'Network A only', 'Both']:
+        cat_data = volcano_data[volcano_data['category'] == category]
+
+        if len(cat_data) == 0:
+            continue
+
+        zorder = ['Neither', 'Network B only', 'Network A only', 'Both'].index(category) + 1
+
+        ax.scatter(cat_data['log2_fc_ratio'], cat_data['neg_log10_pval'],
+                   c=category_colors[category], s=50, alpha=0.7,
+                   edgecolors='white', linewidth=0.5,
+                   label=category, zorder=zorder)
+
+    # Add reference lines
+    ax.axvline(x=0, color='gray', linestyle='--', linewidth=1, zorder=0)
+    ax.axhline(y=-np.log10(0.05), color='red', linestyle=':', linewidth=2, zorder=0)
+
+    # Add p=0.05 annotation
+    ax.annotate('p = 0.05', xy=(ax.get_xlim()[1], -np.log10(0.05)),
+                xytext=(5, 0), textcoords='offset points',
+                fontsize=10, color='red', va='center')
+
+    ax.set_xlabel(f"log2(Mean Intensity {bait_a} / Mean Intensity {bait_b})", fontsize=12)
+    ax.set_ylabel("-log10(p-value)", fontsize=12)
+    ax.set_title(f"Network Comparison: {bait_a} vs {bait_b}", fontsize=14, fontweight='bold')
+
+    ax.legend(title="Category", loc='upper right', fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
 
     return fig

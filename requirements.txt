@@ -9,6 +9,7 @@ scipy
 statsmodels
 shiny
 plotly==5.24
+kaleido
 scikit-learn
 ipywidgets
 shinywidgets
