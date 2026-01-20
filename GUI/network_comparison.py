@@ -176,12 +176,26 @@ def calculate_volcano_data(dataset_name, bait_a, bait_b, thresholds_a, threshold
         mean_b_test = np.mean(intensities_b_test) if len(intensities_b_test) > 0 else 0
 
         # Calculate direct fold change (A/B)
+        # Handle presence/absence cases separately with inf values for adaptive edge positioning
         if mean_a_test > 0 and mean_b_test > 0:
             fc_ratio = mean_a_test / mean_b_test
             log2_ratio = np.log2(fc_ratio)
+            is_presence_absence = False
+        elif mean_a_test > 0 and mean_b_test == 0:
+            # Present in A, absent in B -> positive infinity (will be placed at right edge)
+            fc_ratio = np.inf
+            log2_ratio = np.inf
+            is_presence_absence = True
+        elif mean_a_test == 0 and mean_b_test > 0:
+            # Absent in A, present in B -> negative infinity (will be placed at left edge)
+            fc_ratio = -np.inf
+            log2_ratio = -np.inf
+            is_presence_absence = True
         else:
+            # Both zero - shouldn't happen for common_preys but handle gracefully
             fc_ratio = 0
             log2_ratio = 0.0
+            is_presence_absence = False
 
         # Perform t-test comparing test intensities from A vs B
         if len(intensities_a_test) >= 2 and len(intensities_b_test) >= 2:
@@ -250,7 +264,8 @@ def calculate_volcano_data(dataset_name, bait_a, bait_b, thresholds_a, threshold
             'mean_intensity_a': mean_a_test,
             'mean_intensity_b': mean_b_test,
             'fc_ratio': fc_ratio,
-            'pval': pval
+            'pval': pval,
+            'is_presence_absence': is_presence_absence
         })
 
     return pd.DataFrame(results)
@@ -291,6 +306,21 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
 
     fig = go.Figure()
 
+    # Calculate adaptive edge positions for presence/absence preys
+    finite_fc = volcano_data[np.isfinite(volcano_data['log2_fc_ratio'])]['log2_fc_ratio']
+    if len(finite_fc) > 0:
+        fc_min, fc_max = finite_fc.min(), finite_fc.max()
+        fc_range = fc_max - fc_min if fc_max != fc_min else 1.0
+        offset = max(0.5, fc_range * 0.1)  # At least 0.5, or 10% of range
+    else:
+        fc_min, fc_max, offset = -1, 1, 0.5
+
+    # Create display column with adaptive edge positions
+    volcano_data = volcano_data.copy()
+    volcano_data['display_fc'] = volcano_data['log2_fc_ratio'].copy()
+    volcano_data.loc[volcano_data['log2_fc_ratio'] == np.inf, 'display_fc'] = fc_max + offset
+    volcano_data.loc[volcano_data['log2_fc_ratio'] == -np.inf, 'display_fc'] = fc_min - offset
+
     # Define colors for categories
     category_colors = {
         'Both': '#9467bd',  # Purple
@@ -301,39 +331,81 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
 
     # Plot each category separately for legend control
     # Plot in reverse order so important categories are on top
+    # Split each category into quantitative and presence/absence
     for category in ['Neither', 'Network B only', 'Network A only', 'Both']:
         cat_data = volcano_data[volcano_data['category'] == category]
 
         if len(cat_data) == 0:
             continue
 
-        # Create hover text
-        hover_text = []
-        for _, row in cat_data.iterrows():
-            text = (
-                f"<b>{row['First_Prey_Gene']}</b><br>"
-                f"log2(FC ratio A/B): {row['log2_fc_ratio']:.2f}<br>"
-                f"FC ratio (A/B): {row['fc_ratio']:.2f}<br>"
-                f"Mean intensity {bait_a}: {row['mean_intensity_a']:.2e}<br>"
-                f"Mean intensity {bait_b}: {row['mean_intensity_b']:.2e}<br>"
-                f"-log10(p-value): {row['neg_log10_pval']:.2f}<br>"
-                f"p-value: {row['pval']:.2e}"
-            )
-            hover_text.append(text)
+        # Split into quantitative and presence/absence
+        quant_data = cat_data[~cat_data['is_presence_absence']]
+        pa_data = cat_data[cat_data['is_presence_absence']]
 
-        fig.add_trace(go.Scatter(
-            x=cat_data['log2_fc_ratio'],
-            y=cat_data['neg_log10_pval'],
-            mode='markers',
-            marker=dict(
-                size=8,
-                color=category_colors[category],
-                line=dict(width=0.5, color='white')
-            ),
-            text=hover_text,
-            hovertemplate='%{text}<extra></extra>',
-            name=category
-        ))
+        # Plot quantitative data (circles)
+        if len(quant_data) > 0:
+            hover_text = []
+            for _, row in quant_data.iterrows():
+                text = (
+                    f"<b>{row['First_Prey_Gene']}</b><br>"
+                    f"log2(FC ratio A/B): {row['log2_fc_ratio']:.2f}<br>"
+                    f"FC ratio (A/B): {row['fc_ratio']:.2f}<br>"
+                    f"Mean intensity {bait_a}: {row['mean_intensity_a']:.2e}<br>"
+                    f"Mean intensity {bait_b}: {row['mean_intensity_b']:.2e}<br>"
+                    f"-log10(p-value): {row['neg_log10_pval']:.2f}<br>"
+                    f"p-value: {row['pval']:.2e}"
+                )
+                hover_text.append(text)
+
+            fig.add_trace(go.Scatter(
+                x=quant_data['display_fc'],
+                y=quant_data['neg_log10_pval'],
+                mode='markers',
+                marker=dict(
+                    size=8,
+                    color=category_colors[category],
+                    symbol='circle',
+                    line=dict(width=0.5, color='white')
+                ),
+                text=hover_text,
+                hovertemplate='%{text}<extra></extra>',
+                name=category
+            ))
+
+        # Plot presence/absence data (diamonds)
+        if len(pa_data) > 0:
+            hover_text = []
+            for _, row in pa_data.iterrows():
+                # Determine presence/absence description
+                if row['mean_intensity_a'] > 0:
+                    pa_desc = f"Present in {bait_a} only"
+                else:
+                    pa_desc = f"Present in {bait_b} only"
+                text = (
+                    f"<b>{row['First_Prey_Gene']}</b><br>"
+                    f"<i>{pa_desc}</i><br>"
+                    f"Mean intensity {bait_a}: {row['mean_intensity_a']:.2e}<br>"
+                    f"Mean intensity {bait_b}: {row['mean_intensity_b']:.2e}<br>"
+                    f"-log10(p-value): {row['neg_log10_pval']:.2f}<br>"
+                    f"p-value: {row['pval']:.2e}"
+                )
+                hover_text.append(text)
+
+            fig.add_trace(go.Scatter(
+                x=pa_data['display_fc'],
+                y=pa_data['neg_log10_pval'],
+                mode='markers',
+                marker=dict(
+                    size=9,
+                    color=category_colors[category],
+                    symbol='diamond',
+                    line=dict(width=0.5, color='white')
+                ),
+                text=hover_text,
+                hovertemplate='%{text}<extra></extra>',
+                name=f"{category} (presence/absence)",
+                legendgroup=category
+            ))
 
     # Add reference lines
     # Vertical line at x=0 (no change)
@@ -555,6 +627,21 @@ def create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b):
         ax.axis('off')
         return fig
 
+    # Calculate adaptive edge positions for presence/absence preys
+    finite_fc = volcano_data[np.isfinite(volcano_data['log2_fc_ratio'])]['log2_fc_ratio']
+    if len(finite_fc) > 0:
+        fc_min, fc_max = finite_fc.min(), finite_fc.max()
+        fc_range = fc_max - fc_min if fc_max != fc_min else 1.0
+        offset = max(0.5, fc_range * 0.1)  # At least 0.5, or 10% of range
+    else:
+        fc_min, fc_max, offset = -1, 1, 0.5
+
+    # Create display column with adaptive edge positions
+    volcano_data = volcano_data.copy()
+    volcano_data['display_fc'] = volcano_data['log2_fc_ratio'].copy()
+    volcano_data.loc[volcano_data['log2_fc_ratio'] == np.inf, 'display_fc'] = fc_max + offset
+    volcano_data.loc[volcano_data['log2_fc_ratio'] == -np.inf, 'display_fc'] = fc_min - offset
+
     # Define colors for categories
     category_colors = {
         'Both': '#9467bd',       # Purple
@@ -562,6 +649,9 @@ def create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b):
         'Network B only': '#2ca02c',  # Green
         'Neither': '#d3d3d3'     # Light gray
     }
+
+    # Track if we've added legend entries for presence/absence
+    pa_legend_added = False
 
     # Plot each category in order (Neither first so it's in background)
     for category in ['Neither', 'Network B only', 'Network A only', 'Both']:
@@ -572,10 +662,24 @@ def create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b):
 
         zorder = ['Neither', 'Network B only', 'Network A only', 'Both'].index(category) + 1
 
-        ax.scatter(cat_data['log2_fc_ratio'], cat_data['neg_log10_pval'],
-                   c=category_colors[category], s=50, alpha=0.7,
-                   edgecolors='white', linewidth=0.5,
-                   label=category, zorder=zorder)
+        # Split into quantitative and presence/absence
+        quant_data = cat_data[~cat_data['is_presence_absence']]
+        pa_data = cat_data[cat_data['is_presence_absence']]
+
+        # Plot quantitative data (circles)
+        if len(quant_data) > 0:
+            ax.scatter(quant_data['display_fc'], quant_data['neg_log10_pval'],
+                       c=category_colors[category], s=50, alpha=0.7,
+                       edgecolors='white', linewidth=0.5, marker='o',
+                       label=category, zorder=zorder)
+
+        # Plot presence/absence data (diamonds)
+        if len(pa_data) > 0:
+            label = f"{category} (presence/absence)" if not pa_legend_added else None
+            ax.scatter(pa_data['display_fc'], pa_data['neg_log10_pval'],
+                       c=category_colors[category], s=60, alpha=0.7,
+                       edgecolors='white', linewidth=0.5, marker='D',
+                       label=f"{category} (P/A)", zorder=zorder + 0.5)
 
     # Add reference lines
     ax.axvline(x=0, color='gray', linestyle='--', linewidth=1, zorder=0)

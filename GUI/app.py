@@ -197,7 +197,27 @@ app_ui = ui.page_navbar(
                     ui.card(
                         ui.card_header("Parameters for Feature Analysis"),
                         ui.input_select("feature_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
-                        ui.input_slider("saint_threshold", "Saint Threshold", min=0.0, max=1.0, value=0.9),
+                        ui.div(
+                            ui.div(
+                                ui.input_slider("feature_saintscore", "SAINT Score (>=)",
+                                              min=0.0, max=1.0, value=0.9, step=0.01),
+                                ui.input_slider("feature_bfdr", "BFDR (<=)",
+                                              min=0.0, max=1.0, value=0.05, step=0.01),
+                                ui.input_slider("feature_wd", "WD Score (>=)",
+                                              min=0.0, max=10.0, value=0.0, step=0.1),
+                                ui.input_slider("feature_wdfdr", "WDFDR (<=)",
+                                              min=0.0, max=1.0, value=0.05, step=0.01),
+                                style="flex: 2; min-width: 200px;"
+                            ),
+                            ui.div(
+                                ui.p("Presets:", style="margin-bottom: 10px; font-weight: 500;"),
+                                ui.input_action_button("feature_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary", style="width: 100%; margin-bottom: 8px;"),
+                                ui.input_action_button("feature_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary", style="width: 100%; margin-bottom: 8px;"),
+                                ui.input_action_button("feature_preset_relaxed", "Relaxed", class_="btn-sm btn-outline-secondary", style="width: 100%;"),
+                                style="flex: 1; min-width: 120px; padding-left: 20px;"
+                            ),
+                            style="display: flex; flex-direction: row; gap: 20px; align-items: flex-start;"
+                        ),
                         ui.input_action_button("feature_analysis", "Run Feature Analysis"),
                     ),
                     ui.card(
@@ -223,6 +243,7 @@ app_ui = ui.page_navbar(
                         ),
                         ui.download_button("download_enrichment", "Download Filtered Enrichment Results"),
                     ),
+                    col_widths=(4, 8)
                 ),
     ),
     ui.nav_panel("Network Comparison",
@@ -1159,6 +1180,31 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_slider("dl_threshold_wd", value=0.0)
         ui.update_slider("dl_threshold_wdfdr", value=1.0)
 
+    # Threshold presets for Feature Enrichment tab
+    @reactive.effect
+    @reactive.event(input.feature_preset_stringent)
+    def apply_feature_stringent_preset():
+        ui.update_slider("feature_saintscore", value=0.9)
+        ui.update_slider("feature_bfdr", value=0.01)
+        ui.update_slider("feature_wd", value=2.0)
+        ui.update_slider("feature_wdfdr", value=0.01)
+
+    @reactive.effect
+    @reactive.event(input.feature_preset_moderate)
+    def apply_feature_moderate_preset():
+        ui.update_slider("feature_saintscore", value=0.7)
+        ui.update_slider("feature_bfdr", value=0.05)
+        ui.update_slider("feature_wd", value=1.0)
+        ui.update_slider("feature_wdfdr", value=0.05)
+
+    @reactive.effect
+    @reactive.event(input.feature_preset_relaxed)
+    def apply_feature_relaxed_preset():
+        ui.update_slider("feature_saintscore", value=0.5)
+        ui.update_slider("feature_bfdr", value=0.1)
+        ui.update_slider("feature_wd", value=0.0)
+        ui.update_slider("feature_wdfdr", value=0.1)
+
     # Plot export download handlers (using matplotlib for PNG export)
     @render.download(filename="pca_plot.png")
     def download_pca_plot():
@@ -1305,7 +1351,15 @@ def server(input: Inputs, output: Outputs, session: Session):
             progress.set(message="Running protein feature analysis", value=5)
             print("Running feature analysis")
             print(input.feature_dataset.get())
-            print(input.saint_threshold.get())
+
+            # Build thresholds dictionary
+            thresholds = {
+                'SaintScore': input.feature_saintscore.get(),
+                'BFDR': input.feature_bfdr.get(),
+                'WD': input.feature_wd.get(),
+                'WDFDR': input.feature_wdfdr.get()
+            }
+            print(f"Thresholds: {thresholds}")
 
             # Get the selected dataset
             progress.set(message="Running protein feature analysis", detail="Loading dataset...", value=20)
@@ -1315,7 +1369,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             result = process_refactored(
                 dataset,
                 columns_for_analysis = ['GO_CC', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains'],
-                threshold = input.saint_threshold.get()
+                thresholds = thresholds
             )
 
             progress.set(message="Running protein feature analysis", detail="Generating plots...", value=80)

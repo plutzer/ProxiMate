@@ -7,6 +7,8 @@ from statsmodels.stats.multitest import multipletests
 import argparse
 from collections import Counter
 import matplotlib.ticker as ticker
+import re
+from QC_plots import apply_score_thresholds
 
 # import dash_bio
 
@@ -50,8 +52,15 @@ def split_and_clean(annotations):
         split_anns = annotations.split(';')
         # Remove any leading or trailing whitespace from each annotation
         split_anns = [x.strip() for x in split_anns]
-        # Remove any numbers that are at the end of the string
-        split_anns = [x.rstrip('0123456789') for x in split_anns]
+
+        # Remove instance numbers intelligently using regex:
+        # - " 1", " 2", etc. (space + digits at end)
+        # - "_1", "_2", etc. (underscore + digits at end)
+        # - " (1)", " (2)", etc. (parenthesized digits at end)
+        # This preserves legitimate names like "WD40", "S100", "14-3-3"
+        instance_pattern = r'(\s+\d+|\s*\(\d+\)|_\d+)$'
+        split_anns = [re.sub(instance_pattern, '', x) for x in split_anns]
+
         # Remove trailing whitespace again
         split_anns = [x.strip() for x in split_anns]
         # Remove any empty strings
@@ -62,7 +71,7 @@ def split_and_clean(annotations):
     else:
         return set()
 
-def process_refactored(data, columns_for_analysis, threshold):
+def process_refactored(data, columns_for_analysis, thresholds):
     # Get the unique experiments from the data
     experiments = list(data['Experiment.ID'].unique())
 
@@ -87,7 +96,7 @@ def process_refactored(data, columns_for_analysis, threshold):
         for experiment in experiments:
             print('Analyzing experiment:', experiment, 'for feature type:', column)
             foreground = data[data['Experiment.ID'] == experiment]
-            foreground = foreground[foreground['SaintScore'] >= threshold]
+            foreground = apply_score_thresholds(foreground, thresholds)
             foreground_ids = set(foreground['Prey.ID'].unique())
 
             result = enrich_foreground(foreground_ids, all_proteins, feature_map)
@@ -193,8 +202,17 @@ def main():
     # Load the dataset
     data = pd.read_csv(input_file, sep=",")
 
+    # Convert single threshold to thresholds dict for backward compatibility
+    # Only filter on SaintScore when using CLI, allow all other thresholds to pass
+    thresholds = {
+        'SaintScore': threshold,
+        'BFDR': 1.0,    # No filtering (allow all)
+        'WD': 0.0,      # No filtering (allow all)
+        'WDFDR': 1.0    # No filtering (allow all)
+    }
+
     # feature_df, results = process_data(data, columns_for_analysis, threshold)
-    results = process_refactored(data, columns_for_analysis, threshold)
+    results = process_refactored(data, columns_for_analysis, thresholds)
 
     # test = plot_results(results, 'Domains', num_features=30)
     for feature in columns_for_analysis:
