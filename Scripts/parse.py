@@ -39,11 +39,6 @@ def parse_ed_pg(proteinGroups, experimentalDesign, quantType, outputPath):
     :param outputPath: path for the output directory
     """
 
-    print("Parsing Experimental Design file: " + experimentalDesign)
-
-    # Print the quantification type
-    print("Quantification type: " + quantType)
-
     # VALIDATE INPUTS FIRST
     try:
         ed_df, pg_df = validate_maxquant_inputs(experimentalDesign, proteinGroups, quantType)
@@ -82,8 +77,6 @@ def parse_from_saint(bait_df, preyfile, interactionfile, outputPath):
     # bait = pd.read_csv(baitfile, sep="\t", header=None, names=["Experiment Name", "Bait", "Type", ])
     prey = pd.read_csv(preyfile, sep="\t", header=None, names=["Prey", "Prey.Name"])
     interaction = pd.read_csv(interactionfile, sep="\t", header=None, names=["Experiment.ID", "Bait", "Prey", "Spectral.Count"])
-    print('Parsing SAINT files...')
-
     # Recreate the experimental design file
     new_ed = bait_df.copy()[["Experiment Name", "Type", "Bait", "Bait ID"]]
     # Add replicate numbers
@@ -115,8 +108,6 @@ def convert_diann_to_maxquant_format(diann_file, experimental_design):
     :param experimental_design: ExperimentalDesign object
     :return: DataFrame in MaxQuant-like format
     """
-    print("Converting DIA-NN format to MaxQuant-compatible format...")
-
     # Read DIA-NN file
     diann_data = pd.read_csv(diann_file, sep="\t")
 
@@ -150,8 +141,6 @@ def convert_diann_to_maxquant_format(diann_file, experimental_design):
             # Add with "Intensity " prefix to match MaxQuant format
             mq_data[f"Intensity {col}"] = diann_data[col].fillna(0)
 
-    print(f"Converted {len(mq_data)} protein groups from DIA-NN format")
-
     return mq_data
 
 def parse_diann(diannMatrix, experimentalDesign, quantType, outputPath):
@@ -164,11 +153,6 @@ def parse_diann(diannMatrix, experimentalDesign, quantType, outputPath):
     :param outputPath: path for the output directory
     :return: tuple of (num_experiments, num_controls)
     """
-    print("Parsing DIA-NN data...")
-    print("Experimental Design file: " + experimentalDesign)
-    print("DIA-NN Matrix file: " + diannMatrix)
-    print("Quantification type: " + quantType)
-
     # VALIDATE INPUTS FIRST
     try:
         ed_df, diann_df = validate_diann_inputs(experimentalDesign, diannMatrix)
@@ -286,9 +270,4 @@ def main():
         print("Error: No input file provided. Please specify either --proteinGroups or --diannMatrix.")
 
 if __name__ == "__main__":
-    # basedir = "C:/Users/isaac/Work/Ilah_testdata/SAINT"
-    # # For testing parse from saint
-    # bait_df = pd.read_csv(basedir + "/bait.txt", sep="\t", header=None, names=["Experiment Name", "Bait", "Type", "Bait ID"])
-    # parse_from_saint(bait_df, basedir + "/prey.txt", basedir + "/interaction.txt", basedir)
-
     main()

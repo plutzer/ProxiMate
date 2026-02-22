@@ -4,7 +4,6 @@ from scipy.optimize import minimize
 import time
 from scipy.stats import lognorm
 import os
-import cProfile
 import math
 
 
@@ -80,8 +79,6 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
 
         # First need an upper-bound estimate for Tlim based on the distribution of intensities
         upper_Tlim = np.log10(np.percentile(interaction.replace(0,np.nan).dropna().groupby('Prey').agg({'Intensity': 'min'})['Intensity'],95))
-        print("Upper_Tlim: " + str(upper_Tlim))
-
         preys = prey_data['PreyID'].tolist()
 
         mu_list = []
@@ -117,7 +114,6 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
 
             # If prey intensity is all zeros, skip the optimization
             if len(prey_intensities.replace(0,np.nan).dropna()) == 0:
-                print("All zeros: " + prey)
                 mu_list.append(Tlim)
                 sigma_list.append(np.nan)
                 tlim_list.append(Tlim)
@@ -145,16 +141,12 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
             bounds = ((mu_lower_bound,mu_upper_bound),(sigma_lower_bound,sigma_lower_bound*2 + 2*obs_sigma))
             # Check to see if the initial parameters are within the bounds
             if a < bounds[0][0]:
-                print("starting mu too low: " + prey, a, bounds[0][0])
                 a = bounds[0][0]
             if a > bounds[0][1]:
-                print("starting mu too high: " + prey, a, bounds[0][1])
                 a = bounds[0][1]
             if b < bounds[1][0]:
-                print("starting sigma too low: " + prey, b, bounds[1][0])
                 b = bounds[1][0]
             if b > bounds[1][1]:
-                print("starting sigma too high: " + prey, b, bounds[1][1])
                 b = bounds[1][1]
 
             # Optimize the parameters
@@ -164,7 +156,6 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
             optimized_sigma = res.x[1]
 
             if np.isnan(optimized_mu):
-                print("NaN mu: " + prey)
                 optimized_mu = full_mu
 
             # # Make optimized mu the min of Tlim and the optimized mu
@@ -176,10 +167,6 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
             tlim_list.append(Tlim)
             iterations.append(res.nit)
             original_b.append(b)
-
-            # Print an update every 100 preys
-            if len(mu_list) % 100 == 0:
-                print(len(mu_list))
 
             # Change the intensity values for the current prey to the imputed values for the selected control bait
             if impute:
@@ -208,10 +195,6 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
                 imputed[i] = False
 
 
-        # Stop the timer
-        end = time.time()
-        print(end - start)
-
         # Write a csv output file using the prey names and the optimized parameters
         output = pd.DataFrame({'Prey': preys[:len(mu_list)], 'mu': mu_list, 'sigma': sigma_list, 'originalSigma':original_b, 'Tlim': tlim_list, 'iterations': iterations, 'imputed': imputed}) #Edited for debugging
         if impute:
@@ -224,25 +207,6 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
         prey_data.to_csv(output_dir + 'imputed_prey.txt', sep='\t', index=False, header=False)
     interaction.to_csv(output_dir + 'filtered_interaction.txt', sep='\t', index=False, header=False)
 
-def main(): # For testing purposes
-    prey_path = 'C:/Users/isaac/Work/20241024_ScoringFixing/Impute_bounds_testing/prey.txt'
-    interaction_path = 'C:/Users/isaac/Work/20241024_ScoringFixing/Impute_bounds_testing/interaction.txt'
-    output_dir = 'C:/Users/isaac/Work/20241024_ScoringFixing/Impute_bounds_testing/test_output_boundfix/'
-    ed_path = 'C:/Users/isaac/Work/20241024_ScoringFixing/Impute_bounds_testing/ED.csv'
-
-    profiler = cProfile.Profile()
-
-    # Check to see if the output directory exists, if not create it
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    profiler.enable()
-    filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=True)
-    profiler.disable()
-
-    profiler.dump_stats('C:/Users/isaac/Work/20241024_ScoringFixing/Impute_bounds_testing/profile.prof')
-
-
-# Add the if name main statement
 if __name__ == '__main__':
-    main()
+    # This module is intended to be called from score.py via filter_impute()
+    pass

@@ -2,7 +2,6 @@ from functools import partial
 from shiny import App, Inputs, Outputs, Session, reactive, render, ui, run_app
 import plotly.graph_objects as go
 import plotly.express as px
-# from shiny import render_plotly
 from shinywidgets import output_widget, render_widget, render_plotly
 import pandas as pd
 import os
@@ -15,14 +14,17 @@ import zipfile
 import tempfile
 import datetime
 import shutil
-from QC_plots import pca_plot, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
+from QC_plots import pca_plot, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics, apply_score_thresholds
 from Ann_Enrichment import process_refactored, plot_results
 from network_comparison import (
     load_and_filter_bait_data,
     calculate_volcano_data,
     create_volcano_plot,
-    create_venn_diagram
+    create_venn_diagram,
+    create_venn_diagram_matplotlib,
+    create_volcano_plot_matplotlib
 )
+from plot_exports import pca_plot_matplotlib, saint_scatter_matplotlib
 import py4cytoscape as p4c
 
 
@@ -122,12 +124,14 @@ app_ui = ui.page_navbar(
     ui.nav_panel("Data Thresholding",
                     # Top row: Dataset selector only
                     ui.input_select("qc_dataset", "Select Dataset", choices=[]),
+                    ui.output_ui("empty_state_thresholding"),
 
                     # Row 1: PCA and Threshold controls (50% width each)
                     ui.layout_columns(
                         ui.card(
                             ui.card_header("Raw Data PCA"),
                             output_widget("raw_pca_plot"),
+                            ui.download_button("download_pca_plot", "Export PNG", class_="btn-sm"),
                         ),
                         ui.card(
                             ui.card_header("Threshold Settings"),
@@ -140,8 +144,16 @@ app_ui = ui.page_navbar(
                                           min=0.0, max=10.0, value=0.0, step=0.1),
                             ui.input_slider("threshold_wdfdr", "WDFDR Threshold",
                                           min=0.0, max=1.0, value=0.05, step=0.01),
+                            ui.p("Presets:", style="margin-top: 15px; margin-bottom: 5px; font-weight: 500;"),
+                            ui.layout_columns(
+                                ui.input_action_button("qc_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
+                                ui.input_action_button("qc_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
+                                ui.input_action_button("qc_preset_relaxed", "Relaxed", class_="btn-sm btn-outline-secondary"),
+                                col_widths=(4, 4, 4)
+                            ),
                             ui.p("Note: Thresholds are shown as reference lines on plots. Data is not filtered.",
                                  style="font-style: italic; color: #666; margin-top: 10px;"),
+                            ui.output_ui("wdfdr_warning"),
                         ),
                         col_widths=(6, 6),
                     ),
@@ -151,6 +163,7 @@ app_ui = ui.page_navbar(
                         ui.card(
                             ui.card_header("SAINT Score vs Fold Change"),
                             output_widget("saint_scatter_plot"),
+                            ui.download_button("download_scatter_plot", "Export PNG", class_="btn-sm"),
                         ),
                         ui.div(
                             ui.output_ui("metric_bait_label"),
@@ -178,6 +191,7 @@ app_ui = ui.page_navbar(
                     ),
     ),
     ui.nav_panel("Protein Feature Analysis",
+                ui.output_ui("empty_state_feature_analysis"),
                 ui.layout_columns(
                     ui.card(
                         ui.card_header("Parameters for Feature Analysis"),
@@ -189,12 +203,29 @@ app_ui = ui.page_navbar(
                         ui.card_header("Feature Enrichment Analysis"),
                         ui.input_select("feature_type", "Select Feature Type", choices=["GO_CC", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
                         ui.input_numeric("num_features", "Number of Features to Display", value=30, min=1, max=100),
-                        # Spot for a seaborn heatmap
                         ui.output_plot("feature_enrichment_plot"),
+                        ui.download_button("download_heatmap", "Export Heatmap PNG", class_="btn-sm"),
+                        ui.hr(),
+                        ui.h5("Download Enrichment Results"),
+                        ui.layout_columns(
+                            ui.input_select("download_feature_type", "Feature Type",
+                                          choices=["All", "GO_CC", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
+                            ui.input_select("download_bait_filter", "Bait", choices=["All"]),
+                            col_widths=(6, 6)
+                        ),
+                        ui.layout_columns(
+                            ui.input_slider("download_pvalue_threshold", "Max Adjusted p-value",
+                                          min=0.0, max=1.0, value=0.05, step=0.01),
+                            ui.input_slider("download_enrichment_threshold", "Min Enrichment",
+                                          min=0.0, max=10.0, value=2.0, step=0.1),
+                            col_widths=(6, 6)
+                        ),
+                        ui.download_button("download_enrichment", "Download Filtered Enrichment Results"),
                     ),
                 ),
     ),
     ui.nav_panel("Network Comparison",
+        ui.output_ui("empty_state_network_comparison"),
         # Top section: Bait selectors for A and B
         ui.layout_columns(
             # Bait A selector card
@@ -238,6 +269,7 @@ app_ui = ui.page_navbar(
         ui.card(
             ui.card_header("Differential Abundance Volcano Plot"),
             output_widget("volcano_plot"),
+            ui.download_button("download_volcano_plot", "Export PNG", class_="btn-sm"),
             ui.p("Volcano plot only shown when baits are from the same dataset.",
                  style="font-style: italic; color: #666; margin-top: 10px;"),
         ),
@@ -246,7 +278,8 @@ app_ui = ui.page_navbar(
         ui.layout_columns(
             ui.card(
                 ui.card_header("Network Overlap"),
-                output_widget("venn_diagram"),
+                ui.output_plot("venn_diagram"),
+                ui.download_button("download_venn_diagram", "Export PNG", class_="btn-sm"),
             ),
             ui.card(
                 ui.card_header("Gene Lists"),
@@ -288,6 +321,30 @@ app_ui = ui.page_navbar(
     ),
     ui.nav_panel("Downloads",
                     ui.input_select("download_dataset", "Select Dataset", choices=[]),
+                    ui.output_ui("empty_state_downloads"),
+                    ui.card(
+                        ui.card_header("Filter Data Before Download"),
+                        ui.layout_columns(
+                            ui.input_slider("dl_threshold_saintscore", "SAINT Score (≥)",
+                                          min=0.0, max=1.0, value=0.0, step=0.01),
+                            ui.input_slider("dl_threshold_bfdr", "BFDR (≤)",
+                                          min=0.0, max=1.0, value=1.0, step=0.01),
+                            ui.input_slider("dl_threshold_wd", "WD Score (≥)",
+                                          min=0.0, max=10.0, value=0.0, step=0.1),
+                            ui.input_slider("dl_threshold_wdfdr", "WDFDR (≤)",
+                                          min=0.0, max=1.0, value=1.0, step=0.01),
+                            col_widths=(3, 3, 3, 3)
+                        ),
+                        ui.layout_columns(
+                            ui.input_action_button("dl_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
+                            ui.input_action_button("dl_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
+                            ui.input_action_button("dl_preset_relaxed", "Relaxed", class_="btn-sm btn-outline-secondary"),
+                            ui.input_action_button("dl_preset_none", "No Filter", class_="btn-sm btn-outline-secondary"),
+                            col_widths=(3, 3, 3, 3)
+                        ),
+                        ui.p("Set all thresholds to their default values (0.0/1.0) to download unfiltered data.",
+                             style="font-style: italic; color: #666;"),
+                    ),
                     ui.layout_columns(
                         ui.card(
                             ui.card_header("Create a Custom Dataset"),
@@ -296,19 +353,45 @@ app_ui = ui.page_navbar(
                         ),
                         ui.card(
                             ui.card_header("Custom Dataset"),
-                            # Render the custom dataset table here
-                            ui.output_data_frame("custom_table"), # This dataset should not be editable
+                            ui.output_text("download_row_count"),
+                            ui.output_data_frame("custom_table"),
                             ui.download_button("download_custom_dataset", "Download Custom Dataset"),
                         ),
                         col_widths=(4,8)
                     ),
                     ui.card(
-                        ui.card_header("Download Internal Datasets"),
-                        "Premade datasets used internally by ProxiMate.",
+                        ui.card_header("Batch Export"),
+                        ui.p("Download all results for a dataset as a ZIP file. Includes merged.csv, annotated_scores.csv, Feature_enrichment.csv (if available), and SAINT input files."),
+                        ui.download_button("download_batch", "Download All Results (ZIP)"),
                     )
     ),
     sidebar=ui.sidebar(
-        "Sidebar content"
+        ui.h4("ProxiMate Beta"),
+        ui.hr(),
+        ui.p(
+            "Welcome! This is a ",
+            ui.strong("pre-release beta version"),
+            " of ProxiMate.",
+        ),
+        ui.p(
+            "Features may change, and you may encounter bugs. "
+            "Your feedback is invaluable in helping us improve the tool."
+        ),
+        ui.hr(),
+        ui.p(ui.strong("Get in touch:"), style="margin-bottom: 5px;"),
+        ui.tags.ul(
+            ui.tags.li(
+                ui.a("Report a bug", href="https://github.com/plutzer/ProxiMate/issues", target="_blank"),
+            ),
+            ui.tags.li(
+                ui.a("GitHub Repository", href="https://github.com/plutzer/ProxiMate", target="_blank"),
+            ),
+        ),
+        ui.hr(),
+        ui.p(
+            "Thank you for testing ProxiMate!",
+            style="font-style: italic; color: #666;"
+        ),
     ),
     title="ProxiMate",
 )
@@ -351,8 +434,6 @@ def format_error_notification(error):
 
 
 def server(input: Inputs, output: Outputs, session: Session):
-    print("Server started")
-
     datasets = reactive.Value(pd.DataFrame(
         columns=['Dataset Name', 'Input Type', 'Quant Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']
     ))
@@ -378,15 +459,11 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.data_frame
     def ed_table_mq():
         # Return the ED table for MaxQuant input
-        print("Rendering MaxQuant ED table")
-        print(ed_dataframe.get())
         return render.DataGrid(ed_dataframe.get(), editable=True)
 
     @render.data_frame
     def ed_table_diann():
         # Return the ED table for DIA-NN input
-        print("Rendering DIA-NN ED table")
-        print(ed_dataframe.get())
         return render.DataGrid(ed_dataframe.get(), editable=True)
 
     @reactive.effect
@@ -395,7 +472,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Check to see if the bait file has been uploaded
         if input.bait.get():
             # Read the bait file and set it to the saint_baits reactive value
-            print("Bait file uploaded:", input.bait.get()[0]['name'])
             # Read the bait file into a DataFrame
 
             # Catch bad input files here
@@ -404,7 +480,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             saint_baits.set(pd.read_csv(input.bait.get()[0]['datapath'], sep="\t", header=None, index_col=None, names=["Experiment Name", "Bait", "Type"]))
             # Add a new column for Bait ID
             saint_baits.get()['Bait ID'] = 'None'  # Default value for Bait ID
-            print("Bait table updated with", len(saint_baits.get()), "rows.")
 
     @reactive.effect
     @reactive.event(input.ed_file)
@@ -412,17 +487,14 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Check to see if the ED file has been uploaded
         if input.ed_file.get():
             # Read the ED file and set it to the ed_dataframe reactive value
-            print("ED file uploaded:", input.ed_file.get()[0]['name'])
             try:
                 # Read the ED file into a DataFrame
                 ed_df = pd.read_csv(input.ed_file.get()[0]['datapath'])
-                print("ED file read with", len(ed_df), "rows.")
 
                 # Validate required columns
                 required_cols = ["Experiment Name", "Type", "Bait", "Replicate"]
                 missing_cols = [col for col in required_cols if col not in ed_df.columns]
                 if missing_cols:
-                    print("ED file is missing required columns:", missing_cols)
                     ui.notification_show(
                         f"ED file is missing required columns: {', '.join(missing_cols)}",
                         type="error"
@@ -443,19 +515,16 @@ def server(input: Inputs, output: Outputs, session: Session):
                     return
 
                 ed_dataframe.set(ed_df)
-                print("ED table updated with", len(ed_dataframe.get()), "rows.")
             except Exception as e:
                 ui.notification_show(
                     f"Error reading ED file: {str(e)}",
                     type="error"
                 )
-                print(f"Error reading ED file: {e}")
 
     @reactive.effect
     @reactive.event(input.input_format)
     def clear_tables_on_format_change():
         # Clear tables when format changes to avoid showing stale data
-        print(f"Input format changed to: {input.input_format.get()}")
         if input.input_format.get() in ["MaxQuant", "DIA-NN"]:
             # Clear SAINT bait table
             saint_baits.set(pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"]))
@@ -470,7 +539,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         dataset_name = input.dataset_name.get()
         check_result = parse.validate_name(dataset_name, datasets.get()['Dataset Name'].tolist())
         if check_result != 0:
-            print(check_result)
             ui.notification_show(
                     f"Parser: {check_result}",
                     type="error",
@@ -485,7 +553,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             with ui.Progress(min=0, max=1) as progress:
                 if input_format == "MaxQuant":
                     progress.set(message="Parsing MaxQuant inputs", value=0.25)
-                    print("Parsing MaxQuant and Experimental Design files")
 
                     # Check if files are uploaded
                     if not input.pg_file.get() or not input.ed_file.get():
@@ -495,10 +562,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                         )
                         return "Error: Missing files"
 
-                    print(input.pg_file.get()[0]['name'])
-                    print(input.ed_file.get()[0]['name'])
                     progress.set(0.45)
-                    print("Current directory:", os.getcwd())
 
                     n_exp, n_ctrl = parse.parse_ed_pg(
                         input.pg_file.get()[0]['datapath'],
@@ -510,7 +574,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                     # Overwrite ED.csv with edited table data
                     ed_df = ed_table_mq.data_view()
                     ed_df.to_csv(f"{output_path}/ED.csv", index=False)
-                    print("Overwrote ED.csv with edited table data.")
 
                     progress.set(0.85)
 
@@ -525,7 +588,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                 elif input_format == "DIA-NN":
                     progress.set(message="Parsing DIA-NN inputs", value=0.25)
-                    print("Parsing DIA-NN and Experimental Design files")
 
                     # Check if files are uploaded
                     if not input.diann_matrix_file.get() or not input.ed_file.get():
@@ -535,10 +597,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                         )
                         return "Error: Missing files"
 
-                    print(input.diann_matrix_file.get()[0]['name'])
-                    print(input.ed_file.get()[0]['name'])
                     progress.set(0.45)
-                    print("Current directory:", os.getcwd())
 
                     n_exp, n_ctrl = parse.parse_diann(
                         input.diann_matrix_file.get()[0]['datapath'],
@@ -550,7 +609,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                     # Overwrite ED.csv with edited table data
                     ed_df = ed_table_diann.data_view()
                     ed_df.to_csv(f"{output_path}/ED.csv", index=False)
-                    print("Overwrote ED.csv with edited table data.")
 
                     progress.set(0.85)
 
@@ -565,7 +623,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                 elif input_format == "SAINT":
                     progress.set(message="Parsing SAINT inputs", value=0.25)
-                    print("Parsing SAINT files")
 
                     # Check if files are uploaded
                     if not input.bait.get() or not input.prey.get() or not input.interaction.get():
@@ -575,9 +632,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                         )
                         return "Error: Missing files"
 
-                    print(input.bait.get()[0]['datapath'])
-                    print(input.prey.get()[0]['datapath'])
-                    print(input.interaction.get()[0]['datapath'])
                     progress.set(0.45)
 
                     # Create the output directory if it doesn't exist
@@ -603,8 +657,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                     updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
                     datasets.set(updated_datasets)
-                    print("Parsed SAINT inputs. Updated datasets.")
-                    print("Edited bait table:", bait_table.data_view())
                     progress.set(1.0)
 
             # Success notification
@@ -616,7 +668,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         except ProxiMateError as e:
             # Handle our custom exceptions with user-friendly messages
-            print(f"Validation error: {e.message}")
             error_msg = format_error_notification(e)
             ui.notification_show(
                 error_msg,
@@ -626,7 +677,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             return f"Error: {e.user_message}"
 
         except FileNotFoundError as e:
-            print(f"File not found: {e}")
             ui.notification_show(
                 f"File not found: {str(e)}",
                 type="error",
@@ -635,7 +685,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             return "Error: File not found"
 
         except PermissionError as e:
-            print(f"Permission error: {e}")
             ui.notification_show(
                 f"Permission denied accessing file: {str(e)}",
                 type="error",
@@ -644,7 +693,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             return "Error: Permission denied"
 
         except pd.errors.ParserError as e:
-            print(f"File parsing error: {e}")
             ui.notification_show(
                 f"Error parsing file: {str(e)}\n\nEnsure files are in correct format.",
                 type="error",
@@ -654,7 +702,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         except Exception as e:
             # Catch-all for unexpected errors
-            print(f"Unexpected error during parsing: {type(e).__name__}: {e}")
             import traceback
             traceback.print_exc()
             ui.notification_show(
@@ -670,7 +717,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     def do_clear_datasets():
         datasets.set(pd.DataFrame(columns=['Dataset Name', 'Input Type', 'Quant Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']))
-        print("Datasets table cleared.")
         # Clear the output folder
         for root, dirs, files in os.walk(out_dir):
             for file in files:
@@ -679,7 +725,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             for dir in dirs:
                 abs_dir = os.path.join(root, dir)
                 shutil.rmtree(abs_dir)
-        print("Output folder cleared.")
 
     @reactive.effect
     @reactive.event(input.clear_datasets)
@@ -719,7 +764,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             # Extract the zip file to the destination
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 zip_ref.extractall(session_dest)
-            print("Session uploaded and extracted to:", session_dest)
 
             # Load the datasets.csv file into the datasets reactive value
             datasets.set(pd.read_csv(os.path.join(session_dest, "datasets.csv")))
@@ -731,10 +775,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     def score_data():
         with ui.Progress(min=0, max=100) as progress:
             progress.set(message="Scoring data", detail="Gathering inputs...", value=0)
-            print("Scoring data")
-            print(input.score_dataset.get())
-            print(input.imputation_method.get())
-            print(input.wdfdr_iterations.get())
 
             # Get the quant type from the datasets dataframe
             quant_type = datasets.get().loc[datasets.get()['Dataset Name'] == input.score_dataset.get(), 'Quant Type'].values[0]
@@ -757,10 +797,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                 "--quantType",
                 quant_type,
             ], capture_output=True, text=True)
-            print("Scoring result:", result.stdout)
-            if result.stderr:
-                print("Error:", result.stderr)
-            print("Scoring completed.")
 
             progress.set(message="Scoring data", detail="Adding protein annotation...", value=65)
 
@@ -773,10 +809,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                 "--outputDir",
                 out_dir + '/' + input.score_dataset.get(),
             ], capture_output=True, text=True)
-            print("Annotation result:", ann_result.stdout)
-            if ann_result.stderr:
-                print("Error:", ann_result.stderr)
-            print("Annotation completed.")
 
             progress.set(message="Scoring data", detail="Updating datasets...", value=90)
 
@@ -789,9 +821,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Scored'] = 'Yes'
             curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Imputation'] = imp_mapping[int(input.imputation_method.get())]
             curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'WDFDR iterations'] = input.wdfdr_iterations.get()
-            print(curr_dataset)
             datasets.set(curr_dataset)
-            print("Dataset updated.")
             progress.set(message="Scoring data", detail="Done!", value=100)
 
     # Quality controls tab
@@ -829,10 +859,8 @@ def server(input: Inputs, output: Outputs, session: Session):
         ctrls = None
         if input.qc_bait.get() != "All":
             ctrls = [input.qc_bait.get()]
-            print(ctrls)
-        
+
         if not os.path.exists(results_path):
-            print(f"File not found for dataset {dataset_name}. Resetting bait selection.")
             ctrls = None
             return None
         else:
@@ -857,8 +885,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         ctrls = None
         if input.qc_bait.get() != "All":
             ctrls = [input.qc_bait.get()]
-            print(ctrls)
-        
 
         fig = roc_plot(results_path, known_type=input.roc_known_type.get(), ctrl_experiments=ctrls) # Add selected ctrls
 
@@ -979,6 +1005,224 @@ def server(input: Inputs, output: Outputs, session: Session):
             theme="info"
         )
 
+    # Empty state messaging for tabs
+    @render.ui
+    def empty_state_thresholding():
+        if not scored_datasets():
+            return ui.div(
+                ui.h4("No Scored Datasets Available"),
+                ui.p("Upload and score a dataset in the Network Scoring tab to view quality metrics and threshold controls."),
+                style="text-align: center; padding: 40px; color: #666; background-color: #f8f9fa; border-radius: 8px; margin-bottom: 20px;"
+            )
+        return None
+
+    @render.ui
+    def empty_state_feature_analysis():
+        if not scored_datasets():
+            return ui.div(
+                ui.h4("No Scored Datasets Available"),
+                ui.p("Upload and score a dataset in the Network Scoring tab, then run feature analysis to view protein feature enrichment."),
+                style="text-align: center; padding: 40px; color: #666; background-color: #f8f9fa; border-radius: 8px; margin-bottom: 20px;"
+            )
+        return None
+
+    @render.ui
+    def empty_state_network_comparison():
+        if not scored_datasets():
+            return ui.div(
+                ui.h4("No Scored Datasets Available"),
+                ui.p("Upload and score a dataset in the Network Scoring tab to compare protein interaction networks between baits."),
+                style="text-align: center; padding: 40px; color: #666; background-color: #f8f9fa; border-radius: 8px; margin-bottom: 20px;"
+            )
+        return None
+
+    @render.ui
+    def empty_state_downloads():
+        if not scored_datasets():
+            return ui.div(
+                ui.h4("No Scored Datasets Available"),
+                ui.p("Upload and score a dataset in the Network Scoring tab to download filtered results."),
+                style="text-align: center; padding: 40px; color: #666; background-color: #f8f9fa; border-radius: 8px; margin-bottom: 20px;"
+            )
+        return None
+
+    # WDFDR warning when dataset scored with 0 iterations
+    @render.ui
+    def wdfdr_warning():
+        dataset = input.qc_dataset.get()
+        if not dataset:
+            return None
+        results_path = os.path.join(out_dir, dataset, "annotated_scores.csv")
+        if not os.path.exists(results_path):
+            return None
+        try:
+            df = pd.read_csv(results_path)
+            if 'WDFDR' in df.columns and df['WDFDR'].isna().any():
+                return ui.div(
+                    ui.span("⚠ ", style="color: orange;"),
+                    "WDFDR values are missing (dataset scored with 0 iterations). WDFDR threshold will not filter data.",
+                    style="color: orange; font-size: 0.9em; margin-top: 5px;"
+                )
+        except Exception:
+            pass
+        return None
+
+    # Threshold presets for Data Thresholding tab
+    # Preset values: Stringent (0.9, 0.01, 2.0, 0.01), Moderate (0.7, 0.05, 1.0, 0.05), Relaxed (0.5, 0.1, 0.0, 0.1)
+    @reactive.effect
+    @reactive.event(input.qc_preset_stringent)
+    def apply_qc_stringent_preset():
+        ui.update_slider("threshold_saintscore", value=0.9)
+        ui.update_slider("threshold_bfdr", value=0.01)
+        ui.update_slider("threshold_wd", value=2.0)
+        ui.update_slider("threshold_wdfdr", value=0.01)
+
+    @reactive.effect
+    @reactive.event(input.qc_preset_moderate)
+    def apply_qc_moderate_preset():
+        ui.update_slider("threshold_saintscore", value=0.7)
+        ui.update_slider("threshold_bfdr", value=0.05)
+        ui.update_slider("threshold_wd", value=1.0)
+        ui.update_slider("threshold_wdfdr", value=0.05)
+
+    @reactive.effect
+    @reactive.event(input.qc_preset_relaxed)
+    def apply_qc_relaxed_preset():
+        ui.update_slider("threshold_saintscore", value=0.5)
+        ui.update_slider("threshold_bfdr", value=0.1)
+        ui.update_slider("threshold_wd", value=0.0)
+        ui.update_slider("threshold_wdfdr", value=0.1)
+
+    # Threshold presets for Downloads tab
+    @reactive.effect
+    @reactive.event(input.dl_preset_stringent)
+    def apply_dl_stringent_preset():
+        ui.update_slider("dl_threshold_saintscore", value=0.9)
+        ui.update_slider("dl_threshold_bfdr", value=0.01)
+        ui.update_slider("dl_threshold_wd", value=2.0)
+        ui.update_slider("dl_threshold_wdfdr", value=0.01)
+
+    @reactive.effect
+    @reactive.event(input.dl_preset_moderate)
+    def apply_dl_moderate_preset():
+        ui.update_slider("dl_threshold_saintscore", value=0.7)
+        ui.update_slider("dl_threshold_bfdr", value=0.05)
+        ui.update_slider("dl_threshold_wd", value=1.0)
+        ui.update_slider("dl_threshold_wdfdr", value=0.05)
+
+    @reactive.effect
+    @reactive.event(input.dl_preset_relaxed)
+    def apply_dl_relaxed_preset():
+        ui.update_slider("dl_threshold_saintscore", value=0.5)
+        ui.update_slider("dl_threshold_bfdr", value=0.1)
+        ui.update_slider("dl_threshold_wd", value=0.0)
+        ui.update_slider("dl_threshold_wdfdr", value=0.1)
+
+    @reactive.effect
+    @reactive.event(input.dl_preset_none)
+    def apply_dl_no_filter_preset():
+        ui.update_slider("dl_threshold_saintscore", value=0.0)
+        ui.update_slider("dl_threshold_bfdr", value=1.0)
+        ui.update_slider("dl_threshold_wd", value=0.0)
+        ui.update_slider("dl_threshold_wdfdr", value=1.0)
+
+    # Plot export download handlers (using matplotlib for PNG export)
+    @render.download(filename="pca_plot.png")
+    def download_pca_plot():
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            ui.notification_show("No dataset selected.", type="error")
+            return None
+        interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
+        ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
+        if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
+            ui.notification_show("Required files not found.", type="error")
+            return None
+        fig = pca_plot_matplotlib(interaction_path, ed_path)
+        filepath = os.path.join(out_dir, "pca_plot.png")
+        fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+        return filepath
+
+    @render.download(filename="scatter_plot.png")
+    def download_scatter_plot():
+        dataset_name = input.qc_dataset.get()
+        bait_selection = input.qc_bait.get()
+        if not dataset_name or bait_selection == "All":
+            ui.notification_show("Select a specific bait to export the scatter plot.", type="error")
+            return None
+        results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+        saintscore_threshold = input.threshold_saintscore.get()
+        fig = saint_scatter_matplotlib(results_path, bait_selection, saintscore_threshold)
+        filepath = os.path.join(out_dir, "scatter_plot.png")
+        fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+        return filepath
+
+    @render.download(filename="heatmap.png")
+    def download_heatmap():
+        dataset = input.feature_dataset.get()
+        if not dataset:
+            ui.notification_show("No dataset selected.", type="error")
+            return None
+        feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
+        if not os.path.exists(feature_file):
+            ui.notification_show("Run feature analysis first.", type="error")
+            return None
+        feature_data = pd.read_csv(feature_file)
+        feature_type = input.feature_type.get() or 'GO_CC'
+        num_features = input.num_features.get() or 30
+        try:
+            fig = plot_results(feature_data, feature_type, num_features)
+            filepath = os.path.join(out_dir, "heatmap.png")
+            fig.savefig(filepath, dpi=150, bbox_inches='tight')
+            return filepath
+        except ValueError:
+            ui.notification_show("Insufficient data to generate heatmap.", type="error")
+            return None
+
+    @render.download(filename="volcano_plot.png")
+    def download_volcano_plot():
+        dataset_a = input.comp_dataset_a.get()
+        dataset_b = input.comp_dataset_b.get()
+        bait_a = input.comp_bait_a.get()
+        bait_b = input.comp_bait_b.get()
+        if not all([dataset_a, dataset_b, bait_a, bait_b]):
+            ui.notification_show("Select datasets and baits first.", type="error")
+            return None
+        if dataset_a != dataset_b:
+            ui.notification_show("Volcano plot requires baits from the same dataset.", type="error")
+            return None
+        # Use cached volcano data
+        volcano_data = comp_volcano_data_cached()
+        if volcano_data.empty:
+            ui.notification_show("No data available for volcano plot.", type="error")
+            return None
+        # Use matplotlib version for export
+        fig = create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b)
+        filepath = os.path.join(out_dir, "volcano_plot.png")
+        fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+        return filepath
+
+    @render.download(filename="venn_diagram.png")
+    def download_venn_diagram():
+        bait_a = input.comp_bait_a.get()
+        bait_b = input.comp_bait_b.get()
+        if not all([bait_a, bait_b]):
+            ui.notification_show("Select baits first.", type="error")
+            return None
+        # Use cached filtered data to create sets
+        data_a = comp_filtered_data_a_cached()
+        data_b = comp_filtered_data_b_cached()
+        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
+        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
+        if len(set_a) == 0 and len(set_b) == 0:
+            ui.notification_show("No data available for Venn diagram.", type="error")
+            return None
+        # Use matplotlib version for clean export
+        fig = create_venn_diagram_matplotlib(set_a, set_b, bait_a, bait_b)
+        filepath = os.path.join(out_dir, "venn_diagram.png")
+        fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+        return filepath
+
     @render_widget
     def saint_scatter_plot():
         # Get the selected dataset
@@ -1026,9 +1270,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     def feature_analysis():
         with ui.Progress(min=0, max=100) as progress:
             progress.set(message="Running protein feature analysis", value=5)
-            print("Running feature analysis")
-            print(input.feature_dataset.get())
-            print(input.saint_threshold.get())
 
             # Get the selected dataset
             progress.set(message="Running protein feature analysis", detail="Loading dataset...", value=20)
@@ -1050,7 +1291,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             result.to_csv(os.path.join(out_dir, input.feature_dataset.get(), "Feature_enrichment.csv"), index=False)
             
             progress.set(message="Running protein feature analysis", detail="Done!", value=100)
-            print("Done running feature analysis. Results saved.")
 
     @render.plot
     def feature_enrichment_plot():
@@ -1090,8 +1330,76 @@ def server(input: Inputs, output: Outputs, session: Session):
                     ha='center', va='center', fontsize=14, wrap=True)
             ax.axis('off')
             return fig
-    
 
+    @reactive.effect
+    @reactive.event(input.feature_dataset, feature_enrichment)
+    def update_download_bait_filter():
+        """Update the bait dropdown for enrichment download based on available data."""
+        dataset = input.feature_dataset.get()
+        if not dataset:
+            ui.update_select("download_bait_filter", choices=["All"])
+            return
+
+        feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
+        if not os.path.exists(feature_file):
+            ui.update_select("download_bait_filter", choices=["All"])
+            return
+
+        try:
+            feature_data = pd.read_csv(feature_file)
+            baits = feature_data['Bait'].unique().tolist()
+            baits.insert(0, "All")
+            ui.update_select("download_bait_filter", choices=baits)
+        except Exception as e:
+            ui.update_select("download_bait_filter", choices=["All"])
+
+    @render.download()
+    def download_enrichment():
+        """Download filtered enrichment results."""
+        dataset = input.feature_dataset.get()
+        if not dataset:
+            ui.notification_show("No dataset selected.", type="error")
+            return None
+
+        feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
+        if not os.path.exists(feature_file):
+            ui.notification_show("No enrichment results available. Please run feature analysis first.", type="error")
+            return None
+
+        # Load enrichment data
+        feature_data = pd.read_csv(feature_file)
+
+        # Apply filters
+        filtered_data = feature_data.copy()
+
+        # Filter by feature type
+        feature_type_filter = input.download_feature_type.get()
+        if feature_type_filter != "All":
+            filtered_data = filtered_data[filtered_data['Feature_type'] == feature_type_filter]
+
+        # Filter by bait
+        bait_filter = input.download_bait_filter.get()
+        if bait_filter != "All":
+            filtered_data = filtered_data[filtered_data['Bait'] == bait_filter]
+
+        # Filter by adjusted p-value
+        pvalue_threshold = input.download_pvalue_threshold.get()
+        filtered_data = filtered_data[filtered_data['adj_p'] <= pvalue_threshold]
+
+        # Filter by enrichment
+        enrichment_threshold = input.download_enrichment_threshold.get()
+        filtered_data = filtered_data[filtered_data['enrichment'] >= enrichment_threshold]
+
+        if filtered_data.empty:
+            ui.notification_show("No results match the current filters. Try adjusting the thresholds.", type="warning")
+            return None
+
+        # Save to temp file and return
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"enrichment_{dataset}_{timestamp}.csv"
+        savepath = os.path.join(out_dir, filename)
+        filtered_data.to_csv(savepath, index=False)
+        return savepath
 
     @reactive.Calc
     def available_datasets():
@@ -1124,14 +1432,11 @@ def server(input: Inputs, output: Outputs, session: Session):
             try:
                 scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
                 baits = scores['Experiment.ID'].unique().tolist()
-                print(f"Found baits: {baits}")
                 baits.insert(0, "All")  # Add "All" option
                 ui.update_select("qc_bait", choices=baits)
             except FileNotFoundError:
-                print(f"File not found for dataset {dataset_name}. Resetting bait selection.")
                 ui.update_select("qc_bait", choices=["All"])  # Reset to default if file not found
             except Exception as e:
-                print(f"Error reading annotated_scores.csv: {e}")
                 ui.update_select("qc_bait", choices=["All"])
         else:
             ui.update_select("qc_bait", choices=["All"])  # Reset to default if no dataset is selected
@@ -1222,7 +1527,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             except FileNotFoundError:
                 ui.update_select("comp_bait_a", choices=[])
             except Exception as e:
-                print(f"Error reading annotated_scores.csv for comp_bait_a: {e}")
                 ui.update_select("comp_bait_a", choices=[])
         else:
             ui.update_select("comp_bait_a", choices=[])
@@ -1240,7 +1544,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             except FileNotFoundError:
                 ui.update_select("comp_bait_b", choices=[])
             except Exception as e:
-                print(f"Error reading annotated_scores.csv for comp_bait_b: {e}")
                 ui.update_select("comp_bait_b", choices=[])
         else:
             ui.update_select("comp_bait_b", choices=[])
@@ -1303,10 +1606,12 @@ def server(input: Inputs, output: Outputs, session: Session):
             progress.set(value=100)
             return fig
 
-    @render_widget
+    @render.plot
     @reactive.event(input.compare_networks)
     def venn_diagram():
         """Render Venn diagram showing network overlap."""
+        import matplotlib.pyplot as plt
+
         # Get selections
         dataset_a = input.comp_dataset_a()
         dataset_b = input.comp_dataset_b()
@@ -1315,18 +1620,12 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         # Validate inputs
         if not all([dataset_a, dataset_b, bait_a, bait_b]):
-            fig = go.Figure()
-            fig.add_annotation(
-                text="Select datasets and baits to view overlap",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=16)
-            )
-            fig.update_layout(
-                xaxis=dict(visible=False),
-                yaxis=dict(visible=False),
-                height=400
-            )
+            fig, ax = plt.subplots(figsize=(8, 6))
+            ax.text(0.5, 0.5, "Select datasets and baits to view overlap",
+                   ha='center', va='center', fontsize=14, color='#666')
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.axis('off')
             return fig
 
         # Get cached filtered data
@@ -1337,8 +1636,8 @@ def server(input: Inputs, output: Outputs, session: Session):
         set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
         set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
 
-        # Create Venn diagram
-        fig = create_venn_diagram(set_a, set_b, bait_a, bait_b)
+        # Create Venn diagram using matplotlib version
+        fig = create_venn_diagram_matplotlib(set_a, set_b, bait_a, bait_b)
 
         return fig
 
@@ -1450,33 +1749,61 @@ def server(input: Inputs, output: Outputs, session: Session):
                 ui.update_selectize("custom_columns", choices=available_columns, selected=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"])
 
     custom_dataset = reactive.Value(pd.DataFrame())
+    custom_dataset_total = reactive.Value(0)
 
-    @render.data_frame
-    def custom_table():
+    @reactive.Calc
+    def cached_download_data():
+        """Cache the annotated_scores.csv file for the selected dataset in Downloads tab.
+        Only re-reads when the dataset selection changes, not on slider changes."""
         dataset = input.download_dataset.get()
         if not dataset:
             return pd.DataFrame()
-        
-        # Custom cols will come from a user input
-        custom_cols = list(input.custom_columns.get())
-        print(custom_cols)
-        if not custom_cols:
-            # Default columns if none are selected
-            custom_cols = ["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"]
-        
-        # Load the dataset from the output directory
         dataset_path = os.path.join(out_dir, dataset, "annotated_scores.csv")
         if not os.path.exists(dataset_path):
             return pd.DataFrame()
-        df = pd.read_csv(dataset_path)
+        return pd.read_csv(dataset_path)
 
-        print(df.columns)
+    @render.data_frame
+    def custom_table():
+        # Use cached data instead of re-reading file on every slider change
+        df = cached_download_data()
+        if df.empty:
+            custom_dataset_total.set(0)
+            return pd.DataFrame()
+
+        # Custom cols will come from a user input
+        custom_cols = list(input.custom_columns.get())
+        if not custom_cols:
+            # Default columns if none are selected
+            custom_cols = ["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"]
+
+        # Store total row count before filtering
+        custom_dataset_total.set(len(df))
+
+        # Apply threshold filtering using centralized function
+        thresholds = {
+            'SaintScore': input.dl_threshold_saintscore(),
+            'BFDR': input.dl_threshold_bfdr(),
+            'WD': input.dl_threshold_wd(),
+            'WDFDR': input.dl_threshold_wdfdr()
+        }
+        df = apply_score_thresholds(df, thresholds)
 
         custom_df = df[custom_cols]
         custom_dataset.set(custom_df)
 
         return custom_dataset.get()
-        return custom_dataset.get()
+
+    @render.text
+    def download_row_count():
+        """Display the filtered row count."""
+        df = custom_dataset.get()
+        total = custom_dataset_total.get()
+
+        if df.empty and total == 0:
+            return ""
+
+        return f"Showing {len(df)} of {total} interactions"
     
     # Add a download button for the custom dataset
     @render.download()
@@ -1487,13 +1814,58 @@ def server(input: Inputs, output: Outputs, session: Session):
                 type="error",
             )
             return None
+        ui.notification_show("Preparing download...", type="message", duration=2)
         # Create a temporary file to save the custom dataset
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"custom_dataset_{timestamp}.csv"
         savepath = os.path.join(out_dir, filename)
-        # temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=filename, suffix=".csv")
         custom_dataset.get().to_csv(savepath, index=False)
         return savepath
+
+    @render.download()
+    def download_batch():
+        """Download all results for a dataset as a ZIP file."""
+        dataset = input.download_dataset.get()
+        if not dataset:
+            ui.notification_show("No dataset selected.", type="error")
+            return None
+
+        ui.notification_show("Preparing ZIP file...", type="message", duration=2)
+        dataset_dir = os.path.join(out_dir, dataset)
+        if not os.path.exists(dataset_dir):
+            ui.notification_show("Dataset directory not found.", type="error")
+            return None
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_filename = f"{dataset}_all_{timestamp}.zip"
+        zip_path = os.path.join(out_dir, zip_filename)
+
+        # List of files to include in the ZIP
+        files_to_include = [
+            'merged.csv',
+            'annotated_scores.csv',
+            'Feature_enrichment.csv',
+            'bait.txt',
+            'prey.txt',
+            'interaction.txt',
+            'ED.csv'
+        ]
+
+        included_files = []
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for filename in files_to_include:
+                filepath = os.path.join(dataset_dir, filename)
+                if os.path.exists(filepath):
+                    zf.write(filepath, filename)
+                    included_files.append(filename)
+
+        if not included_files:
+            ui.notification_show("No files found to include in ZIP.", type="error")
+            os.remove(zip_path)
+            return None
+
+        ui.notification_show(f"ZIP created with {len(included_files)} files.", type="message", duration=3)
+        return zip_path
 
     # Cytoscape tab
     @reactive.effect

@@ -7,6 +7,35 @@ from plotly.subplots import make_subplots
 from sklearn.metrics import roc_curve, auc
 
 
+def apply_score_thresholds(df, thresholds):
+    """
+    Filter DataFrame by scoring thresholds.
+
+    Applies combined AND logic: all conditions must pass for a row to be included.
+    Handles NaN values in WDFDR (from scoring with 0 iterations) by treating them
+    as 1.0 (failing the threshold).
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with columns: SaintScore, BFDR, WD, WDFDR
+    thresholds : dict
+        Dictionary with keys: 'SaintScore', 'BFDR', 'WD', 'WDFDR'
+        Example: {'SaintScore': 0.7, 'BFDR': 0.05, 'WD': 0.0, 'WDFDR': 0.05}
+
+    Returns:
+    --------
+    pd.DataFrame
+        Filtered DataFrame containing only rows passing all thresholds
+    """
+    return df[
+        (df['SaintScore'] >= thresholds['SaintScore']) &
+        (df['BFDR'] <= thresholds['BFDR']) &
+        (df['WD'] >= thresholds['WD']) &
+        (df['WDFDR'].fillna(1.0) <= thresholds['WDFDR'])
+    ]
+
+
 # Module-level cache for BioGRID data to avoid repeated file I/O
 _biogrid_cache = None
 _biogrid_cache_path = None
@@ -59,14 +88,11 @@ def pca_plot(interaction, experimentalDesign):
 
     # Clean up the data
 
-    print(len(data), " rows in data")
     # Convert all 0 values to NaN
     data = data.replace(0, np.nan)
 
     # Remove rows with more than 75% NaN values
     data = data.dropna(thresh=len(data.columns) * 0.5)
-
-    print(len(data), " rows in data after removing rows with more than 75% NaN values")
 
     # Replace NaN values with the minimum of the row
     data = data.apply(lambda row: row.fillna(row.min()), axis=1)    
@@ -110,9 +136,6 @@ def pca_plot(interaction, experimentalDesign):
             'PC2': f'PC2 ({explained_variance[1]*100:.2f}% variance)'
         }
     )
-    print(pca_df)
-        
-
 
     fig.update_layout(
         legend=dict(
@@ -364,12 +387,7 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None)
     known_before = results['In.BioGRID'].sum() if 'In.BioGRID' in results.columns else 0
 
     # Combined threshold (all conditions must pass using AND logic)
-    passing_all = results[
-        (results['SaintScore'] >= thresholds['SaintScore']) &
-        (results['BFDR'] <= thresholds['BFDR']) &
-        (results['WD'] >= thresholds['WD']) &
-        (results['WDFDR'] <= thresholds['WDFDR'])
-    ]
+    passing_all = apply_score_thresholds(results, thresholds)
 
     # Total interactions after filtering
     total_after = len(passing_all)
@@ -623,18 +641,5 @@ def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
     return fig
 
 
-def main():
-    # base_dir = 'C:/Users/plutzer/Work/ProxiMate_Testing/'
-
-    # For testing PCA
-    # figure = pca_plot(base_dir + "output/interaction.txt", base_dir + "output/ED.csv")
-
-    # For testing known retention
-    figure = roc_plot("C:/Users/isaac/Work/025_MainNetwork/1_MainNetwork_aggregated_scores.csv", 'Multivalidated')
-
-    figure.show()
-    print('done')
-
-
 if __name__ == "__main__":
-    main()
+    pass

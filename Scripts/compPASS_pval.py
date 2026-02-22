@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import argparse
-import cProfile
 import time
 from statsmodels.stats.multitest import multipletests
 
@@ -89,9 +88,6 @@ def calculate_wd_pvals_matrix(normalized_wd_scores, ave_psm_values, prey_means_m
     # Get a matrix of non-zero ave_psm values
 
     for i in range(iterations):
-        print(f"Permutation {i}")
-        # if i % 100 == 0:
-        #     print(f"Permutation {i}")
         permuted_ave_psm_values, permuted_prey_means_matrix, permuted_prey_sd_matrix, permuted_self_interaction, permuted_n_saw_values = permute_prey_matrices(ave_psm_values, prey_means_matrix, prey_sd_matrix, self_interaction, n_saw_values)
         permuted_normalized_wd_scores, _ = calculate_wd_matrix(permuted_ave_psm_values, permuted_prey_means_matrix, permuted_prey_sd_matrix, n_exp_with_prey, permuted_n_saw_values, n_experiments, norm_factor=0.98)
         #permuted_normalized_wd_scores, _ = calculate_wd_matrix(permuted_ave_psm_values, permuted_self_interaction, n_exp_with_prey, n_saw_values, n_experiments, ave_psm, rows, columns)
@@ -204,7 +200,6 @@ def score_compPass(input, norm_factor, iterations=None):
     ave_psm["N_Exp_With_Prey"] = n_exp_with_prey_list
 
     if iterations:
-        print(f"Iterations: {iterations}")
         # Calculate p-values for WD scores
         wd_pvals = calculate_wd_pvals_matrix(normalized_wd_scores, ave_psm_values, prey_means_matrix, prey_sd_matrix, self_interaction, n_exp_with_prey, n_saw_values, n_experiments, ave_psm, rows, columns, iterations, norm_val)
 
@@ -236,7 +231,6 @@ def main():
 
     # Get directory name for output files
     output_dir = '/'.join(args.input.split('/')[:-1])
-    # print(output_dir)
 
     # Read input file
     try:

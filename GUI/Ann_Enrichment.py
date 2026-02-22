@@ -82,10 +82,7 @@ def process_refactored(data, columns_for_analysis, threshold):
         feature_df.loc[:, 'list'] = feature_df[column].apply(split_and_clean)
         feature_map = dict(zip(feature_df['Prey.ID'], feature_df['list']))
 
-        print(len(feature_map), " features in feature map")
-
         for experiment in experiments:
-            print('Analyzing experiment:', experiment, 'for feature type:', column)
             foreground = data[data['Experiment.ID'] == experiment]
             foreground = foreground[foreground['SaintScore'] >= threshold]
             foreground_ids = set(foreground['Prey.ID'].unique())
@@ -185,8 +182,6 @@ def main():
     output_dir = args.output
     threshold = args.threshold
 
-    print("Started Script")
-
     columns_for_analysis = ['GO_CC', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains']
 
 
@@ -198,7 +193,6 @@ def main():
 
     # test = plot_results(results, 'Domains', num_features=30)
     for feature in columns_for_analysis:
-        print("Plotting results for feature type:", feature)
         heatmap = plot_results(results, feature, num_features=30)
 
         # Save the figure to a file
