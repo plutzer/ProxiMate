@@ -4,9 +4,6 @@ matplotlib
 seaborn
 scipy
 statsmodels
-argparse
-scipy
-statsmodels
 shiny
 plotly==5.24
 kaleido

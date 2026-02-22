@@ -8,14 +8,9 @@ import aft_impute_saint
 import compPASS_pval
 import time
 
-#import tab_to_JSON
-
-print("Running parse_scoreSAINT.py...")
-
 SAINT_EXPRESS_INT_DIR = "/bin/SAINTexpress-int"
 SAINT_EXPRESS_INT_DEFAULT_DIR = "/bin/SAINTexpress-int_default"
 SAINT_EXPRESS_SPC_DIR = "/bin/SAINTexpress-spc"
-FILTER_INTERACTION_PATH = "C:/Users/plutzer/Repos/scoreAPMS/filter_interaction.R"
 
 def main():
     start_time = time.time()
@@ -77,31 +72,21 @@ def main():
 
     ########################################################################################################################
     # Main
-
     ########################################################################################################################
 
     # Parse the proteinGroups.txt file
 
-    # with open('/tmp/progress.txt', 'w') as f:
-    #     f.write("1|Running score script...")
-
     # Check to see if the output directory exists. If not, create it.
     if not os.path.exists(args.outputPath):
         os.makedirs(args.outputPath)
-
-    print("Quantification type: " + args.quantType)
 
     # Run the imputation
     aft_impute_saint.filter_impute(f"{args.scoreInputs}/prey.txt", f"{args.scoreInputs}/interaction.txt", f"{args.scoreInputs}/", args.experimentalDesign, impute=bool(int(args.imputation)))
 
     ########################################################################################################################
 
-    # with open('/tmp/progress.txt', 'w') as f:
-    #     f.write("70|Running SAINT...")
-
     # Run SAINT
     print("Running SAINT...")
-    print(args.quantType)
     if args.quantType == "Spectral Counts":
         if args.imputation == "1":
             # TODO: Imputation for spectral counts
@@ -140,14 +125,10 @@ def main():
                                 "prey.txt",
                                 "bait.txt"],
                                 cwd=args.scoreInputs)
-            
-
-    # with open('/tmp/progress.txt', 'w') as f:
-    #     f.write("79|Preparing files for scoring...")
 
     ########################################################################################################################
     ########################################################################################################################
-    # Run CompPASS R script
+    # Run CompPASS
     print("Running CompPASS...")
 
     # Read input file
@@ -157,72 +138,18 @@ def main():
 
     compPass_result.to_csv(f"{args.outputPath}/compPASS.csv", index=False)
 
-    # p = subprocess.run(['Rscript',
-    #                     '/neo_comppass.R',
-    #                     args.scoreInputs,
-    #                     args.outputPath,
-    #                     str(args.n_iterations)],
-    #                     cwd="/") # Output file will be called compPASS.csv and compPASS_resampled.csv
-
-    # print("Calculating WD-FDR from Resampled CompPASS...")
-
-    # # Read in the CompPASS output
-    # compPASS = pd.read_csv(f"{args.outputPath}/compPASS.csv")
-
-    # # Read in Resampled CompPASS output
-    # comp_resampled = pd.read_csv(f"{args.outputPath}/compPASS_resampled.csv")
-
-    # wds = comp_resampled.loc[:, comp_resampled.columns.str.contains('WD_') & ~comp_resampled.columns.str.contains('test')]
-    # wd_list = pd.DataFrame(wds.apply(lambda x: x.dropna().tolist(), axis=1))
-    # wd_list['WD'] = compPASS['WD']
-    # wd_list['FDR'] = wd_list.apply(lambda x: sum(i > x['WD'] for i in x[0])/len(x[0]), axis=1)
-    # compPASS['WDFDR'] = wd_list['FDR']
-
-    # # Overwrite the original compPASS.csv file with the new one
-    # compPASS.to_csv(f"{args.outputPath}/compPASS.csv", index=False)
-
     ########################################################################################################################
     ########################################################################################################################
-    # # Run numpPASS (Under testing)
-    # import numpPASS
 
-    # print("Running numpPASS...")
-
-    # # Read in the CompPASS output
-    # try:
-    #     input = pd.read_csv(f'{args.scoreInputs}/to_CompPASS.csv', sep='\t', index_col=0).astype({'Prey': str, 'Bait': str})
-    # except:
-    #     print("Couldn't read input file with tab separator. Trying Commas.")
-    #     input = pd.read_csv(f'{args.scoreInputs}/to_CompPASS.csv', sep=',', index_col=0).astype({'Prey': str, 'Bait': str})
-
-    # result = numpPASS.score_compPass(input, 0.98, args.n_iterations)
-
-    # # Write the output to a file
-    # result.to_csv(f"{args.outputPath}/compPASS.csv", index=False)
-
-    # compPASS = result
-
-    ########################################################################################################################
-    print('MADE IT HERE!!!')
-
-    # Merge output files into a single file
-
-    # Merge CompPASS and SAINT outputs for just intensity
-    print("Merging CompPASS and SAINT outputs for intensity...")
+    # Merge CompPASS and SAINT outputs
+    print("Merging CompPASS and SAINT outputs...")
     # Read in the SAINT output
     saint = pd.read_csv(f"{args.scoreInputs}/list.txt", sep="\t")
-
-    # Print the number of rows in each dataframe
-    print("CompPASS rows: " + str(len(compPass_result.index)))
-    print("SAINT rows: " + str(len(saint.index)))
 
     # Merge the two dataframes on two columns:
     # "Bait" in SAINT corresponds to "Experiment.ID" in CompPASS
     # "Prey" in SAINT corresponds to "Prey" in CompPASS
     merged = pd.merge(saint, compPass_result, how="left", left_on=["Bait", "Prey"], right_on=["Experiment.ID", "Prey"])
-
-    # Print the number of rows in the merged dataframe
-    print("Merged rows: " + str(len(merged.index)))
 
     # Rename Columns
     merged.rename(columns={
@@ -234,10 +161,6 @@ def main():
 
     # Write the merged dataframe to a file
     merged.to_csv(f"{args.outputPath}/merged.csv", index=False)
-
-    # Stop the timer and print the elapsed time
-    elapsed_time = time.time() - start_time
-    print("Elapsed time: " + str(elapsed_time) + " seconds")
 
 if __name__ == "__main__":
     main()

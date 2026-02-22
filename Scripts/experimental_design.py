@@ -25,7 +25,6 @@ class ExperimentalDesign:
             with open(filepath, encoding='utf-8-sig') as csvfile:
                 reader = csv.reader(csvfile)
                 header = next(reader)
-                print("Header: ", header)
 
                 # check that header has the minimum columns
                 self.__check_column(header, "Experiment Name")
@@ -65,11 +64,6 @@ class ExperimentalDesign:
                 except ValueError:
                     # Handle non-numeric replicate
                     raise EDInvalidReplicateError([experiment.attributes["Experiment Name"]])
-
-        print("Num baits:", len(baits))
-        print("Num bait experiments:", num_experiments)
-        print("Max replicates per bait:", max_replicates)
-        print("Num control experiments:", num_controls)
 
         self.num_experiments = num_experiments
         self.num_controls = num_controls

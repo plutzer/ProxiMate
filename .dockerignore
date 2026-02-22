@@ -1,0 +1,11 @@
+.git/
+filtered_interaction.txt
+.vscode/
+__pycache__/
+*.pyc
+.claude/
+CLAUDE.md
+CHANGELOG.md
+CONTRIBUTING.md
+.gitignore
+.dockerignore

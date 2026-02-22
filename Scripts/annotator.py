@@ -81,7 +81,6 @@ def get_match(item, subcellular, uniprot):
         return item
 
     for cells in uniprot:
-        # print(cells)
         names = str(cells).split(' ')
         if item in names:
             for name in names:
@@ -99,22 +98,6 @@ def get_cco_score(bait_gene,prey_gene,cc_dict):
             if str(prey_gene) in cc_dict[str(bait_gene)]:
                 return cc_dict[str(bait_gene)][str(prey_gene)]
     return np.nan # return nan if the gene pair is not in the dictionary
-
-#make sure each First_Prey_Gene name is in subcellular
-#if name cannot be found, search uniprot['Gene Names'] for it
-#take list in cell that includes First_Prey_Gene name and split it
-#search subcellular for each name until one hits, and return that name
-#works, total runtime after adding is 3 minutes in docker
-def get_match(item, subcellular, uniprot):
-    if item in subcellular:
-        return item
- 
-    for cells in uniprot:
-        names = str(cells).split(' ')
-        if item in names:
-            for name in names:
-                if name in subcellular:
-                    return name
 
 def complex_id(prey_id, complex_dict):
     prey_id = prey_id.split(';')
@@ -182,7 +165,7 @@ def main():
     # SCL Annotations:
     # Take the first item from the SCL column and move to a new column
     uniprot['first_SCL'] = uniprot['Subcellular location [CC]'].apply(get_first_SCL)
-    # For any item in the first_SCL column that only occurs once, change it to NaN - this is a bit lazy but will only affect ~16 proteins with shitty annotations
+    # For any item in the first_SCL column that only occurs once, change it to NaN - this is a bit lazy but will only affect ~16 proteins with unreliable annotations
     uniprot['first_SCL'] = uniprot['first_SCL'].where(uniprot['first_SCL'].map(uniprot['first_SCL'].value_counts()) > 1, np.nan)
 
     # Creating cleaner versions of other useful annotations:
@@ -261,8 +244,6 @@ def main():
             prey_id = row[first_prey_col]
             go_anns_raw = row['Gene Ontology (cellular component)'] # Go anns are in this format: cytosolic small ribosomal subunit [GO:0022627]; nucleus [GO:0005634]; plasma membrane [GO:0005886]
             if pd.isnull(go_anns_raw):
-                # print(f"GO anns are null for {prey_id}")
-                # Skip this row
                 continue
             else:
                 go_anns_split = go_anns_raw.split('; ')
@@ -272,7 +253,6 @@ def main():
                 # Now need the GO anns for the bait - use the uniprot dataframe for this
                 if bait_id in bait_anns:
                     if bait_anns[bait_id] == []:
-                        # print(f"GO anns are empty for {bait_id}")
                         continue
                     else:
                         bait_go_ids = bait_anns[bait_id]
@@ -280,11 +260,9 @@ def main():
                     bait_go_anns = uniprot[uniprot['Entry'] == bait_id]['Gene Ontology (cellular component)'].values
                     if bait_go_anns.size == 0:
                         bait_anns[bait_id] = []
-                        # print(f"GO anns are null for {bait_id}")
                         continue
                     elif pd.isnull(bait_go_anns):
                         bait_anns[bait_id] = []
-                        # print(f"GO anns are null for {bait_id}")
                         continue
                     else:
                         bait_go_anns_split = bait_go_anns[0].split('; ')

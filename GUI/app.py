@@ -2,7 +2,6 @@ from functools import partial
 from shiny import App, Inputs, Outputs, Session, reactive, render, ui, run_app
 import plotly.graph_objects as go
 import plotly.express as px
-# from shiny import render_plotly
 from shinywidgets import output_widget, render_widget, render_plotly
 import pandas as pd
 import os
@@ -367,7 +366,32 @@ app_ui = ui.page_navbar(
                     )
     ),
     sidebar=ui.sidebar(
-        "Sidebar content"
+        ui.h4("ProxiMate Beta"),
+        ui.hr(),
+        ui.p(
+            "Welcome! This is a ",
+            ui.strong("pre-release beta version"),
+            " of ProxiMate.",
+        ),
+        ui.p(
+            "Features may change, and you may encounter bugs. "
+            "Your feedback is invaluable in helping us improve the tool."
+        ),
+        ui.hr(),
+        ui.p(ui.strong("Get in touch:"), style="margin-bottom: 5px;"),
+        ui.tags.ul(
+            ui.tags.li(
+                ui.a("Report a bug", href="https://github.com/plutzer/ProxiMate/issues", target="_blank"),
+            ),
+            ui.tags.li(
+                ui.a("GitHub Repository", href="https://github.com/plutzer/ProxiMate", target="_blank"),
+            ),
+        ),
+        ui.hr(),
+        ui.p(
+            "Thank you for testing ProxiMate!",
+            style="font-style: italic; color: #666;"
+        ),
     ),
     title="ProxiMate",
 )
@@ -410,8 +434,6 @@ def format_error_notification(error):
 
 
 def server(input: Inputs, output: Outputs, session: Session):
-    print("Server started")
-
     datasets = reactive.Value(pd.DataFrame(
         columns=['Dataset Name', 'Input Type', 'Quant Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']
     ))
@@ -437,15 +459,11 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.data_frame
     def ed_table_mq():
         # Return the ED table for MaxQuant input
-        print("Rendering MaxQuant ED table")
-        print(ed_dataframe.get())
         return render.DataGrid(ed_dataframe.get(), editable=True)
 
     @render.data_frame
     def ed_table_diann():
         # Return the ED table for DIA-NN input
-        print("Rendering DIA-NN ED table")
-        print(ed_dataframe.get())
         return render.DataGrid(ed_dataframe.get(), editable=True)
 
     @reactive.effect
@@ -454,7 +472,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Check to see if the bait file has been uploaded
         if input.bait.get():
             # Read the bait file and set it to the saint_baits reactive value
-            print("Bait file uploaded:", input.bait.get()[0]['name'])
             # Read the bait file into a DataFrame
 
             # Catch bad input files here
@@ -463,7 +480,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             saint_baits.set(pd.read_csv(input.bait.get()[0]['datapath'], sep="\t", header=None, index_col=None, names=["Experiment Name", "Bait", "Type"]))
             # Add a new column for Bait ID
             saint_baits.get()['Bait ID'] = 'None'  # Default value for Bait ID
-            print("Bait table updated with", len(saint_baits.get()), "rows.")
 
     @reactive.effect
     @reactive.event(input.ed_file)
@@ -471,17 +487,14 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Check to see if the ED file has been uploaded
         if input.ed_file.get():
             # Read the ED file and set it to the ed_dataframe reactive value
-            print("ED file uploaded:", input.ed_file.get()[0]['name'])
             try:
                 # Read the ED file into a DataFrame
                 ed_df = pd.read_csv(input.ed_file.get()[0]['datapath'])
-                print("ED file read with", len(ed_df), "rows.")
 
                 # Validate required columns
                 required_cols = ["Experiment Name", "Type", "Bait", "Replicate"]
                 missing_cols = [col for col in required_cols if col not in ed_df.columns]
                 if missing_cols:
-                    print("ED file is missing required columns:", missing_cols)
                     ui.notification_show(
                         f"ED file is missing required columns: {', '.join(missing_cols)}",
                         type="error"
@@ -502,19 +515,16 @@ def server(input: Inputs, output: Outputs, session: Session):
                     return
 
                 ed_dataframe.set(ed_df)
-                print("ED table updated with", len(ed_dataframe.get()), "rows.")
             except Exception as e:
                 ui.notification_show(
                     f"Error reading ED file: {str(e)}",
                     type="error"
                 )
-                print(f"Error reading ED file: {e}")
 
     @reactive.effect
     @reactive.event(input.input_format)
     def clear_tables_on_format_change():
         # Clear tables when format changes to avoid showing stale data
-        print(f"Input format changed to: {input.input_format.get()}")
         if input.input_format.get() in ["MaxQuant", "DIA-NN"]:
             # Clear SAINT bait table
             saint_baits.set(pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"]))
@@ -529,7 +539,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         dataset_name = input.dataset_name.get()
         check_result = parse.validate_name(dataset_name, datasets.get()['Dataset Name'].tolist())
         if check_result != 0:
-            print(check_result)
             ui.notification_show(
                     f"Parser: {check_result}",
                     type="error",
@@ -544,7 +553,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             with ui.Progress(min=0, max=1) as progress:
                 if input_format == "MaxQuant":
                     progress.set(message="Parsing MaxQuant inputs", value=0.25)
-                    print("Parsing MaxQuant and Experimental Design files")
 
                     # Check if files are uploaded
                     if not input.pg_file.get() or not input.ed_file.get():
@@ -554,10 +562,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                         )
                         return "Error: Missing files"
 
-                    print(input.pg_file.get()[0]['name'])
-                    print(input.ed_file.get()[0]['name'])
                     progress.set(0.45)
-                    print("Current directory:", os.getcwd())
 
                     n_exp, n_ctrl = parse.parse_ed_pg(
                         input.pg_file.get()[0]['datapath'],
@@ -569,7 +574,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                     # Overwrite ED.csv with edited table data
                     ed_df = ed_table_mq.data_view()
                     ed_df.to_csv(f"{output_path}/ED.csv", index=False)
-                    print("Overwrote ED.csv with edited table data.")
 
                     progress.set(0.85)
 
@@ -584,7 +588,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                 elif input_format == "DIA-NN":
                     progress.set(message="Parsing DIA-NN inputs", value=0.25)
-                    print("Parsing DIA-NN and Experimental Design files")
 
                     # Check if files are uploaded
                     if not input.diann_matrix_file.get() or not input.ed_file.get():
@@ -594,10 +597,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                         )
                         return "Error: Missing files"
 
-                    print(input.diann_matrix_file.get()[0]['name'])
-                    print(input.ed_file.get()[0]['name'])
                     progress.set(0.45)
-                    print("Current directory:", os.getcwd())
 
                     n_exp, n_ctrl = parse.parse_diann(
                         input.diann_matrix_file.get()[0]['datapath'],
@@ -609,7 +609,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                     # Overwrite ED.csv with edited table data
                     ed_df = ed_table_diann.data_view()
                     ed_df.to_csv(f"{output_path}/ED.csv", index=False)
-                    print("Overwrote ED.csv with edited table data.")
 
                     progress.set(0.85)
 
@@ -624,7 +623,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                 elif input_format == "SAINT":
                     progress.set(message="Parsing SAINT inputs", value=0.25)
-                    print("Parsing SAINT files")
 
                     # Check if files are uploaded
                     if not input.bait.get() or not input.prey.get() or not input.interaction.get():
@@ -634,9 +632,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                         )
                         return "Error: Missing files"
 
-                    print(input.bait.get()[0]['datapath'])
-                    print(input.prey.get()[0]['datapath'])
-                    print(input.interaction.get()[0]['datapath'])
                     progress.set(0.45)
 
                     # Create the output directory if it doesn't exist
@@ -662,8 +657,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                     updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
                     datasets.set(updated_datasets)
-                    print("Parsed SAINT inputs. Updated datasets.")
-                    print("Edited bait table:", bait_table.data_view())
                     progress.set(1.0)
 
             # Success notification
@@ -675,7 +668,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         except ProxiMateError as e:
             # Handle our custom exceptions with user-friendly messages
-            print(f"Validation error: {e.message}")
             error_msg = format_error_notification(e)
             ui.notification_show(
                 error_msg,
@@ -685,7 +677,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             return f"Error: {e.user_message}"
 
         except FileNotFoundError as e:
-            print(f"File not found: {e}")
             ui.notification_show(
                 f"File not found: {str(e)}",
                 type="error",
@@ -694,7 +685,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             return "Error: File not found"
 
         except PermissionError as e:
-            print(f"Permission error: {e}")
             ui.notification_show(
                 f"Permission denied accessing file: {str(e)}",
                 type="error",
@@ -703,7 +693,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             return "Error: Permission denied"
 
         except pd.errors.ParserError as e:
-            print(f"File parsing error: {e}")
             ui.notification_show(
                 f"Error parsing file: {str(e)}\n\nEnsure files are in correct format.",
                 type="error",
@@ -713,7 +702,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         except Exception as e:
             # Catch-all for unexpected errors
-            print(f"Unexpected error during parsing: {type(e).__name__}: {e}")
             import traceback
             traceback.print_exc()
             ui.notification_show(
@@ -729,7 +717,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     def do_clear_datasets():
         datasets.set(pd.DataFrame(columns=['Dataset Name', 'Input Type', 'Quant Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']))
-        print("Datasets table cleared.")
         # Clear the output folder
         for root, dirs, files in os.walk(out_dir):
             for file in files:
@@ -738,7 +725,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             for dir in dirs:
                 abs_dir = os.path.join(root, dir)
                 shutil.rmtree(abs_dir)
-        print("Output folder cleared.")
 
     @reactive.effect
     @reactive.event(input.clear_datasets)
@@ -778,7 +764,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             # Extract the zip file to the destination
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 zip_ref.extractall(session_dest)
-            print("Session uploaded and extracted to:", session_dest)
 
             # Load the datasets.csv file into the datasets reactive value
             datasets.set(pd.read_csv(os.path.join(session_dest, "datasets.csv")))
@@ -790,10 +775,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     def score_data():
         with ui.Progress(min=0, max=100) as progress:
             progress.set(message="Scoring data", detail="Gathering inputs...", value=0)
-            print("Scoring data")
-            print(input.score_dataset.get())
-            print(input.imputation_method.get())
-            print(input.wdfdr_iterations.get())
 
             # Get the quant type from the datasets dataframe
             quant_type = datasets.get().loc[datasets.get()['Dataset Name'] == input.score_dataset.get(), 'Quant Type'].values[0]
@@ -816,10 +797,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                 "--quantType",
                 quant_type,
             ], capture_output=True, text=True)
-            print("Scoring result:", result.stdout)
-            if result.stderr:
-                print("Error:", result.stderr)
-            print("Scoring completed.")
 
             progress.set(message="Scoring data", detail="Adding protein annotation...", value=65)
 
@@ -832,10 +809,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                 "--outputDir",
                 out_dir + '/' + input.score_dataset.get(),
             ], capture_output=True, text=True)
-            print("Annotation result:", ann_result.stdout)
-            if ann_result.stderr:
-                print("Error:", ann_result.stderr)
-            print("Annotation completed.")
 
             progress.set(message="Scoring data", detail="Updating datasets...", value=90)
 
@@ -848,9 +821,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Scored'] = 'Yes'
             curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Imputation'] = imp_mapping[int(input.imputation_method.get())]
             curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'WDFDR iterations'] = input.wdfdr_iterations.get()
-            print(curr_dataset)
             datasets.set(curr_dataset)
-            print("Dataset updated.")
             progress.set(message="Scoring data", detail="Done!", value=100)
 
     # Quality controls tab
@@ -888,10 +859,8 @@ def server(input: Inputs, output: Outputs, session: Session):
         ctrls = None
         if input.qc_bait.get() != "All":
             ctrls = [input.qc_bait.get()]
-            print(ctrls)
-        
+
         if not os.path.exists(results_path):
-            print(f"File not found for dataset {dataset_name}. Resetting bait selection.")
             ctrls = None
             return None
         else:
@@ -916,8 +885,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         ctrls = None
         if input.qc_bait.get() != "All":
             ctrls = [input.qc_bait.get()]
-            print(ctrls)
-        
 
         fig = roc_plot(results_path, known_type=input.roc_known_type.get(), ctrl_experiments=ctrls) # Add selected ctrls
 
@@ -1303,9 +1270,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     def feature_analysis():
         with ui.Progress(min=0, max=100) as progress:
             progress.set(message="Running protein feature analysis", value=5)
-            print("Running feature analysis")
-            print(input.feature_dataset.get())
-            print(input.saint_threshold.get())
 
             # Get the selected dataset
             progress.set(message="Running protein feature analysis", detail="Loading dataset...", value=20)
@@ -1327,7 +1291,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             result.to_csv(os.path.join(out_dir, input.feature_dataset.get(), "Feature_enrichment.csv"), index=False)
             
             progress.set(message="Running protein feature analysis", detail="Done!", value=100)
-            print("Done running feature analysis. Results saved.")
 
     @render.plot
     def feature_enrichment_plot():
@@ -1388,7 +1351,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             baits.insert(0, "All")
             ui.update_select("download_bait_filter", choices=baits)
         except Exception as e:
-            print(f"Error updating bait filter: {e}")
             ui.update_select("download_bait_filter", choices=["All"])
 
     @render.download()
@@ -1470,14 +1432,11 @@ def server(input: Inputs, output: Outputs, session: Session):
             try:
                 scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
                 baits = scores['Experiment.ID'].unique().tolist()
-                print(f"Found baits: {baits}")
                 baits.insert(0, "All")  # Add "All" option
                 ui.update_select("qc_bait", choices=baits)
             except FileNotFoundError:
-                print(f"File not found for dataset {dataset_name}. Resetting bait selection.")
                 ui.update_select("qc_bait", choices=["All"])  # Reset to default if file not found
             except Exception as e:
-                print(f"Error reading annotated_scores.csv: {e}")
                 ui.update_select("qc_bait", choices=["All"])
         else:
             ui.update_select("qc_bait", choices=["All"])  # Reset to default if no dataset is selected
@@ -1568,7 +1527,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             except FileNotFoundError:
                 ui.update_select("comp_bait_a", choices=[])
             except Exception as e:
-                print(f"Error reading annotated_scores.csv for comp_bait_a: {e}")
                 ui.update_select("comp_bait_a", choices=[])
         else:
             ui.update_select("comp_bait_a", choices=[])
@@ -1586,7 +1544,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             except FileNotFoundError:
                 ui.update_select("comp_bait_b", choices=[])
             except Exception as e:
-                print(f"Error reading annotated_scores.csv for comp_bait_b: {e}")
                 ui.update_select("comp_bait_b", choices=[])
         else:
             ui.update_select("comp_bait_b", choices=[])
@@ -1816,15 +1773,12 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         # Custom cols will come from a user input
         custom_cols = list(input.custom_columns.get())
-        print(custom_cols)
         if not custom_cols:
             # Default columns if none are selected
             custom_cols = ["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"]
 
         # Store total row count before filtering
         custom_dataset_total.set(len(df))
-
-        print(df.columns)
 
         # Apply threshold filtering using centralized function
         thresholds = {

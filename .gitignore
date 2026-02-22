@@ -4,6 +4,13 @@ SAINTexpress-custom/boostsrc/
 SAINTexpress-custom/nloptsrc/
 SAINTexpress-custom/boost/
 SAINTexpress-custom/nlopt/
+filtered_interaction.txt
+*.pyc
+.DS_Store
+Thumbs.db
+*.log
+*.prof
+/Outputs/
 **/PaxHeader/*
 SAINTexpress-custom/va/
 SAINTexpress-custom/Precompiled_binaries/

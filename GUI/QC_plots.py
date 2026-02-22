@@ -88,14 +88,11 @@ def pca_plot(interaction, experimentalDesign):
 
     # Clean up the data
 
-    print(len(data), " rows in data")
     # Convert all 0 values to NaN
     data = data.replace(0, np.nan)
 
     # Remove rows with more than 75% NaN values
     data = data.dropna(thresh=len(data.columns) * 0.5)
-
-    print(len(data), " rows in data after removing rows with more than 75% NaN values")
 
     # Replace NaN values with the minimum of the row
     data = data.apply(lambda row: row.fillna(row.min()), axis=1)    
@@ -139,9 +136,6 @@ def pca_plot(interaction, experimentalDesign):
             'PC2': f'PC2 ({explained_variance[1]*100:.2f}% variance)'
         }
     )
-    print(pca_df)
-        
-
 
     fig.update_layout(
         legend=dict(
@@ -647,18 +641,5 @@ def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
     return fig
 
 
-def main():
-    # base_dir = 'C:/Users/plutzer/Work/ProxiMate_Testing/'
-
-    # For testing PCA
-    # figure = pca_plot(base_dir + "output/interaction.txt", base_dir + "output/ED.csv")
-
-    # For testing known retention
-    figure = roc_plot("C:/Users/isaac/Work/025_MainNetwork/1_MainNetwork_aggregated_scores.csv", 'Multivalidated')
-
-    figure.show()
-    print('done')
-
-
 if __name__ == "__main__":
-    main()
+    pass
