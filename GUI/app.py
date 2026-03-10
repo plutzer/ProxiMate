@@ -97,7 +97,7 @@ app_ui = ui.page_navbar(
                         ui.card_header('Scoring Parameters'),
                         ui.input_select("score_dataset", "Select Dataset", choices=[]),
                         ui.input_radio_buttons("imputation_method", "Imputation Method",
-                                              choices={0: "Default", 1: "Prey-specific"}),
+                                              choices={0: "Default", 1: "Prey-specific", 2: "Refactored AFT"}),
                         ui.input_numeric("wdfdr_iterations", "WDFDR Iterations", value=1000),
                         ui.input_action_button("score_data", "Score Data")
                     ),
@@ -816,7 +816,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             curr_dataset = datasets.get().copy()
             # Edit the row for the current dataset
 
-            imp_mapping = {0: 'Default', 1: 'Prey-specific'}
+            imp_mapping = {0: 'Default', 1: 'Prey-specific', 2: 'Refactored AFT'}
 
             curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Scored'] = 'Yes'
             curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Imputation'] = imp_mapping[int(input.imputation_method.get())]
