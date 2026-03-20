@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y \
     wget \
     unzip \
     libboost-all-dev \
-    libnlopt-dev
+    libnlopt-dev \
+    dos2unix
 
 # RUN apt-get update && apt-get install -y perl
 
@@ -54,6 +55,7 @@ RUN python3 Scripts/preprocess_biogrid.py --biogrid_all /Datasets/BIOGRID-ALL.ta
 COPY Scripts /Scripts
 COPY GUI /GUI
 COPY run_pipeline.sh /run_pipeline.sh
+RUN dos2unix /run_pipeline.sh
 
 ENV PYTHONPATH=/Scripts:/Scripts/GOGO
 ENV PATH="/Scripts/GOGO:${PATH}"

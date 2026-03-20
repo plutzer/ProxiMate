@@ -12,10 +12,10 @@ from sklearn.linear_model import LinearRegression
 from statsmodels.api import GLM, families
 
 # For development, I'll start with hardcoded values for pi
-pi = 0.342 # OLS Avg
+# pi = 0.342 # OLS Avg
 # pi = 0.356 # OLS Weighted Avg
 # pi = 0.297 # GLM Avg
-# pi = 0.313 # GLM Weighted Avg
+pi = 0.313 # GLM Weighted Avg
 
 def protein_log_likelihood(prey_intensities, mu, sigma, Tlim, pi):
     y = np.asarray(prey_intensities)
@@ -49,17 +49,17 @@ def fit_and_plot_spline(prey_stats, title, df=5, eval_type='ols'):
     glm_model = GLM(y_clamped, spline_basis, family=families.Binomial()).fit()
     y_glm = glm_model.predict(spline_smooth)
 
-    # plt.figure(figsize=(8, 6))
-    # plt.scatter(x, y, alpha=0.5, s=10, color='gray')
-    # plt.plot(x_smooth, y_ols, color='red', linewidth=2, label='OLS')
-    # plt.plot(x_smooth, y_glm, color='blue', linewidth=2, label='Logistic')
-    # plt.xlabel('Mean Log2 Intensity')
-    # plt.ylabel('Missingness Proportion')
-    # plt.title(title)
-    # plt.ylim(-0.05, 1.05)
-    # plt.legend()
-    # plt.tight_layout()
-    # plt.show()
+    plt.figure(figsize=(8, 6))
+    plt.scatter(x, y, alpha=0.5, s=10, color='gray')
+    plt.plot(x_smooth, y_ols, color='red', linewidth=2, label='OLS')
+    plt.plot(x_smooth, y_glm, color='blue', linewidth=2, label='Logistic')
+    plt.xlabel('Mean Log2 Intensity')
+    plt.ylabel('Missingness Proportion')
+    plt.title(title)
+    plt.ylim(-0.05, 1.05)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
     # Evaluate the spline at its maximum intensity
     if eval_type == 'ols':
@@ -262,5 +262,69 @@ def main():
     filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=True)
 
 
+def main_spline_test():
+    interaction_path = 'Example_datasets/HCM_LFQ/interaction.txt'
+    ed_path = 'Example_datasets/HCM_LFQ/ED_clean.csv'
+
+    interaction = pd.read_csv(interaction_path, sep='\t', header=None)
+    interaction.columns = ['ExperimentID', 'Bait', 'Prey', 'Intensity']
+
+    ed = pd.read_csv(ed_path)
+
+    # --- Per-bait control spline fits ---
+    controls = ed[ed['Type'] == 'C']
+    control_interaction = interaction[interaction['ExperimentID'].isin(controls['Experiment Name'])]
+
+    control_baits = controls.groupby('Bait')['Experiment Name'].agg(list)
+    for bait, experiments in control_baits.items():
+        n_exp = len(experiments)
+        if n_exp < 2:
+            continue
+
+        bait_interaction = control_interaction[control_interaction['ExperimentID'].isin(experiments)]
+
+        prey_stats = bait_interaction.groupby('Prey')['Intensity'].agg(
+            missingness=lambda x: (x == 0).mean(),
+            mean_log2=lambda x: np.log2(x[x > 0]).mean()
+        ).dropna()
+
+        if len(prey_stats) < 10:
+            print('Skipping {} - only {} preys'.format(bait, len(prey_stats)))
+            continue
+        fit_and_plot_spline(prey_stats, 'Control: {} (n={})'.format(bait, n_exp))
+
+    # --- Per-bait test spline fits ---
+    tests = ed[ed['Type'] == 'T']
+    test_interaction = interaction[interaction['ExperimentID'].isin(tests['Experiment Name'])]
+
+    test_baits = tests.groupby('Bait')['Experiment Name'].agg(list)
+    for bait, experiments in test_baits.items():
+        n_exp = len(experiments)
+        if n_exp < 2:
+            continue
+
+        bait_interaction = test_interaction[test_interaction['ExperimentID'].isin(experiments)]
+
+        prey_stats = bait_interaction.groupby('Prey')['Intensity'].agg(
+            missingness=lambda x: (x == 0).mean(),
+            mean_log2=lambda x: np.log2(x[x > 0]).mean()
+        ).dropna()
+
+        if len(prey_stats) < 10:
+            print('Skipping {} - only {} preys'.format(bait, len(prey_stats)))
+            continue
+        fit_and_plot_spline(prey_stats, 'Test: {} (n={})'.format(bait, n_exp))
+
+    # --- Full dataset spline fit ---
+    prey_stats_all = interaction.groupby('Prey')['Intensity'].agg(
+        missingness=lambda x: (x == 0).mean(),
+        mean_log2=lambda x: np.log2(x[x > 0]).mean()
+    ).dropna()
+
+    fit_and_plot_spline(prey_stats_all, 'Full Dataset (n={})'.format(len(interaction['ExperimentID'].unique())))
+
+    print('Done!')
+
+
 if __name__ == '__main__':
-    main()
+    main_spline_test()
