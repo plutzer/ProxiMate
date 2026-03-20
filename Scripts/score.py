@@ -5,6 +5,7 @@ import argparse
 import subprocess
 import pandas as pd
 import aft_impute_saint
+import refactored_aft
 import compPASS_pval
 import time
 
@@ -81,7 +82,21 @@ def main():
         os.makedirs(args.outputPath)
 
     # Run the imputation
-    aft_impute_saint.filter_impute(f"{args.scoreInputs}/prey.txt", f"{args.scoreInputs}/interaction.txt", f"{args.scoreInputs}/", args.experimentalDesign, impute=bool(int(args.imputation)))
+    if args.imputation == "2":
+        print("Running refactored AFT imputation...")
+        refactored_aft.filter_impute(
+            f"{args.scoreInputs}/prey.txt",
+            f"{args.scoreInputs}/interaction.txt",
+            f"{args.scoreInputs}/",
+            args.experimentalDesign,
+            impute=True)
+    else:
+        aft_impute_saint.filter_impute(
+            f"{args.scoreInputs}/prey.txt",
+            f"{args.scoreInputs}/interaction.txt",
+            f"{args.scoreInputs}/",
+            args.experimentalDesign,
+            impute=bool(int(args.imputation)))
 
     ########################################################################################################################
 
@@ -108,7 +123,7 @@ def main():
                                 "bait.txt"],
                                 cwd=args.scoreInputs)
     else:
-        if args.imputation == "1":
+        if args.imputation in ("1", "2"):
             p = subprocess.run([SAINT_EXPRESS_INT_DIR,
                                 "-L",
                                 str(args.compress_n_rep),

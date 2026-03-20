@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import argparse
 import os
+import sys
 from experimental_design import ExperimentalDesign
 from protein_groups import ProteinGroups
 import shutil
@@ -216,6 +217,19 @@ def main():
                         help="path to DIA-NN report.pg_matrix.tsv file",
                         default=None)
 
+    # SAINT format arguments
+    parser.add_argument("--bait",
+                        help="path to SAINT bait.txt file",
+                        default=None)
+
+    parser.add_argument("--prey",
+                        help="path to SAINT prey.txt file",
+                        default=None)
+
+    parser.add_argument("--interaction",
+                        help="path to SAINT interaction.txt file",
+                        default=None)
+
     parser.add_argument("--experimentalDesign",
                         help="path to experimental design file",
                         default=None)
@@ -266,8 +280,29 @@ def main():
             protein_groups.to_CompPASS(args.outputPath)
         else:
             print("Error: No experimental design file provided.")
+    elif args.bait is not None:
+        # SAINT input mode
+        if args.prey is None or args.interaction is None:
+            print("Error: SAINT format requires --bait, --prey, and --interaction files.")
+            sys.exit(1)
+
+        if not os.path.exists(args.outputPath):
+            os.makedirs(args.outputPath)
+
+        # Read bait.txt into a DataFrame matching GUI expectations
+        bait_df = pd.read_csv(args.bait, sep="\t", header=None,
+                              names=["Experiment Name", "Bait", "Type"])
+        bait_df["Bait ID"] = "None"
+
+        print("Parsing SAINT input files...")
+        parse_from_saint(bait_df, args.prey, args.interaction, args.outputPath)
+
+        # Copy SAINT files to output directory (mirrors GUI behavior)
+        shutil.copy(args.bait, os.path.join(args.outputPath, "bait.txt"))
+        shutil.copy(args.prey, os.path.join(args.outputPath, "prey.txt"))
+        shutil.copy(args.interaction, os.path.join(args.outputPath, "interaction.txt"))
     else:
-        print("Error: No input file provided. Please specify either --proteinGroups or --diannMatrix.")
+        print("Error: No input file provided. Please specify --proteinGroups, --diannMatrix, or --bait/--prey/--interaction.")
 
 if __name__ == "__main__":
     main()
