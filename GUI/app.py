@@ -96,6 +96,14 @@ app_ui = ui.page_navbar(
                     ui.card(
                         ui.card_header('Scoring Parameters'),
                         ui.input_select("score_dataset", "Select Dataset", choices=[]),
+                        # Organism selection for annotation databases.
+                        # To add a new organism, add a choice here and sync with
+                        # ORGANISMS config in Scripts/annotator.py and setup_datasets.py
+                        ui.input_select("organism", "Organism",
+                            choices={"human": "Human (H. sapiens)",
+                                     "mouse": "Mouse (M. musculus)",
+                                     "yeast": "Yeast (S. cerevisiae)"},
+                            selected="human"),
                         ui.input_radio_buttons("imputation_method", "Imputation Method",
                                               choices={0: "Default", 1: "Prey-specific", 2: "Refactored AFT"}),
                         ui.input_numeric("wdfdr_iterations", "WDFDR Iterations", value=1000),
@@ -201,7 +209,7 @@ app_ui = ui.page_navbar(
                     ),
                     ui.card(
                         ui.card_header("Feature Enrichment Analysis"),
-                        ui.input_select("feature_type", "Select Feature Type", choices=["GO_CC", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
+                        ui.input_select("feature_type", "Select Feature Type", choices=["GO_CC", "GO_BP", "GO_MF", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
                         ui.input_numeric("num_features", "Number of Features to Display", value=30, min=1, max=100),
                         ui.output_plot("feature_enrichment_plot"),
                         ui.download_button("download_heatmap", "Export Heatmap PNG", class_="btn-sm"),
@@ -209,7 +217,7 @@ app_ui = ui.page_navbar(
                         ui.h5("Download Enrichment Results"),
                         ui.layout_columns(
                             ui.input_select("download_feature_type", "Feature Type",
-                                          choices=["All", "GO_CC", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
+                                          choices=["All", "GO_CC", "GO_BP", "GO_MF", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
                             ui.input_select("download_bait_filter", "Bait", choices=["All"]),
                             col_widths=(6, 6)
                         ),
@@ -804,6 +812,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             ann_result = subprocess.run([
                 "python3",
                 "/Scripts/annotator.py",
+                "--organism",
+                input.organism.get(),
                 "--scoreFile",
                 out_dir + '/' + input.score_dataset.get() + "/merged.csv",
                 "--outputDir",
@@ -1278,7 +1288,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             progress.set(message="Running protein feature analysis", detail="Processing data...", value=50)
             result = process_refactored(
                 dataset,
-                columns_for_analysis = ['GO_CC', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains'],
+                columns_for_analysis = ['GO_CC', 'GO_BP', 'GO_MF', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains'],
                 threshold = input.saint_threshold.get()
             )
 

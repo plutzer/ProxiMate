@@ -21,20 +21,26 @@ parser.add_argument("--output_dir",
                     help="path to the output directory",
                     default="/Datasets")
 
-def preprocess_biogrid(biogrid_all_path, biogrid_mv_path, output_dir):
+# NCBI Taxonomy ID for organism filtering. Common IDs:
+#   Human: 9606, Mouse: 10090, Yeast (S. cerevisiae S288C): 559292
+# See ORGANISMS config in setup_datasets.py and Scripts/annotator.py for the full list.
+parser.add_argument("--organism_id", type=int, default=9606,
+                    help="NCBI Taxonomy ID for organism filtering (default: 9606 for human)")
+
+def preprocess_biogrid(biogrid_all_path, biogrid_mv_path, output_dir, organism_id=9606):
     # Read the biogrid_all file
     all_biogrid = pd.read_csv(biogrid_all_path, sep='\t')
     all_biogrid = all_biogrid[
-        (all_biogrid['Organism ID Interactor A'] == 9606) & 
-        (all_biogrid['Organism ID Interactor B'] == 9606) & 
+        (all_biogrid['Organism ID Interactor A'] == organism_id) &
+        (all_biogrid['Organism ID Interactor B'] == organism_id) &
         (all_biogrid['Experimental System Type'] == 'physical')
     ]
-    
+
     # Read the biogrid_mv file
     mv_biogrid = pd.read_csv(biogrid_mv_path, sep='\t')
     mv_biogrid = mv_biogrid[
-        (mv_biogrid['Organism ID Interactor A'] == 9606) &
-        (mv_biogrid['Organism ID Interactor B'] == 9606)
+        (mv_biogrid['Organism ID Interactor A'] == organism_id) &
+        (mv_biogrid['Organism ID Interactor B'] == organism_id)
     ]
     
     # Tag mv_biogrid for multivalidation
@@ -66,8 +72,7 @@ def preprocess_biogrid(biogrid_all_path, biogrid_mv_path, output_dir):
 
 # Script entry point
 
-biogrid_mv_path = parser.parse_args().biogrid_mv
-biogrid_all_path = parser.parse_args().biogrid_all
-
-preprocess_biogrid(biogrid_all_path, biogrid_mv_path, output_dir=parser.parse_args().output_dir)
+args = parser.parse_args()
+preprocess_biogrid(args.biogrid_all, args.biogrid_mv,
+                   output_dir=args.output_dir, organism_id=args.organism_id)
 

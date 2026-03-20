@@ -14,8 +14,8 @@ Thumbs.db
 **/PaxHeader/*
 SAINTexpress-custom/va/
 SAINTexpress-custom/Precompiled_binaries/
-Datasets/
 DIANN_example/
+.venv/
 
 # Claude Code documentation
 CLAUDE.md
