@@ -3,8 +3,23 @@ import pandas as pd
 import argparse
 import re
 import csv
+import os
+import shutil
 import time
 import subprocess
+
+# Supported organisms for ProxiMate annotation.
+# To add a new organism:
+#   1. Add an entry here with its NCBI Taxonomy ID and feature flags
+#   2. Sync this config in both setup_datasets.py and Scripts/annotator.py
+#   3. Add the organism to the GUI dropdown in GUI/app.py (scoring panel)
+#   4. If the organism has a species-specific database (like HPA for human),
+#      add a download function in setup_datasets.py and conditional logic below
+ORGANISMS = {
+    "human": {"organism_id": 9606, "has_hpa": True, "has_corum": True},
+    "mouse": {"organism_id": 10090, "has_hpa": False, "has_corum": False},
+    "yeast": {"organism_id": 559292, "has_hpa": False, "has_corum": False},
+}
 
 def get_first_SCL(item):
     if pd.isnull(item):
@@ -115,25 +130,25 @@ def main():
     parser = argparse.ArgumentParser(description=description)
 
     # Add arguments for the annotator
+    parser.add_argument("--organism",
+                        choices=list(ORGANISMS.keys()), default="human",
+                        help="Organism for annotation databases (default: human)")
+
     parser.add_argument("--scoreFile",
                         help="path to raw scores file",
                         default="/srv/shiny-server/myapp/score_outputs/merged.csv")
 
-    parser.add_argument("--uniprotFile",
-                        help="path to uniprot annotation file",
-                        default="/Datasets/uniprot_anns.tsv")
+    parser.add_argument("--uniprotFile", default=None,
+                        help="path to uniprot annotation file (default: /Datasets/{organism}/uniprot_anns.tsv)")
 
-    parser.add_argument("--biogridFile",
-                        help="path to biogrid annotation file",
-                        default="/Datasets/biogrid_summary.csv")
+    parser.add_argument("--biogridFile", default=None,
+                        help="path to biogrid annotation file (default: /Datasets/{organism}/biogrid_summary.csv)")
 
-    parser.add_argument("--locationFile", 
-                        help="path to subcellular locations file", 
-                        default="/Datasets/subcellular_location.tsv")
+    parser.add_argument("--locationFile", default=None,
+                        help="path to subcellular locations file (HPA, human only)")
 
-    parser.add_argument("--complexFile",
-                        help="path to human complexes file",
-                        default="/Datasets/corum_humanComplexes.txt")
+    parser.add_argument("--complexFile", default=None,
+                        help="path to protein complexes file (CORUM, human only)")
 
     # Add arguments for the prey and bait columns
     parser.add_argument("--preyColumn",
@@ -155,6 +170,20 @@ def main():
 
     args = parser.parse_args()
 
+    # Resolve organism-specific default paths
+    datasets_dir = "/Datasets"
+    organism_dir = f"{datasets_dir}/{args.organism}"
+    org_config = ORGANISMS[args.organism]
+
+    if args.uniprotFile is None:
+        args.uniprotFile = f"{organism_dir}/uniprot_anns.tsv"
+    if args.biogridFile is None:
+        args.biogridFile = f"{organism_dir}/biogrid_summary.csv"
+    if args.locationFile is None and org_config["has_hpa"]:
+        args.locationFile = f"{organism_dir}/subcellular_location.tsv"
+    if args.complexFile is None and org_config["has_corum"]:
+        args.complexFile = f"{datasets_dir}/corum_humanComplexes.txt"
+
     prey_col = args.preyColumn
     bait_col = args.baitColumn
     gene_col = args.preyGeneColumn
@@ -171,6 +200,8 @@ def main():
     # Creating cleaner versions of other useful annotations:
     # Now some of the columns to produce lists:
     uniprot['GO_CC'] = uniprot['Gene Ontology (cellular component)'].apply(trim_GO_CC)
+    uniprot['GO_BP'] = uniprot['Gene Ontology (biological process)'].apply(trim_GO_CC)
+    uniprot['GO_MF'] = uniprot['Gene Ontology (molecular function)'].apply(trim_GO_CC)
     uniprot['Motifs'] = uniprot['Motif'].apply(trim_motifs)
     uniprot['Regions'] = uniprot['Region'].apply(trim_motifs)
     uniprot['Repeats'] = uniprot['Repeat'].apply(trim_motifs)
@@ -188,15 +219,14 @@ def main():
 
     annotated_scores['First_Prey_Gene'] = annotated_scores[gene_col].apply(get_first_pg)
 
-    #subset human protein atlas to just two columns
-    hpa = pd.read_csv(args.locationFile, sep='\t')
-    name_loc = hpa[['Gene name', 'Main location']]
-    
-    # pd.DataFrame(hpa.iloc[:, [1,3]]) # TODO: Make this not hardcoded
+    # HPA subcellular location annotations (human only)
+    if args.locationFile:
+        hpa = pd.read_csv(args.locationFile, sep='\t')
+        name_loc = hpa[['Gene name', 'Main location']]
 
-    annotated_scores['Matched_Gene_Name'] = annotated_scores['First_Prey_Gene'].apply(get_match, subcellular=name_loc['Gene name'].to_numpy(), uniprot=uniprot['Gene Names'].to_numpy())
+        annotated_scores['Matched_Gene_Name'] = annotated_scores['First_Prey_Gene'].apply(get_match, subcellular=name_loc['Gene name'].to_numpy(), uniprot=uniprot['Gene Names'].to_numpy())
 
-    annotated_scores = annotated_scores.merge(name_loc, left_on=['Matched_Gene_Name'], right_on=['Gene name'], how='left')
+        annotated_scores = annotated_scores.merge(name_loc, left_on=['Matched_Gene_Name'], right_on=['Gene name'], how='left')
 
     bait_values = set(annotated_scores[bait_col])
     annotated_scores['Prey_Is_Bait'] = annotated_scores[prey_col].apply(prey_is_bait, bait_values=bait_values)
@@ -204,18 +234,15 @@ def main():
     for bait_id in bait_values:
         annotated_scores['Self-Interaction'] = annotated_scores[prey_col].apply(self_inter, bait_id=bait_id)
 
-    # TODO: add human complex annotations
-    # subunits(UniProt IDs) match with Prey ID(?), split over semicolon
-    # if match, add annotation for ComplexName
-    human_complex = pd.read_table(parser.parse_args().complexFile, encoding='latin-1')
-    complex_cols = human_complex[['complex_name','subunits_uniprot_id']]
-    complex_dict = complex_cols.set_index('complex_name').to_dict()['subunits_uniprot_id']
-
-    annotated_scores['Human_Complex'] = annotated_scores[prey_col].apply(complex_id, complex_dict=complex_dict)
+    # CORUM protein complex annotations (human only)
+    if args.complexFile:
+        human_complex = pd.read_table(args.complexFile, encoding='latin-1')
+        complex_cols = human_complex[['complex_name','subunits_uniprot_id']]
+        complex_dict = complex_cols.set_index('complex_name').to_dict()['subunits_uniprot_id']
+        annotated_scores['Human_Complex'] = annotated_scores[prey_col].apply(complex_id, complex_dict=complex_dict)
 
     # Now for BioGrid
     # Import the BioGrid annotations
-    biogrid = pd.read_csv(parser.parse_args().biogridFile)
     biogrid = pd.read_csv(args.biogridFile)
 
     # Convert the integer column to string in both dataframes before merging
@@ -318,6 +345,11 @@ def main():
     # Save the annotated scores
     output_path = f"{args.outputDir}/annotated_scores.csv"
     annotated_scores.to_csv(output_path, index=False)
+
+    # Copy build info to output directory so users know dataset versions
+    build_info = f"{datasets_dir}/build_info.txt"
+    if os.path.isfile(build_info):
+        shutil.copy2(build_info, f"{args.outputDir}/build_info.txt")
 
 if __name__ == "__main__":
     main()
