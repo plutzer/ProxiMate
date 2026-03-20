@@ -3,9 +3,9 @@
 # Usage function
 usage() {
     echo "Usage:"
-    echo "  $0 --format maxquant  ED_file PG_file quant_type output_dir n_iterations imputation"
-    echo "  $0 --format diann     ED_file matrix_file output_dir n_iterations imputation"
-    echo "  $0 --format saint     bait_file prey_file interaction_file quant_type output_dir n_iterations imputation"
+    echo "  $0 [--organism ORG] --format maxquant  ED_file PG_file quant_type output_dir n_iterations imputation"
+    echo "  $0 [--organism ORG] --format diann     ED_file matrix_file output_dir n_iterations imputation"
+    echo "  $0 [--organism ORG] --format saint     bait_file prey_file interaction_file quant_type output_dir n_iterations imputation"
     echo ""
     echo "Formats:"
     echo "  maxquant  - MaxQuant proteinGroups.txt + experimental design CSV"
@@ -13,31 +13,23 @@ usage() {
     echo "  saint     - SAINT bait.txt, prey.txt, interaction.txt"
     echo ""
     echo "Arguments:"
+    echo "  --organism   - human (default), mouse, or yeast"
     echo "  quant_type   - Intensity, LFQ, or 'Spectral Counts'"
     echo "  n_iterations - Number of CompPASS resampling iterations"
     echo "  imputation   - 0 (none), 1 (prey-specific AFT), or 2 (refactored AFT)"
-# Check if the correct number of arguments is passed
-if [ "$#" -lt 6 ] || [ "$#" -gt 7 ]; then
-    echo "Usage: $0 ED_file PG_file quant_type output_directory n_iterations imputation [organism]"
-    echo "  organism: human (default), mouse, or yeast"
     exit 1
 }
+
+# Parse optional --organism flag
+organism="human"
+if [ "$1" == "--organism" ]; then
+    organism=$2
+    shift 2
+fi
 
 # Check for --format flag
 if [ "$1" != "--format" ] || [ -z "$2" ]; then
     usage
-# Assign variables to arguments
-file1=$1
-file2=$2
-quant=$3
-output_dir=$4
-niters=$5
-imp=$6
-organism=${7:-human}  # Default to human if not specified
-
-# Check if the output directory exists, if not create it
-if [ ! -d "$output_dir" ]; then
-    mkdir -p "$output_dir"
 fi
 
 format=$2
@@ -76,6 +68,7 @@ case "$format" in
 
         echo "=== Annotating ==="
         python3 /Scripts/annotator.py \
+            --organism "$organism" \
             --scoreFile "$output_dir/merged.csv" \
             --outputDir "$output_dir" 2>&1 | tee -a "$output_dir/log.txt"
         ;;
@@ -112,6 +105,7 @@ case "$format" in
 
         echo "=== Annotating ==="
         python3 /Scripts/annotator.py \
+            --organism "$organism" \
             --scoreFile "$output_dir/merged.csv" \
             --outputDir "$output_dir" 2>&1 | tee -a "$output_dir/log.txt"
         ;;
@@ -151,6 +145,7 @@ case "$format" in
 
         echo "=== Annotating ==="
         python3 /Scripts/annotator.py \
+            --organism "$organism" \
             --scoreFile "$output_dir/merged.csv" \
             --outputDir "$output_dir" 2>&1 | tee -a "$output_dir/log.txt"
         ;;
@@ -160,7 +155,5 @@ case "$format" in
         usage
         ;;
 esac
-# Call the annotate script
-python3 /Scripts/annotator.py --organism "$organism" --scoreFile "$output_dir/merged.csv" --outputDir "$output_dir" >> "$output_dir/log.txt"
 
 echo "=== Done ==="
