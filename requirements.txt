@@ -12,3 +12,4 @@ ipywidgets
 shinywidgets
 anywidget
 py4cytoscape>=1.12.0
+requests>=2.25.0

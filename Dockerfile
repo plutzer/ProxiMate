@@ -24,6 +24,8 @@ ADD ./SAINTexpress-custom/bin/SAINTexpress-int /bin/SAINTexpress-int_oldimp
 COPY SAINTexpress-custom /SAINTexpress-custom
 
 COPY SAINTexpress_v3.6.3__2018-03-09 /SAINTexpress_v3.6.3__2018-03-09
+RUN find /SAINTexpress_v3.6.3__2018-03-09 \( -name "*.sh" -o -name "configure" -o -name "bootstrap" -o -name "b2" -o -name "bjam" \) -exec chmod +x {} +
+RUN mkdir -p /SAINTexpress_v3.6.3__2018-03-09/bin
 
 RUN make -C /SAINTexpress_v3.6.3__2018-03-09
 RUN mv /SAINTexpress_v3.6.3__2018-03-09/bin/SAINTexpress-int /bin/SAINTexpress-int_default
@@ -45,10 +47,11 @@ RUN apt-get update && apt-get install -y python3-pip
 COPY requirements.txt ../requirements.txt
 RUN pip3 install -r ../requirements.txt
 
-# Preprocess the datasets
+# Copy CORUM dataset (can't be downloaded programmatically) and download the rest
 COPY Datasets /Datasets
 COPY Scripts/preprocess_biogrid.py /Scripts/preprocess_biogrid.py
-RUN python3 Scripts/preprocess_biogrid.py --biogrid_all /Datasets/BIOGRID-ALL.tab3.txt --biogrid_mv /Datasets/BIOGRID-MV-Physical.tab3.txt --output /Datasets
+COPY Scripts/setup_datasets.py /Scripts/setup_datasets.py
+RUN python3 /Scripts/setup_datasets.py --output-dir /Datasets --skip corum
 
 # Copy over the folders with code and tests
 COPY Scripts /Scripts
