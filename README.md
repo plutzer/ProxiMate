@@ -15,27 +15,53 @@ The backend of the application can be accessed interactively by overriding the c
 2. Within the docker container, python, R, perl, or SAINT scripts can be run manually.
 
 ### Running scripts on a high-performance computing cluster (experienced users)
-The docker container contains a shell script to run the entire pipeline. This can be run by overriding the command to start the shiny app:
-1. Run the command:
-       `docker run --mount type=bind,source=<native_path_to_data_directory>,target=<working_directory_within_container> plutzer/proximate /bin/bash /run_pipeline.sh <path_to_ED_file> <path_to_PG_file> <quant_type (Intensity, Spectral Counts, or LFQ)> <path_to_output_directory> <n_iterations_for_WD_scoring> <imputation (1 for yes or 0 for no)>`
+The docker container contains a shell script to run the entire pipeline. Use the `--format` flag to specify your input type:
+
+**MaxQuant:**
+```
+docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/proximate \
+  /bin/bash /run_pipeline.sh --format maxquant \
+  <ED_file> <PG_file> <quant_type> <output_dir> <n_iterations> <imputation>
+```
+
+**DIA-NN:**
+```
+docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/proximate \
+  /bin/bash /run_pipeline.sh --format diann \
+  <ED_file> <matrix_file> <output_dir> <n_iterations> <imputation>
+```
+
+**SAINT:**
+```
+docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/proximate \
+  /bin/bash /run_pipeline.sh --format saint \
+  <bait_file> <prey_file> <interaction_file> <quant_type> <output_dir> <n_iterations> <imputation>
+```
+
+**Options:**
+- `--organism`: `human` (default), `mouse`, or `yeast` — add before `--format` if needed
+- `quant_type`: `Intensity`, `LFQ`, or `Spectral Counts` (DIA-NN always uses Intensity)
+- `imputation`: `0` (none), `1` (prey-specific AFT), or `2` (refactored AFT)
 
 ## Annotations and Databases:
 I will periodically push newer versions of the tool with updated databases. 
 
 Current versions of the databases:
 
-BioGRID: April 15, 2024
+BioGRID: March 21, 2026
 
-UniProt: April 12, 2024
+UniProt: March 21, 2026
 
-Human Protein Atlas: March 5, 2025
+Human Protein Atlas: March 21, 2026
 
-CORUM: March 5, 2025
+CORUM: March 21, 2026
 
 
 
 ### Updating databases manually (experienced users):
-If you want to run the tool with new or custom versions of the databases. You can re-build the docker container after assembling the following files in a `/Databases` subdirectory inside the ProxiMate parent directory. File names will need to match or be changed in the Dockerfile before building.
+Databases can be downloaded automatically by running `python3 Scripts/setup_datasets.py --output-dir Datasets`. Use `--skip` to exclude specific databases (e.g., `--skip corum`). See `python3 Scripts/setup_datasets.py --help` for all options.
+
+Alternatively, you can manually assemble the following files in a `/Datasets` subdirectory inside the ProxiMate parent directory and re-build the docker container. File names will need to match or be changed in the Dockerfile before building.
 
 
 `BIOGRID-ALL.tab3.txt` - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)

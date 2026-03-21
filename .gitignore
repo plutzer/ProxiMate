@@ -15,6 +15,7 @@ Thumbs.db
 SAINTexpress-custom/va/
 SAINTexpress-custom/Precompiled_binaries/
 DIANN_example/
+Example_datasets/
 .venv/
 
 # Claude Code documentation
