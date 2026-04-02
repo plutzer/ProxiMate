@@ -2,13 +2,17 @@ import pandas as pd
 import numpy as np
 import argparse
 import os
+import sys
 from experimental_design import ExperimentalDesign
 from protein_groups import ProteinGroups
 import shutil
 import re
 import tempfile
-from ed_validation import validate_maxquant_inputs, validate_diann_inputs
+from ed_validation import validate_maxquant_inputs, validate_diann_inputs, validate_fragpipe_inputs
 from ed_exceptions import ProxiMateError
+from log_config import get_logger, add_file_handler
+
+logger = get_logger(__name__)
 
 def validate_name(s: str, datasets):
     """
@@ -48,8 +52,10 @@ def parse_ed_pg(proteinGroups, experimentalDesign, quantType, outputPath):
 
     # Check to see if the output directory exists. If not, create it.
     if not os.path.exists(outputPath):
-        print("Creating output directory: " + outputPath)
+        logger.info("Creating output directory: %s", outputPath)
         os.makedirs(outputPath)
+
+    add_file_handler(os.path.join(outputPath, "proximate.log"))
 
     # Copy the experimental design file to the output directory
     shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
@@ -162,8 +168,10 @@ def parse_diann(diannMatrix, experimentalDesign, quantType, outputPath):
 
     # Check to see if the output directory exists. If not, create it.
     if not os.path.exists(outputPath):
-        print("Creating output directory: " + outputPath)
+        logger.info("Creating output directory: %s", outputPath)
         os.makedirs(outputPath)
+
+    add_file_handler(os.path.join(outputPath, "proximate.log"))
 
     # Copy the experimental design file to the output directory
     shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
@@ -200,6 +208,101 @@ def parse_diann(diannMatrix, experimentalDesign, quantType, outputPath):
 
     return num_expts, num_ctrls
 
+def convert_fragpipe_to_maxquant_format(fp_file, experimental_design, quant_type):
+    """
+    Convert FragPipe combined_protein.tsv to a MaxQuant-like proteinGroups format.
+
+    :param fp_file: path to FragPipe combined_protein.tsv file
+    :param experimental_design: ExperimentalDesign object
+    :param quant_type: quantification type (Intensity, LFQ, or Spectral Counts)
+    :return: DataFrame in MaxQuant-like format
+    """
+    fp_data = pd.read_csv(fp_file, sep="\t")
+
+    # Map quant_type to FragPipe column suffix and MaxQuant column prefix
+    QUANT_MAP = {
+        "Intensity":       (" Intensity",            "Intensity "),
+        "LFQ":             (" MaxLFQ Intensity",     "LFQ intensity "),
+        "Spectral Counts": (" Total Spectral Count", "MS/MS count "),
+    }
+    fp_suffix, mq_prefix = QUANT_MAP[quant_type]
+
+    mq_data = pd.DataFrame()
+
+    # Map FragPipe columns to MaxQuant columns
+    mq_data["Majority protein IDs"] = fp_data["Protein ID"]
+    mq_data["Protein names"] = fp_data["Description"] if "Description" in fp_data.columns else ""
+    mq_data["Gene names"] = fp_data["Gene"].fillna("")
+
+    # Filter columns — FragPipe uses contam_ prefix instead of separate columns
+    mq_data["Reverse"] = "-"
+    mq_data["Only identified by site"] = "-"
+    mq_data["Potential contaminant"] = np.where(
+        fp_data["Protein"].str.startswith("contam_"), "+", "-"
+    )
+
+    # FragPipe has actual protein length (DIA-NN lacks this and sets to 1)
+    mq_data["Sequence length"] = fp_data["Protein Length"]
+
+    # Copy and rename quantification columns
+    for col in fp_data.columns:
+        if col.endswith(fp_suffix):
+            # Disambiguate: when in Intensity mode, skip MaxLFQ Intensity columns
+            if quant_type == "Intensity" and col.endswith(" MaxLFQ Intensity"):
+                continue
+            sample_name = col[:-len(fp_suffix)]
+            if sample_name in experimental_design.name2experiment:
+                mq_data[f"{mq_prefix}{sample_name}"] = fp_data[col].fillna(0)
+
+    return mq_data
+
+def parse_fragpipe(fp_file, experimentalDesign, quantType, outputPath):
+    """
+    Parse FragPipe combined_protein.tsv file and experimental design file.
+
+    :param fp_file: path to FragPipe combined_protein.tsv file
+    :param experimentalDesign: path to experimental design file
+    :param quantType: quantification type (Intensity, LFQ, or Spectral Counts)
+    :param outputPath: path for the output directory
+    :return: tuple of (num_experiments, num_controls)
+    """
+    # VALIDATE INPUTS FIRST
+    try:
+        ed_df, fp_df = validate_fragpipe_inputs(experimentalDesign, fp_file)
+    except ProxiMateError:
+        raise
+
+    if not os.path.exists(outputPath):
+        logger.info("Creating output directory: %s", outputPath)
+        os.makedirs(outputPath)
+
+    add_file_handler(os.path.join(outputPath, "proximate.log"))
+
+    shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
+
+    experimental_design = ExperimentalDesign(experimentalDesign)
+    num_expts = experimental_design.num_experiments
+    num_ctrls = experimental_design.num_controls
+
+    mq_format_data = convert_fragpipe_to_maxquant_format(fp_file, experimental_design, quantType)
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, newline='') as tmp_file:
+        tmp_path = tmp_file.name
+        mq_format_data.to_csv(tmp_file, sep="\t", index=False)
+
+    shutil.copy(tmp_path, f"{outputPath}/proteinGroups.txt")
+
+    try:
+        protein_groups = ProteinGroups(experimental_design, tmp_path,
+                                       quantType, quantType)
+        protein_groups.to_SAINT(outputPath)
+        protein_groups.to_CompPASS(outputPath)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    return num_expts, num_ctrls
+
 def main():
 
     description = "This is the entry point to the program. It will execute the requested tasks."
@@ -214,6 +317,23 @@ def main():
 
     parser.add_argument("--diannMatrix",
                         help="path to DIA-NN report.pg_matrix.tsv file",
+                        default=None)
+
+    parser.add_argument("--fragpipeFile",
+                        help="path to FragPipe combined_protein.tsv file",
+                        default=None)
+
+    # SAINT format arguments
+    parser.add_argument("--bait",
+                        help="path to SAINT bait.txt file",
+                        default=None)
+
+    parser.add_argument("--prey",
+                        help="path to SAINT prey.txt file",
+                        default=None)
+
+    parser.add_argument("--interaction",
+                        help="path to SAINT interaction.txt file",
                         default=None)
 
     parser.add_argument("--experimentalDesign",
@@ -238,7 +358,13 @@ def main():
         if args.experimentalDesign is not None:
             parse_diann(args.diannMatrix, args.experimentalDesign, args.quantType, args.outputPath)
         else:
-            print("Error: No experimental design file provided.")
+            logger.error("No experimental design file provided.")
+    elif args.fragpipeFile is not None:
+        # FragPipe input mode
+        if args.experimentalDesign is not None:
+            parse_fragpipe(args.fragpipeFile, args.experimentalDesign, args.quantType, args.outputPath)
+        else:
+            logger.error("No experimental design file provided.")
     elif args.proteinGroups is not None:
         # MaxQuant input mode
         if args.experimentalDesign is not None:
@@ -249,14 +375,13 @@ def main():
             # Copy the experimental design file to the output directory
             shutil.copy(args.experimentalDesign, os.path.join(args.outputPath, "ED.csv"))
 
-            # Parse the proteinGroups.txt file
-            print("Parsing Experimental Design file: " + args.experimentalDesign)
+            logger.info("Parsing Experimental Design file: %s", args.experimentalDesign)
 
             # parse experimental design
             experimental_design = ExperimentalDesign(args.experimentalDesign)
 
-            print("Parsing Protein Groups file: " + args.proteinGroups)
-            print("Quantification type: " + args.quantType)
+            logger.info("Parsing Protein Groups file: %s", args.proteinGroups)
+            logger.info("Quantification type: %s", args.quantType)
 
             # process MaxQuant proteinGroups
             protein_groups = ProteinGroups(experimental_design, args.proteinGroups,
@@ -265,9 +390,30 @@ def main():
             protein_groups.to_SAINT(args.outputPath)
             protein_groups.to_CompPASS(args.outputPath)
         else:
-            print("Error: No experimental design file provided.")
+            logger.error("No experimental design file provided.")
+    elif args.bait is not None:
+        # SAINT input mode
+        if args.prey is None or args.interaction is None:
+            logger.error("SAINT format requires --bait, --prey, and --interaction files.")
+            sys.exit(1)
+
+        if not os.path.exists(args.outputPath):
+            os.makedirs(args.outputPath)
+
+        # Read bait.txt into a DataFrame matching GUI expectations
+        bait_df = pd.read_csv(args.bait, sep="\t", header=None,
+                              names=["Experiment Name", "Bait", "Type"])
+        bait_df["Bait ID"] = "None"
+
+        logger.info("Parsing SAINT input files...")
+        parse_from_saint(bait_df, args.prey, args.interaction, args.outputPath)
+
+        # Copy SAINT files to output directory (mirrors GUI behavior)
+        shutil.copy(args.bait, os.path.join(args.outputPath, "bait.txt"))
+        shutil.copy(args.prey, os.path.join(args.outputPath, "prey.txt"))
+        shutil.copy(args.interaction, os.path.join(args.outputPath, "interaction.txt"))
     else:
-        print("Error: No input file provided. Please specify either --proteinGroups or --diannMatrix.")
+        logger.error("No input file provided. Please specify --proteinGroups, --diannMatrix, --fragpipeFile, or --bait/--prey/--interaction.")
 
 if __name__ == "__main__":
     main()

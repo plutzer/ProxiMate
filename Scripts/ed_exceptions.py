@@ -206,6 +206,22 @@ class PGMissingColumnError(PGFileError):
         super().__init__(message, user_message, suggestions)
 
 
+class FPMissingColumnError(PGFileError):
+    """FragPipe file missing required columns"""
+
+    def __init__(self, missing_columns):
+        self.missing_columns = missing_columns
+        missing_str = ", ".join(missing_columns)
+        message = f"Missing required columns: {missing_str}"
+        user_message = f"Your FragPipe file is missing these required columns: {missing_str}"
+        suggestions = [
+            "This should be a FragPipe combined_protein.tsv file",
+            "Ensure the file hasn't been modified or filtered",
+            "Required columns include: Protein, Protein ID, Gene, Protein Length"
+        ]
+        super().__init__(message=message, user_message=user_message, suggestions=suggestions)
+
+
 class EDPGMismatchError(ProxiMateError):
     """Mismatch between ED experiments and proteinGroups columns"""
 

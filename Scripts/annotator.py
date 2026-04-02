@@ -3,8 +3,27 @@ import pandas as pd
 import argparse
 import re
 import csv
+import os
+import sys
+import shutil
 import time
 import subprocess
+from log_config import get_logger, add_file_handler
+
+logger = get_logger(__name__)
+
+# Supported organisms for ProxiMate annotation.
+# To add a new organism:
+#   1. Add an entry here with its NCBI Taxonomy ID and feature flags
+#   2. Sync this config in both setup_datasets.py and Scripts/annotator.py
+#   3. Add the organism to the GUI dropdown in GUI/app.py (scoring panel)
+#   4. If the organism has a species-specific database (like HPA for human),
+#      add a download function in setup_datasets.py and conditional logic below
+ORGANISMS = {
+    "human": {"organism_id": 9606, "has_hpa": True, "has_corum": True},
+    "mouse": {"organism_id": 10090, "has_hpa": False, "has_corum": False},
+    "yeast": {"organism_id": 559292, "has_hpa": False, "has_corum": False},
+}
 
 def get_first_SCL(item):
     if pd.isnull(item):
@@ -36,7 +55,7 @@ def trim_GO_CC(item):
         return np.nan
     else:
         return clean_gocc(item)
-    
+
 # Motif Annotations:
 def trim_motifs(item):
     if pd.isnull(item):
@@ -115,25 +134,25 @@ def main():
     parser = argparse.ArgumentParser(description=description)
 
     # Add arguments for the annotator
+    parser.add_argument("--organism",
+                        choices=list(ORGANISMS.keys()), default="human",
+                        help="Organism for annotation databases (default: human)")
+
     parser.add_argument("--scoreFile",
                         help="path to raw scores file",
                         default="/srv/shiny-server/myapp/score_outputs/merged.csv")
 
-    parser.add_argument("--uniprotFile",
-                        help="path to uniprot annotation file",
-                        default="/Datasets/uniprot_anns.tsv")
+    parser.add_argument("--uniprotFile", default=None,
+                        help="path to uniprot annotation file (default: /Datasets/{organism}/uniprot_anns.tsv)")
 
-    parser.add_argument("--biogridFile",
-                        help="path to biogrid annotation file",
-                        default="/Datasets/biogrid_summary.csv")
+    parser.add_argument("--biogridFile", default=None,
+                        help="path to biogrid annotation file (default: /Datasets/{organism}/biogrid_summary.csv)")
 
-    parser.add_argument("--locationFile", 
-                        help="path to subcellular locations file", 
-                        default="/Datasets/subcellular_location.tsv")
+    parser.add_argument("--locationFile", default=None,
+                        help="path to subcellular locations file (HPA, human only)")
 
-    parser.add_argument("--complexFile",
-                        help="path to human complexes file",
-                        default="/Datasets/corum_humanComplexes.txt")
+    parser.add_argument("--complexFile", default=None,
+                        help="path to protein complexes file (CORUM, human only)")
 
     # Add arguments for the prey and bait columns
     parser.add_argument("--preyColumn",
@@ -155,12 +174,38 @@ def main():
 
     args = parser.parse_args()
 
+    # Resolve organism-specific default paths
+    datasets_dir = "/Datasets"
+    organism_dir = f"{datasets_dir}/{args.organism}"
+    org_config = ORGANISMS[args.organism]
+
+    if args.uniprotFile is None:
+        args.uniprotFile = f"{organism_dir}/uniprot_anns.tsv"
+    if args.biogridFile is None:
+        args.biogridFile = f"{organism_dir}/biogrid_summary.csv"
+    if args.locationFile is None and org_config["has_hpa"]:
+        args.locationFile = f"{organism_dir}/subcellular_location.tsv"
+    if args.complexFile is None and org_config["has_corum"]:
+        args.complexFile = f"{datasets_dir}/corum_humanComplexes.txt"
+
     prey_col = args.preyColumn
     bait_col = args.baitColumn
     gene_col = args.preyGeneColumn
 
+    add_file_handler(os.path.join(args.outputDir, "proximate.log"))
+
+    # Validate that the score file exists
+    if not os.path.exists(args.scoreFile):
+        logger.error("Score file not found: %s", args.scoreFile)
+        sys.exit(1)
+
     # Import the uniprot annotations
-    uniprot = pd.read_csv(args.uniprotFile, sep='\t')
+    logger.info("Loading UniProt annotations from %s", args.uniprotFile)
+    try:
+        uniprot = pd.read_csv(args.uniprotFile, sep='\t')
+    except Exception:
+        logger.exception("Failed to load UniProt annotations")
+        sys.exit(1)
 
     # SCL Annotations:
     # Take the first item from the SCL column and move to a new column
@@ -171,6 +216,8 @@ def main():
     # Creating cleaner versions of other useful annotations:
     # Now some of the columns to produce lists:
     uniprot['GO_CC'] = uniprot['Gene Ontology (cellular component)'].apply(trim_GO_CC)
+    uniprot['GO_BP'] = uniprot['Gene Ontology (biological process)'].apply(trim_GO_CC)
+    uniprot['GO_MF'] = uniprot['Gene Ontology (molecular function)'].apply(trim_GO_CC)
     uniprot['Motifs'] = uniprot['Motif'].apply(trim_motifs)
     uniprot['Regions'] = uniprot['Region'].apply(trim_motifs)
     uniprot['Repeats'] = uniprot['Repeat'].apply(trim_motifs)
@@ -178,7 +225,13 @@ def main():
     uniprot['Domains'] = uniprot['Domain [FT]'].apply(trim_motifs)
 
     # Now Merge the uniprot annotations with the raw scores
-    raw_scores = pd.read_csv(args.scoreFile)
+    logger.info("Loading scored data from %s", args.scoreFile)
+    try:
+        raw_scores = pd.read_csv(args.scoreFile)
+        logger.info("Scored data: %d rows, columns: %s", len(raw_scores), list(raw_scores.columns))
+    except Exception:
+        logger.exception("Failed to load score file")
+        sys.exit(1)
 
     raw_scores['First_ID'] = raw_scores[prey_col].apply(lambda x: x.split(';')[0])
     first_prey_col = 'First_ID'
@@ -188,15 +241,18 @@ def main():
 
     annotated_scores['First_Prey_Gene'] = annotated_scores[gene_col].apply(get_first_pg)
 
-    #subset human protein atlas to just two columns
-    hpa = pd.read_csv(args.locationFile, sep='\t')
-    name_loc = hpa[['Gene name', 'Main location']]
-    
-    # pd.DataFrame(hpa.iloc[:, [1,3]]) # TODO: Make this not hardcoded
+    # HPA subcellular location annotations (human only)
+    if args.locationFile:
+        logger.info("Loading HPA annotations from %s", args.locationFile)
+        try:
+            hpa = pd.read_csv(args.locationFile, sep='\t')
+            name_loc = hpa[['Gene name', 'Main location']]
 
-    annotated_scores['Matched_Gene_Name'] = annotated_scores['First_Prey_Gene'].apply(get_match, subcellular=name_loc['Gene name'].to_numpy(), uniprot=uniprot['Gene Names'].to_numpy())
+            annotated_scores['Matched_Gene_Name'] = annotated_scores['First_Prey_Gene'].apply(get_match, subcellular=name_loc['Gene name'].to_numpy(), uniprot=uniprot['Gene Names'].to_numpy())
 
-    annotated_scores = annotated_scores.merge(name_loc, left_on=['Matched_Gene_Name'], right_on=['Gene name'], how='left')
+            annotated_scores = annotated_scores.merge(name_loc, left_on=['Matched_Gene_Name'], right_on=['Gene name'], how='left')
+        except Exception:
+            logger.exception("HPA annotation failed (non-fatal, continuing)")
 
     bait_values = set(annotated_scores[bait_col])
     annotated_scores['Prey_Is_Bait'] = annotated_scores[prey_col].apply(prey_is_bait, bait_values=bait_values)
@@ -204,37 +260,41 @@ def main():
     for bait_id in bait_values:
         annotated_scores['Self-Interaction'] = annotated_scores[prey_col].apply(self_inter, bait_id=bait_id)
 
-    # TODO: add human complex annotations
-    # subunits(UniProt IDs) match with Prey ID(?), split over semicolon
-    # if match, add annotation for ComplexName
-    human_complex = pd.read_table(parser.parse_args().complexFile, encoding='latin-1')
-    complex_cols = human_complex[['complex_name','subunits_uniprot_id']]
-    complex_dict = complex_cols.set_index('complex_name').to_dict()['subunits_uniprot_id']
-
-    annotated_scores['Human_Complex'] = annotated_scores[prey_col].apply(complex_id, complex_dict=complex_dict)
+    # CORUM protein complex annotations (human only)
+    if args.complexFile:
+        logger.info("Loading CORUM annotations from %s", args.complexFile)
+        try:
+            human_complex = pd.read_table(args.complexFile, encoding='latin-1')
+            complex_cols = human_complex[['complex_name','subunits_uniprot_id']]
+            complex_dict = complex_cols.set_index('complex_name').to_dict()['subunits_uniprot_id']
+            annotated_scores['Human_Complex'] = annotated_scores[prey_col].apply(complex_id, complex_dict=complex_dict)
+        except Exception:
+            logger.exception("CORUM annotation failed (non-fatal, continuing)")
 
     # Now for BioGrid
-    # Import the BioGrid annotations
-    biogrid = pd.read_csv(parser.parse_args().biogridFile)
-    biogrid = pd.read_csv(args.biogridFile)
+    logger.info("Loading BioGRID annotations from %s", args.biogridFile)
+    try:
+        biogrid = pd.read_csv(args.biogridFile)
 
-    # Convert the integer column to string in both dataframes before merging
-    annotated_scores[first_prey_col] = annotated_scores[first_prey_col].astype(str)
-    annotated_scores[bait_col] = annotated_scores[bait_col].astype(str)
-    biogrid['SWISS-PROT Accessions Interactor A'] = biogrid['SWISS-PROT Accessions Interactor A'].astype(str)
-    biogrid['SWISS-PROT Accessions Interactor B'] = biogrid['SWISS-PROT Accessions Interactor B'].astype(str)
-    # Merge the annotated scores with the BioGrid annotations
-    annotated_scores = annotated_scores.merge(biogrid, left_on=[first_prey_col, bait_col], right_on=['SWISS-PROT Accessions Interactor A', 'SWISS-PROT Accessions Interactor B'], how='left')
+        # Convert the integer column to string in both dataframes before merging
+        annotated_scores[first_prey_col] = annotated_scores[first_prey_col].astype(str)
+        annotated_scores[bait_col] = annotated_scores[bait_col].astype(str)
+        biogrid['SWISS-PROT Accessions Interactor A'] = biogrid['SWISS-PROT Accessions Interactor A'].astype(str)
+        biogrid['SWISS-PROT Accessions Interactor B'] = biogrid['SWISS-PROT Accessions Interactor B'].astype(str)
+        # Merge the annotated scores with the BioGrid annotations
+        annotated_scores = annotated_scores.merge(biogrid, left_on=[first_prey_col, bait_col], right_on=['SWISS-PROT Accessions Interactor A', 'SWISS-PROT Accessions Interactor B'], how='left')
 
-    # Fill in the In.BioGRID column with False for rows that have nan
-    annotated_scores['In.BioGRID'] = annotated_scores['In.BioGRID'].fillna(False)
-    # Do the same with Multivalidated
-    annotated_scores['Multivalidated'] = annotated_scores['Multivalidated'].fillna(False)
+        # Fill in the In.BioGRID column with False for rows that have nan
+        annotated_scores['In.BioGRID'] = annotated_scores['In.BioGRID'].fillna(False)
+        # Do the same with Multivalidated
+        annotated_scores['Multivalidated'] = annotated_scores['Multivalidated'].fillna(False)
+    except Exception:
+        logger.exception("BioGRID annotation failed (non-fatal, continuing)")
 
     # First need to write an input file for GOGO
     # Input file should be written to the same directory that the merged scores file came from. So from the scoreFile path remove everything after the last / and add gogo_input.txt
     gogo_input_path = args.scoreFile.rsplit('/', 1)[0] + '/gogo_input.txt'
-    print("GOGO input: " + gogo_input_path)
+    logger.info("Writing GOGO input to %s", gogo_input_path)
 
     start_time = time.time()
     bait_anns = {}
@@ -271,53 +331,74 @@ def main():
             # Now append the line to the file
             f.write(f"{bait_id} {' '.join(bait_go_ids)};{prey_id} {' '.join(go_ids)}\n")
 
-    print(f"Time taken to write GOGO input file: {time.time() - start_time}")
+    logger.info("GOGO input written in %.1f seconds", time.time() - start_time)
 
-    # TODO: GOGO subprocess call goes here
+    # Run GOGO subprocess
+    gogo_output_path = str(args.outputDir) + "/gogo_output.txt"
+    logger.info("Running GOGO (gene_pair_comb.pl)...")
     p = subprocess.run(["perl",
                         "/Scripts/GOGO/gene_pair_comb.pl",
                         str(gogo_input_path),
-                        str(args.outputDir) + "/gogo_output.txt"],
-                        cwd="/Scripts/GOGO")
+                        gogo_output_path],
+                        cwd="/Scripts/GOGO",
+                        capture_output=True, text=True)
+
+    if p.returncode != 0:
+        logger.error("GOGO subprocess failed (exit code %d)", p.returncode)
+        if p.stderr:
+            logger.error("GOGO stderr:\n%s", p.stderr)
+        sys.exit(1)
+    else:
+        logger.info("GOGO completed successfully")
 
     # Now read in the GOGO output file
-    print(f"Reading in GOGO output file... {str(args.outputDir)}")
-    output_filename = str(args.outputDir) + "/gogo_output.txt" # This will be the output file from GOGO
+    logger.info("Reading GOGO output from %s", gogo_output_path)
+    if not os.path.exists(gogo_output_path):
+        logger.error("GOGO output file not found: %s", gogo_output_path)
+        sys.exit(1)
 
     # Initialize the dictionary
     cc_dict = {}
 
-    counter = 0
+    try:
+        with open(gogo_output_path) as f:
+            content = f.readlines()
+            for line_num, item in enumerate(content, 1):
+                line = item.strip()
+                if not line:
+                    continue
 
-    # Read in the output file line by line
-    with open(output_filename) as f:
-        content = f.readlines()
-        for item in content:
-            line = item.strip()
+                baitgene = line.split(' ') [0]
+                preygene = line.split(';')[1].split(' ')[0]
 
-            baitgene = line.split(' ') [0]
-            preygene = line.split(';')[1].split(' ')[0]
+                # Now I need to get the CCO score
+                # The score comes after 'CCO'
+                score_str = line.split('CCO')[1].strip().split(' ')[0]
+                if score_str == 'NA':
+                    continue
+                score = float(score_str)
 
-            # Now I need to get the CCO score
-            # The score comes after 'CCO'
-            score = float(line.split('CCO')[1].strip().split(' ')[0])
-
-            # Now I need to add this to the dictionary
-            if baitgene in cc_dict:
-                cc_dict[baitgene][preygene] = score
-            else:
-                cc_dict[baitgene] = {preygene: score}
-
+                # Now I need to add this to the dictionary
+                if baitgene in cc_dict:
+                    cc_dict[baitgene][preygene] = score
+                else:
+                    cc_dict[baitgene] = {preygene: score}
+    except Exception:
+        logger.exception("Failed to parse GOGO output")
+        sys.exit(1)
 
     # Now I can add the CCO scores to the annotated scores
     annotated_scores['CCO'] = annotated_scores.apply(lambda x: get_cco_score(x[bait_col], x[first_prey_col], cc_dict), axis=1)
 
-    # TODO: This is where we will filter the annotations based on user preference.
-    # TODO: Also need to re-order the columns in a way that makes the most sense.
-
     # Save the annotated scores
     output_path = f"{args.outputDir}/annotated_scores.csv"
     annotated_scores.to_csv(output_path, index=False)
+    logger.info("Annotated scores written to %s (%d rows)", output_path, len(annotated_scores))
+
+    # Copy build info to output directory so users know dataset versions
+    build_info = f"{datasets_dir}/build_info.txt"
+    if os.path.isfile(build_info):
+        shutil.copy2(build_info, f"{args.outputDir}/build_info.txt")
 
 if __name__ == "__main__":
     main()

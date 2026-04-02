@@ -5,8 +5,12 @@ import argparse
 import subprocess
 import pandas as pd
 import aft_impute_saint
+import refactored_aft
 import compPASS_pval
 import time
+from log_config import get_logger, add_file_handler
+
+logger = get_logger(__name__)
 
 SAINT_EXPRESS_INT_DIR = "/bin/SAINTexpress-int"
 SAINT_EXPRESS_INT_DEFAULT_DIR = "/bin/SAINTexpress-int_default"
@@ -74,93 +78,131 @@ def main():
     # Main
     ########################################################################################################################
 
-    # Parse the proteinGroups.txt file
-
     # Check to see if the output directory exists. If not, create it.
     if not os.path.exists(args.outputPath):
         os.makedirs(args.outputPath)
 
+    add_file_handler(os.path.join(args.outputPath, "proximate.log"))
+
+    # Validate required input files exist
+    for required_file in ["prey.txt", "interaction.txt", "bait.txt", "to_CompPASS.csv"]:
+        fpath = os.path.join(args.scoreInputs, required_file)
+        if not os.path.exists(fpath):
+            logger.error(f"Required input file not found: {fpath}")
+            sys.exit(1)
+
     # Run the imputation
-    aft_impute_saint.filter_impute(f"{args.scoreInputs}/prey.txt", f"{args.scoreInputs}/interaction.txt", f"{args.scoreInputs}/", args.experimentalDesign, impute=bool(int(args.imputation)))
+    try:
+        if args.imputation == "2":
+            logger.info("Running refactored AFT imputation...")
+            refactored_aft.filter_impute(
+                f"{args.scoreInputs}/prey.txt",
+                f"{args.scoreInputs}/interaction.txt",
+                f"{args.scoreInputs}/",
+                args.experimentalDesign,
+                impute=True)
+        else:
+            logger.info("Running imputation filter (impute=%s)...", bool(int(args.imputation)))
+            aft_impute_saint.filter_impute(
+                f"{args.scoreInputs}/prey.txt",
+                f"{args.scoreInputs}/interaction.txt",
+                f"{args.scoreInputs}/",
+                args.experimentalDesign,
+                impute=bool(int(args.imputation)))
+    except Exception:
+        logger.exception("Imputation failed")
+        sys.exit(1)
+
+    # Verify imputation produced filtered_interaction.txt
+    filtered_interaction = os.path.join(args.scoreInputs, "filtered_interaction.txt")
+    if not os.path.exists(filtered_interaction):
+        logger.error("Imputation did not produce filtered_interaction.txt")
+        sys.exit(1)
 
     ########################################################################################################################
 
     # Run SAINT
-    print("Running SAINT...")
+    logger.info("Running SAINTexpress (quantType=%s, imputation=%s)...", args.quantType, args.imputation)
     if args.quantType == "Spectral Counts":
         if args.imputation == "1":
-            # TODO: Imputation for spectral counts
-            print("Imputation for spectral counts not yet implemented. Running SPC SAINT without imputation...")
-            p = subprocess.run([SAINT_EXPRESS_SPC_DIR,
-                                "-L",
-                                str(args.compress_n_rep),
-                                "filtered_interaction.txt",
-                                "prey.txt",
-                                "bait.txt"],
-                                cwd=args.scoreInputs)
-        else:
-            # Spectral Counts
-            p = subprocess.run([SAINT_EXPRESS_SPC_DIR,
-                                "-L",
-                                str(args.compress_n_rep),
-                                "filtered_interaction.txt",
-                                "prey.txt",
-                                "bait.txt"],
-                                cwd=args.scoreInputs)
+            logger.warning("Imputation for spectral counts not yet implemented. Running SPC SAINT without imputation...")
+        saint_cmd = [SAINT_EXPRESS_SPC_DIR,
+                     "-L", str(args.compress_n_rep),
+                     "filtered_interaction.txt", "prey.txt", "bait.txt"]
     else:
-        if args.imputation == "1":
-            p = subprocess.run([SAINT_EXPRESS_INT_DIR,
-                                "-L",
-                                str(args.compress_n_rep),
-                                "filtered_interaction.txt",
-                                "imputed_prey.txt",
-                                "bait.txt"],
-                                cwd=args.scoreInputs)
+        if args.imputation in ("1", "2"):
+            saint_cmd = [SAINT_EXPRESS_INT_DIR,
+                         "-L", str(args.compress_n_rep),
+                         "filtered_interaction.txt", "imputed_prey.txt", "bait.txt"]
         else:
-            # Intensity
-            p = subprocess.run([SAINT_EXPRESS_INT_DEFAULT_DIR,
-                                "-L",
-                                str(args.compress_n_rep),
-                                "filtered_interaction.txt",
-                                "prey.txt",
-                                "bait.txt"],
-                                cwd=args.scoreInputs)
+            saint_cmd = [SAINT_EXPRESS_INT_DEFAULT_DIR,
+                         "-L", str(args.compress_n_rep),
+                         "filtered_interaction.txt", "prey.txt", "bait.txt"]
+
+    logger.info("SAINTexpress command: %s", " ".join(saint_cmd))
+    p = subprocess.run(saint_cmd, cwd=args.scoreInputs,
+                       capture_output=True, text=True)
+
+    if p.returncode != 0:
+        logger.error("SAINTexpress failed (exit code %d)", p.returncode)
+        if p.stdout:
+            logger.error("SAINTexpress stdout:\n%s", p.stdout)
+        if p.stderr:
+            logger.error("SAINTexpress stderr:\n%s", p.stderr)
+        sys.exit(1)
+    else:
+        logger.info("SAINTexpress completed successfully")
+        if p.stdout:
+            logger.debug("SAINTexpress stdout:\n%s", p.stdout)
+
+    # Verify SAINT produced list.txt
+    saint_output = os.path.join(args.scoreInputs, "list.txt")
+    if not os.path.exists(saint_output):
+        logger.error("SAINTexpress did not produce list.txt at %s", saint_output)
+        sys.exit(1)
 
     ########################################################################################################################
     ########################################################################################################################
     # Run CompPASS
-    print("Running CompPASS...")
+    logger.info("Running CompPASS...")
 
-    # Read input file
-    comp_input = pd.read_csv(f"{args.outputPath}/to_CompPASS.csv", sep=',', index_col=0).astype({'Prey': str, 'Bait': str})
-
-    compPass_result = compPASS_pval.score_compPass(comp_input, 0.98, args.n_iterations)
-
-    compPass_result.to_csv(f"{args.outputPath}/compPASS.csv", index=False)
+    try:
+        comp_input = pd.read_csv(f"{args.outputPath}/to_CompPASS.csv", sep=',', index_col=0).astype({'Prey': str, 'Bait': str})
+        compPass_result = compPASS_pval.score_compPass(comp_input, 0.98, args.n_iterations)
+        compPass_result.to_csv(f"{args.outputPath}/compPASS.csv", index=False)
+        logger.info("CompPASS completed successfully")
+    except Exception:
+        logger.exception("CompPASS scoring failed")
+        sys.exit(1)
 
     ########################################################################################################################
     ########################################################################################################################
 
     # Merge CompPASS and SAINT outputs
-    print("Merging CompPASS and SAINT outputs...")
-    # Read in the SAINT output
-    saint = pd.read_csv(f"{args.scoreInputs}/list.txt", sep="\t")
+    logger.info("Merging CompPASS and SAINT outputs...")
+    try:
+        saint = pd.read_csv(f"{args.scoreInputs}/list.txt", sep="\t")
+        logger.info("SAINT output: %d rows, columns: %s", len(saint), list(saint.columns))
 
-    # Merge the two dataframes on two columns:
-    # "Bait" in SAINT corresponds to "Experiment.ID" in CompPASS
-    # "Prey" in SAINT corresponds to "Prey" in CompPASS
-    merged = pd.merge(saint, compPass_result, how="left", left_on=["Bait", "Prey"], right_on=["Experiment.ID", "Prey"])
+        merged = pd.merge(saint, compPass_result, how="left", left_on=["Bait", "Prey"], right_on=["Experiment.ID", "Prey"])
 
-    # Rename Columns
-    merged.rename(columns={
-        "Bait_y": "Bait.ID",
-        "Prey": "Prey.ID",}, inplace=True)
+        # Rename Columns
+        merged.rename(columns={
+            "Bait_y": "Bait.ID",
+            "Prey": "Prey.ID",}, inplace=True)
 
-    # Drop Columns
-    merged.drop(columns=["Bait_x","boosted_by"], inplace=True)
+        # Drop Columns
+        merged.drop(columns=["Bait_x","boosted_by"], inplace=True)
 
-    # Write the merged dataframe to a file
-    merged.to_csv(f"{args.outputPath}/merged.csv", index=False)
+        # Write the merged dataframe to a file
+        merged.to_csv(f"{args.outputPath}/merged.csv", index=False)
+        logger.info("Merged output written to %s/merged.csv (%d rows)", args.outputPath, len(merged))
+    except Exception:
+        logger.exception("Merging CompPASS and SAINT outputs failed")
+        sys.exit(1)
+
+    elapsed = time.time() - start_time
+    logger.info("Scoring completed in %.1f seconds", elapsed)
 
 if __name__ == "__main__":
     main()
