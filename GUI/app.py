@@ -26,7 +26,9 @@ from network_comparison import (
 )
 from plot_exports import pca_plot_matplotlib, saint_scatter_matplotlib
 import py4cytoscape as p4c
+from log_config import get_logger
 
+logger = get_logger(__name__)
 
 out_dir = "/Outputs"
 
@@ -41,7 +43,7 @@ app_ui = ui.page_navbar(
                                         "Dataset Name",
                                         placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
                             ui.input_select("input_format", "Input Format",
-                                           choices=["MaxQuant", "DIA-NN", "SAINT"],
+                                           choices=["MaxQuant", "DIA-NN", "FragPipe", "SAINT"],
                                            selected="MaxQuant"),
                             col_widths=[4, 8]
                         ),
@@ -73,6 +75,23 @@ app_ui = ui.page_navbar(
                                     )
                                 ),
                                 ui.output_data_frame("ed_table_diann"),
+                                col_widths=[4, 8]
+                            )
+                        ),
+                        ui.panel_conditional(
+                            "input.input_format === 'FragPipe'",
+                            ui.layout_columns(
+                                ui.div(
+                                    ui.input_file("fragpipe_file", "FragPipe combined_protein.tsv file"),
+                                    ui.tooltip(
+                                        ui.input_file("ed_file", "Experimental Design File"),
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                    ),
+                                    ui.input_select("quant_type", "Quantification Type",
+                                                  choices=["Intensity", "LFQ", "Spectral Counts"],
+                                                  selected="Intensity")
+                                ),
+                                ui.output_data_frame("ed_table_fragpipe"),
                                 col_widths=[4, 8]
                             )
                         ),
@@ -474,6 +493,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Return the ED table for DIA-NN input
         return render.DataGrid(ed_dataframe.get(), editable=True)
 
+    @render.data_frame
+    def ed_table_fragpipe():
+        # Return the ED table for FragPipe input
+        return render.DataGrid(ed_dataframe.get(), editable=True)
+
     @reactive.effect
     @reactive.event(input.bait)
     def update_bait_table():
@@ -533,7 +557,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.event(input.input_format)
     def clear_tables_on_format_change():
         # Clear tables when format changes to avoid showing stale data
-        if input.input_format.get() in ["MaxQuant", "DIA-NN"]:
+        if input.input_format.get() in ["MaxQuant", "DIA-NN", "FragPipe"]:
             # Clear SAINT bait table
             saint_baits.set(pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"]))
         elif input.input_format.get() == "SAINT":
@@ -623,6 +647,39 @@ def server(input: Inputs, output: Outputs, session: Session):
                     # Update the datasets dataframe
                     new_row = pd.DataFrame(
                         [[dataset_name, 'DIA-NN', 'Intensity', n_exp, n_ctrl, '', '', '']],
+                        columns=datasets.get().columns
+                    )
+                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                    datasets.set(updated_datasets)
+                    progress.set(1.0)
+
+                elif input_format == "FragPipe":
+                    progress.set(message="Parsing FragPipe inputs", value=0.25)
+
+                    if not input.fragpipe_file.get() or not input.ed_file.get():
+                        ui.notification_show(
+                            "Please upload both combined_protein.tsv and Experimental Design files",
+                            type="error"
+                        )
+                        return "Error: Missing files"
+
+                    progress.set(0.45)
+
+                    n_exp, n_ctrl = parse.parse_fragpipe(
+                        input.fragpipe_file.get()[0]['datapath'],
+                        input.ed_file.get()[0]['datapath'],
+                        input.quant_type.get(),
+                        output_path
+                    )
+
+                    # Overwrite ED.csv with edited table data
+                    ed_df = ed_table_fragpipe.data_view()
+                    ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+
+                    progress.set(0.85)
+
+                    new_row = pd.DataFrame(
+                        [[dataset_name, 'FragPipe', input.quant_type.get(), n_exp, n_ctrl, '', '', '']],
                         columns=datasets.get().columns
                     )
                     updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
@@ -781,58 +838,118 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.score_data)
     def score_data():
-        with ui.Progress(min=0, max=100) as progress:
-            progress.set(message="Scoring data", detail="Gathering inputs...", value=0)
+        dataset_name = input.score_dataset.get()
+        dataset_path = out_dir + '/' + dataset_name
 
-            # Get the quant type from the datasets dataframe
-            quant_type = datasets.get().loc[datasets.get()['Dataset Name'] == input.score_dataset.get(), 'Quant Type'].values[0]
+        try:
+            with ui.Progress(min=0, max=100) as progress:
+                progress.set(message="Scoring data", detail="Gathering inputs...", value=0)
 
-            progress.set(message="Scoring data", detail="Running SAINT...", value=25)
-            # Code for scoring goes here
-            result = subprocess.run([
-                "python3",
-                "/Scripts/score.py",
-                "--experimentalDesign",
-                out_dir + '/' + input.score_dataset.get() + "/ED.csv",
-                "--scoreInputs",
-                out_dir + '/' + input.score_dataset.get(),
-                "--outputPath",
-                out_dir + '/' + input.score_dataset.get(),
-                "--n-iterations",
-                str(input.wdfdr_iterations.get()),
-                "--imputation",
-                input.imputation_method.get(),
-                "--quantType",
-                quant_type,
-            ], capture_output=True, text=True)
+                # Get the quant type from the datasets dataframe
+                quant_type = datasets.get().loc[datasets.get()['Dataset Name'] == dataset_name, 'Quant Type'].values[0]
 
-            progress.set(message="Scoring data", detail="Adding protein annotation...", value=65)
+                progress.set(message="Scoring data", detail="Running SAINT...", value=25)
+                logger.info("Starting scoring for dataset '%s' (quant=%s)", dataset_name, quant_type)
 
-            # Add script for annotation here
-            ann_result = subprocess.run([
-                "python3",
-                "/Scripts/annotator.py",
-                "--organism",
-                input.organism.get(),
-                "--scoreFile",
-                out_dir + '/' + input.score_dataset.get() + "/merged.csv",
-                "--outputDir",
-                out_dir + '/' + input.score_dataset.get(),
-            ], capture_output=True, text=True)
+                result = subprocess.run([
+                    "python3",
+                    "/Scripts/score.py",
+                    "--experimentalDesign",
+                    dataset_path + "/ED.csv",
+                    "--scoreInputs",
+                    dataset_path,
+                    "--outputPath",
+                    dataset_path,
+                    "--n-iterations",
+                    str(input.wdfdr_iterations.get()),
+                    "--imputation",
+                    input.imputation_method.get(),
+                    "--quantType",
+                    quant_type,
+                ], capture_output=True, text=True)
 
-            progress.set(message="Scoring data", detail="Updating datasets...", value=90)
+                if result.stdout:
+                    logger.debug("score.py stdout:\n%s", result.stdout)
+                if result.stderr:
+                    logger.info("score.py stderr:\n%s", result.stderr)
 
-            # Update the datasets dataframe
-            curr_dataset = datasets.get().copy()
-            # Edit the row for the current dataset
+                if result.returncode != 0:
+                    logger.error("score.py failed (exit code %d)", result.returncode)
+                    error_detail = result.stderr[-1000:] if result.stderr else "No error output captured"
+                    ui.notification_show(
+                        f"Scoring failed for '{dataset_name}':\n{error_detail}",
+                        type="error",
+                        duration=None
+                    )
+                    return
 
-            imp_mapping = {0: 'Default', 1: 'Prey-specific', 2: 'Refactored AFT'}
+                # Verify merged.csv was produced before running annotation
+                merged_path = dataset_path + "/merged.csv"
+                if not os.path.exists(merged_path):
+                    logger.error("Scoring did not produce merged.csv at %s", merged_path)
+                    ui.notification_show(
+                        f"Scoring failed for '{dataset_name}': merged.csv was not produced",
+                        type="error",
+                        duration=None
+                    )
+                    return
 
-            curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Scored'] = 'Yes'
-            curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'Imputation'] = imp_mapping[int(input.imputation_method.get())]
-            curr_dataset.loc[curr_dataset['Dataset Name'] == input.score_dataset.get(), 'WDFDR iterations'] = input.wdfdr_iterations.get()
-            datasets.set(curr_dataset)
-            progress.set(message="Scoring data", detail="Done!", value=100)
+                progress.set(message="Scoring data", detail="Adding protein annotation...", value=65)
+                logger.info("Starting annotation for dataset '%s'", dataset_name)
+
+                ann_result = subprocess.run([
+                    "python3",
+                    "/Scripts/annotator.py",
+                    "--organism",
+                    input.organism.get(),
+                    "--scoreFile",
+                    merged_path,
+                    "--outputDir",
+                    dataset_path,
+                ], capture_output=True, text=True)
+
+                if ann_result.stdout:
+                    logger.debug("annotator.py stdout:\n%s", ann_result.stdout)
+                if ann_result.stderr:
+                    logger.info("annotator.py stderr:\n%s", ann_result.stderr)
+
+                if ann_result.returncode != 0:
+                    logger.error("annotator.py failed (exit code %d)", ann_result.returncode)
+                    error_detail = ann_result.stderr[-1000:] if ann_result.stderr else "No error output captured"
+                    ui.notification_show(
+                        f"Annotation failed for '{dataset_name}':\n{error_detail}",
+                        type="error",
+                        duration=None
+                    )
+                    return
+
+                progress.set(message="Scoring data", detail="Updating datasets...", value=90)
+
+                # Update the datasets dataframe only on success
+                curr_dataset = datasets.get().copy()
+
+                imp_mapping = {0: 'Default', 1: 'Prey-specific', 2: 'Refactored AFT'}
+
+                curr_dataset.loc[curr_dataset['Dataset Name'] == dataset_name, 'Scored'] = 'Yes'
+                curr_dataset.loc[curr_dataset['Dataset Name'] == dataset_name, 'Imputation'] = imp_mapping[int(input.imputation_method.get())]
+                curr_dataset.loc[curr_dataset['Dataset Name'] == dataset_name, 'WDFDR iterations'] = input.wdfdr_iterations.get()
+                datasets.set(curr_dataset)
+                progress.set(message="Scoring data", detail="Done!", value=100)
+
+                logger.info("Scoring and annotation completed successfully for '%s'", dataset_name)
+                ui.notification_show(
+                    f"Successfully scored and annotated dataset '{dataset_name}'",
+                    type="message",
+                    duration=5
+                )
+
+        except Exception as e:
+            logger.exception("Unexpected error during scoring of '%s'", dataset_name)
+            ui.notification_show(
+                f"Unexpected error during scoring: {str(e)}",
+                type="error",
+                duration=None
+            )
 
     # Quality controls tab
     @render_plotly

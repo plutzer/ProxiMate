@@ -7,6 +7,7 @@ clear, early feedback about file format and content issues.
 
 import pandas as pd
 import os
+from log_config import get_logger
 from ed_exceptions import (
     EDFileNotFoundError,
     EDFileEmptyError,
@@ -19,8 +20,12 @@ from ed_exceptions import (
     PGFileNotFoundError,
     PGFileError,
     PGMissingColumnError,
+    FPMissingColumnError,
     EDPGMismatchError
 )
+
+
+logger = get_logger(__name__)
 
 
 class EDValidator:
@@ -186,6 +191,64 @@ class PGValidator:
         return df
 
 
+class FPValidator:
+    """Validator for FragPipe combined_protein.tsv files"""
+
+    REQUIRED_COLUMNS = ["Protein", "Protein ID", "Gene", "Protein Length"]
+
+    @staticmethod
+    def validate_file_exists(filepath):
+        """Check if file exists and is readable"""
+        if not filepath or not os.path.exists(filepath):
+            raise PGFileNotFoundError(filepath)
+
+    @staticmethod
+    def validate_file_format(filepath):
+        """
+        Try to read the FragPipe file.
+        Returns the DataFrame if successful (just headers + few rows for speed).
+        """
+        try:
+            df = pd.read_csv(filepath, sep="\t", low_memory=False, nrows=10)
+            if df.empty:
+                raise PGFileError(
+                    message="FragPipe file is empty",
+                    user_message="The FragPipe combined_protein.tsv file is empty",
+                    suggestions=["Ensure the file contains data"]
+                )
+            return df
+        except PGFileError:
+            raise
+        except Exception as e:
+            raise PGFileError(
+                message=f"Error reading FragPipe file: {str(e)}",
+                user_message="Unable to read FragPipe file",
+                suggestions=[
+                    "Ensure this is a valid FragPipe combined_protein.tsv file",
+                    "File should be tab-separated",
+                    f"Technical details: {str(e)}"
+                ]
+            )
+
+    @classmethod
+    def validate_required_columns(cls, df):
+        """Check required columns are present"""
+        missing = [col for col in cls.REQUIRED_COLUMNS if col not in df.columns]
+        if missing:
+            raise FPMissingColumnError(missing)
+
+    @classmethod
+    def validate_fp_file(cls, filepath):
+        """
+        Complete validation of FragPipe file.
+        Returns DataFrame headers if all validations pass.
+        """
+        cls.validate_file_exists(filepath)
+        df = cls.validate_file_format(filepath)
+        cls.validate_required_columns(df)
+        return df
+
+
 class EDPGCrossValidator:
     """Cross-validation between ED and proteinGroups files"""
 
@@ -218,7 +281,7 @@ class EDPGCrossValidator:
             pg_examples = ", ".join(pg_only[:5])
             if len(pg_only) > 5:
                 pg_examples += f" (and {len(pg_only) - 5} more)"
-            print(f"WARNING: {len(pg_only)} experiment(s) in proteinGroups will be ignored (not in ED): {pg_examples}")
+            logger.warning("%d experiment(s) in proteinGroups will be ignored (not in ED): %s", len(pg_only), pg_examples)
 
         # Error only if ED experiments are missing from data file
         if ed_only:
@@ -248,9 +311,55 @@ class EDPGCrossValidator:
             diann_examples = ", ".join(diann_only[:5])
             if len(diann_only) > 5:
                 diann_examples += f" (and {len(diann_only) - 5} more)"
-            print(f"WARNING: {len(diann_only)} experiment(s) in DIA-NN will be ignored (not in ED): {diann_examples}")
+            logger.warning("%d experiment(s) in DIA-NN will be ignored (not in ED): %s", len(diann_only), diann_examples)
 
         # Error only if ED experiments are missing from data file
+        if ed_only:
+            raise EDPGMismatchError(ed_only, [])
+
+    @staticmethod
+    def validate_fragpipe_match(ed_df, fp_df):
+        """
+        Validate that experiments in ED match columns in FragPipe combined_protein.tsv.
+
+        FragPipe columns follow the pattern: {SampleName} {QuantSuffix}
+        Suffixes are stripped to extract sample names.
+        """
+        METADATA_COLS = {
+            "Protein", "Protein ID", "Entry Name", "Gene", "Protein Length",
+            "Organism", "Protein Existence", "Description",
+            "Protein Probability", "Top Peptide Probability",
+            "Combined Total Peptides", "Combined Spectral Count",
+            "Combined Unique Spectral Count", "Combined Total Spectral Count",
+            "Indistinguishable Proteins"
+        }
+        # Ordered longest-first for greedy matching
+        QUANT_SUFFIXES = [
+            " Unique Spectral Count", " Total Spectral Count",
+            " MaxLFQ Intensity", " Spectral Count", " Intensity"
+        ]
+
+        fp_experiments = set()
+        for col in fp_df.columns:
+            if col in METADATA_COLS:
+                continue
+            for suffix in QUANT_SUFFIXES:
+                if col.endswith(suffix):
+                    sample_name = col[:-len(suffix)]
+                    if sample_name:
+                        fp_experiments.add(sample_name)
+                    break
+
+        ed_experiments = set(ed_df['Experiment Name'].unique())
+        ed_only = sorted(list(ed_experiments - fp_experiments))
+        fp_only = sorted(list(fp_experiments - ed_experiments))
+
+        if fp_only:
+            fp_examples = ", ".join(fp_only[:5])
+            if len(fp_only) > 5:
+                fp_examples += f" (and {len(fp_only) - 5} more)"
+            logger.warning("%d experiment(s) in FragPipe will be ignored (not in ED): %s", len(fp_only), fp_examples)
+
         if ed_only:
             raise EDPGMismatchError(ed_only, [])
 
@@ -338,3 +447,26 @@ def validate_diann_inputs(ed_file, diann_file):
     EDPGCrossValidator.validate_diann_match(ed_df, diann_df)
 
     return ed_df, diann_df
+
+
+def validate_fragpipe_inputs(ed_file, fp_file):
+    """
+    Validate FragPipe inputs (ED + combined_protein.tsv).
+    Returns (ed_df, fp_df_headers) if successful.
+
+    Args:
+        ed_file: Path to experimental design CSV file
+        fp_file: Path to FragPipe combined_protein.tsv file
+
+    Returns:
+        tuple: (ed_df, fp_df) - Validated DataFrames
+
+    Raises:
+        EDFileError: If ED file has validation issues
+        PGFileError: If FragPipe file has validation issues
+        EDPGMismatchError: If experiment names don't match
+    """
+    ed_df = EDValidator.validate_ed_file(ed_file)
+    fp_df = FPValidator.validate_fp_file(fp_file)
+    EDPGCrossValidator.validate_fragpipe_match(ed_df, fp_df)
+    return ed_df, fp_df

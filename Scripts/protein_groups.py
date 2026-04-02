@@ -5,6 +5,9 @@ import re
 import sys
 from collections import defaultdict
 from math import sqrt, log2, pow
+from log_config import get_logger
+
+logger = get_logger(__name__)
 
 def get_quant_col_prefix(quantification):
     if quantification == "LFQ":
@@ -16,7 +19,7 @@ def get_quant_col_prefix(quantification):
 
 class ProteinGroups:
     def __init__(self, experimental_design, file_path, quantification_saint, quantification_comppass):
-        print("\nParsing MaxQuant proteinGroups: " + file_path)
+        logger.info("Parsing MaxQuant proteinGroups: %s", file_path)
 
         self.experimental_design = experimental_design
         self.quantification_saint = quantification_saint
@@ -35,8 +38,7 @@ class ProteinGroups:
             if col.startswith(self.quant_col_prefix_saint):
                 exp_name = col.split(self.quant_col_prefix_saint)[-1]
                 if exp_name not in self.experimental_design.name2experiment:
-                    print("WARNING: Experiment found in proteinGroups,"
-                          " but missing from experimental design:", exp_name)
+                    logger.warning("Experiment found in proteinGroups but missing from experimental design: %s", exp_name)
                 else:
                     if quantification_saint == "spc":
                         self.data[col] = self.data[col].astype(int)
@@ -68,19 +70,23 @@ class ProteinGroups:
             from ed_exceptions import EDPGMismatchError
             raise EDPGMismatchError(ed_only, [])
 
-        print("Removed", sum(self.data["Reverse"] == "+"), "reverses")
-        print("Removed", sum(self.data["Only identified by site"] == "+"), "only identified by site")
-        print("Removed", sum(self.data["Potential contaminant"] == "+"), "potential contaminants")
+        n_reverse = sum(self.data["Reverse"] == "+")
+        n_site_only = sum(self.data["Only identified by site"] == "+")
+        n_contam = sum(self.data["Potential contaminant"] == "+")
+        logger.info("Removed %d reverses", n_reverse)
+        logger.info("Removed %d only identified by site", n_site_only)
+        logger.info("Removed %d potential contaminants", n_contam)
 
         self.data = self.data[self.data["Reverse"] != "+"]
         self.data = self.data[self.data["Only identified by site"] != "+"]
         self.data = self.data[self.data["Potential contaminant"] != "+"]
 
         # remove proteins only found in controls
-        print("Removed", sum(self.data[self.bait_cols].sum(axis=1) == 0), "proteins found only in controls")
+        n_control_only = sum(self.data[self.bait_cols].sum(axis=1) == 0)
+        logger.info("Removed %d proteins found only in controls", n_control_only)
         self.data = self.data[self.data[self.bait_cols].sum(axis=1) > 0]
 
-        print("Kept", len(self.data.index), "proteins")
+        logger.info("Kept %d proteins", len(self.data.index))
 
         # # Write a filtered proteinGroups file for this quantification
         # self.data.to_csv(os.path.join(os.path.dirname(file_path), quantification_saint + "_proteinGroups.txt"),

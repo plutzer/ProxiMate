@@ -5,11 +5,13 @@ usage() {
     echo "Usage:"
     echo "  $0 [--organism ORG] --format maxquant  ED_file PG_file quant_type output_dir n_iterations imputation"
     echo "  $0 [--organism ORG] --format diann     ED_file matrix_file output_dir n_iterations imputation"
+    echo "  $0 [--organism ORG] --format fragpipe  ED_file FP_file quant_type output_dir n_iterations imputation"
     echo "  $0 [--organism ORG] --format saint     bait_file prey_file interaction_file quant_type output_dir n_iterations imputation"
     echo ""
     echo "Formats:"
     echo "  maxquant  - MaxQuant proteinGroups.txt + experimental design CSV"
     echo "  diann     - DIA-NN report.pg_matrix.tsv + experimental design CSV"
+    echo "  fragpipe  - FragPipe combined_protein.tsv + experimental design CSV"
     echo "  saint     - SAINT bait.txt, prey.txt, interaction.txt"
     echo ""
     echo "Arguments:"
@@ -54,6 +56,43 @@ case "$format" in
         python3 /Scripts/parse.py \
             --experimentalDesign "$ed_file" \
             --proteinGroups "$pg_file" \
+            --quantType "$quant" \
+            --outputPath "$output_dir" 2>&1 | tee -a "$output_dir/log.txt"
+
+        echo "=== Scoring ==="
+        python3 /Scripts/score.py \
+            --experimentalDesign "$ed_file" \
+            --scoreInputs "$output_dir" \
+            --outputPath "$output_dir" \
+            --n-iterations "$niters" \
+            --imputation "$imp" \
+            --quantType "$quant" 2>&1 | tee -a "$output_dir/log.txt"
+
+        echo "=== Annotating ==="
+        python3 /Scripts/annotator.py \
+            --organism "$organism" \
+            --scoreFile "$output_dir/merged.csv" \
+            --outputDir "$output_dir" 2>&1 | tee -a "$output_dir/log.txt"
+        ;;
+
+    fragpipe)
+        if [ "$#" -ne 6 ]; then
+            echo "Error: fragpipe format requires 6 arguments"
+            usage
+        fi
+        ed_file=$1
+        fp_file=$2
+        quant=$3
+        output_dir=$4
+        niters=$5
+        imp=$6
+
+        mkdir -p "$output_dir"
+
+        echo "=== Parsing (FragPipe) ==="
+        python3 /Scripts/parse.py \
+            --experimentalDesign "$ed_file" \
+            --fragpipeFile "$fp_file" \
             --quantType "$quant" \
             --outputPath "$output_dir" 2>&1 | tee -a "$output_dir/log.txt"
 
@@ -151,7 +190,7 @@ case "$format" in
         ;;
 
     *)
-        echo "Error: Unknown format '$format'. Must be maxquant, diann, or saint."
+        echo "Error: Unknown format '$format'. Must be maxquant, diann, fragpipe, or saint."
         usage
         ;;
 esac
