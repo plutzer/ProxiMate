@@ -31,6 +31,13 @@ docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/pr
   <ED_file> <matrix_file> <output_dir> <n_iterations> <imputation>
 ```
 
+**FragPipe:**
+```
+docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/proximate \
+  /bin/bash /run_pipeline.sh --format fragpipe \
+  <ED_file> <FP_file> <quant_type> <output_dir> <n_iterations> <imputation>
+```
+
 **SAINT:**
 ```
 docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/proximate \
@@ -40,7 +47,7 @@ docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/pr
 
 **Options:**
 - `--organism`: `human` (default), `mouse`, or `yeast` — add before `--format` if needed
-- `quant_type`: `Intensity`, `LFQ`, or `Spectral Counts` (DIA-NN always uses Intensity)
+- `quant_type`: `Intensity`, `LFQ`, or `Spectral Counts` (DIA-NN always uses Intensity; FragPipe supports all three)
 - `imputation`: `0` (none), `1` (prey-specific AFT), or `2` (refactored AFT)
 
 ## Annotations and Databases:

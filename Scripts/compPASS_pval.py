@@ -3,6 +3,9 @@ import pandas as pd
 import argparse
 import time
 from statsmodels.stats.multitest import multipletests
+from log_config import get_logger
+
+logger = get_logger(__name__)
 
 # Need a function for entropy calculation
 def entropy(xs):
@@ -236,7 +239,7 @@ def main():
     try:
         input = pd.read_csv(args.input, sep='\t', index_col=0).astype({'Prey': str, 'Bait': str})
     except:
-        print("Couldn't read input file with tab separator. Trying Commas.")
+        logger.warning("Couldn't read input file with tab separator. Trying commas.")
         input = pd.read_csv(args.input, sep=',', index_col=0).astype({'Prey': str, 'Bait': str})
 
 

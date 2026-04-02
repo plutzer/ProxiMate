@@ -6,6 +6,9 @@ from ed_exceptions import (
     EDFileEmptyError,
     EDInvalidReplicateError
 )
+from log_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class Experiment:
@@ -17,7 +20,7 @@ class Experiment:
 
 class ExperimentalDesign:
     def __init__(self, filepath):
-        print("\nParsing experimental design file: " + filepath)
+        logger.info("Parsing experimental design file: %s", filepath)
 
         self.name2experiment = dict()
 
