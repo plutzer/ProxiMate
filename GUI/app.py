@@ -124,7 +124,7 @@ app_ui = ui.page_navbar(
                                      "yeast": "Yeast (S. cerevisiae)"},
                             selected="human"),
                         ui.input_radio_buttons("imputation_method", "Imputation Method",
-                                              choices={0: "Default", 1: "Prey-specific", 2: "Refactored AFT"}),
+                                              choices={0: "Default", 1: "Prey-specific", 2: "Refactored AFT (In Development)"},),
                         ui.input_numeric("wdfdr_iterations", "WDFDR Iterations", value=1000),
                         ui.input_action_button("score_data", "Score Data")
                     ),
@@ -1873,7 +1873,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 available_columns = df.columns.tolist()
                 # Sort the columns alphabetically
                 available_columns.sort()
-                ui.update_selectize("custom_columns", choices=available_columns, selected=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"])
+                ui.update_selectize("custom_columns", choices=available_columns, selected=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"], server=True)
 
     custom_dataset = reactive.Value(pd.DataFrame())
     custom_dataset_total = reactive.Value(0)
