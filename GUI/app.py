@@ -54,7 +54,7 @@ app_ui = ui.page_navbar(
                                     ui.input_file("pg_file", "MaxQuant proteinGroups.txt file"),
                                     ui.tooltip(
                                         ui.input_file("ed_file", "Experimental Design File"),
-                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID. Group (optional, for paired controls): test rows specify one positive integer (e.g. 1); controls can list multiple (1,2) or use * for universal."
                                     ),
                                     ui.input_select("quant_type", "Quantification Type",
                                                   choices=["Intensity", "LFQ", "Spectral Counts"],
@@ -71,7 +71,7 @@ app_ui = ui.page_navbar(
                                     ui.input_file("diann_matrix_file", "DIA-NN report.pg_matrix.tsv file"),
                                     ui.tooltip(
                                         ui.input_file("ed_file", "Experimental Design File"),
-                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID. Group (optional, for paired controls): test rows specify one positive integer (e.g. 1); controls can list multiple (1,2) or use * for universal."
                                     )
                                 ),
                                 ui.output_data_frame("ed_table_diann"),
@@ -85,7 +85,7 @@ app_ui = ui.page_navbar(
                                     ui.input_file("fragpipe_file", "FragPipe combined_protein.tsv file"),
                                     ui.tooltip(
                                         ui.input_file("ed_file", "Experimental Design File"),
-                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID. Group (optional, for paired controls): test rows specify one positive integer (e.g. 1); controls can list multiple (1,2) or use * for universal."
                                     ),
                                     ui.input_select("quant_type", "Quantification Type",
                                                   choices=["Intensity", "LFQ", "Spectral Counts"],
@@ -475,7 +475,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     ))
 
     ed_dataframe = reactive.Value(pd.DataFrame(
-        columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID"]
+        columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID", "Group"]
     ))
 
     @render.data_frame
@@ -536,6 +536,10 @@ def server(input: Inputs, output: Outputs, session: Session):
                 # Add Bait ID column if not present
                 if "Bait ID" not in ed_df.columns:
                     ed_df['Bait ID'] = 'None'
+
+                # Add Group column if not present (optional, for paired controls)
+                if "Group" not in ed_df.columns:
+                    ed_df['Group'] = ''
 
                 # Validate Type values
                 invalid_types = ed_df[~ed_df['Type'].isin(['C', 'T'])]

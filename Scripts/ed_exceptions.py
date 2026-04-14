@@ -126,6 +126,97 @@ class EDInvalidReplicateError(EDFileError):
         super().__init__(message, user_message, suggestions)
 
 
+class EDInvalidGroupError(EDFileError):
+    """Group column contains invalid values or inconsistent group assignments."""
+
+    def __init__(self, reason, offenders):
+        self.reason = reason
+        self.offenders = offenders
+        n = len(offenders)
+        plural = "s" if n != 1 else ""
+
+        if reason == "invalid_group_value":
+            rows = _format_row_examples(offenders)
+            message = f"Invalid Group values in {n} row{plural}"
+            user_message = f"Found {n} row{plural} with an invalid Group value"
+            suggestions = [
+                "Group must be a positive integer (1, 2, 3, ...)",
+                "For multi-group controls, use a comma-separated list of integers (e.g. '1,2')",
+                "Use '*' on a control row to mark it as a universal control",
+                f"Problem rows: {rows}",
+            ]
+
+        elif reason == "test_row_multi_group":
+            rows = _format_row_examples(offenders)
+            message = f"Test rows declare multiple groups in {n} row{plural}"
+            user_message = f"Found {n} test row{plural} that declare more than one group"
+            suggestions = [
+                "Each test bait row must declare exactly one group number",
+                "Only control rows may be shared across multiple groups",
+                f"Problem rows: {rows}",
+            ]
+
+        elif reason == "test_row_wildcard":
+            rows = _format_row_examples(offenders)
+            message = f"Test rows use '*' in {n} row{plural}"
+            user_message = f"Found {n} test row{plural} using '*' (wildcard) for Group"
+            suggestions = [
+                "'*' is reserved for control rows (universal controls)",
+                "Each test bait must declare a specific group number",
+                f"Problem rows: {rows}",
+            ]
+
+        elif reason == "test_row_missing_group_in_grouped_run":
+            rows = _format_row_examples(offenders)
+            message = f"Test rows are missing Group values in a grouped run ({n} row{plural})"
+            user_message = (
+                f"Found {n} test row{plural} with no Group value in a grouped run"
+            )
+            suggestions = [
+                "When any row declares a Group, every test row must also declare one",
+                "Fill in the Group column for all test rows, or clear it entirely for a standard run",
+                f"Problem rows: {rows}",
+            ]
+
+        elif reason == "control_wildcard_with_explicit_groups":
+            rows = _format_row_examples(offenders)
+            message = f"Control rows mix '*' with explicit groups in {n} row{plural}"
+            user_message = (
+                f"Found {n} control row{plural} that mix '*' with specific group numbers"
+            )
+            suggestions = [
+                "Use either '*' alone (universal) or a list of group numbers — not both",
+                "Example: '*' OR '1,2', but not '*,1'",
+                f"Problem rows: {rows}",
+            ]
+
+        elif reason == "bait_group_has_no_control":
+            values = ", ".join(str(g) for g in offenders)
+            message = f"Test groups with no matching control: {values}"
+            user_message = (
+                f"These test group{'s' if n != 1 else ''} have no matching control: {values}"
+            )
+            suggestions = [
+                "Every test group must be covered by at least one control row",
+                "Assign a control to each missing group, or add a universal control ('*')",
+            ]
+
+        else:
+            message = f"Invalid Group column (reason: {reason})"
+            user_message = "Group column contains invalid values"
+            suggestions = []
+
+        super().__init__(message, user_message, suggestions)
+
+
+def _format_row_examples(row_indices, limit=5):
+    """Format a list of row numbers, truncating to `limit` with an 'and N more' suffix."""
+    examples = ", ".join(str(r) for r in row_indices[:limit])
+    if len(row_indices) > limit:
+        examples += f" (and {len(row_indices) - limit} more)"
+    return examples
+
+
 class EDMissingValueError(EDFileError):
     """Required fields contain empty/null values"""
 

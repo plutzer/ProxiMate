@@ -3,18 +3,103 @@ import sys
 import os
 import argparse
 import subprocess
+import shutil
+import json
 import pandas as pd
 import aft_impute_saint
 import refactored_aft
 import compPASS_pval
 import time
 from log_config import get_logger, add_file_handler
+from experimental_design import ExperimentalDesign
+from bfdr_pool import recompute_bfdr
 
 logger = get_logger(__name__)
 
 SAINT_EXPRESS_INT_DIR = "/bin/SAINTexpress-int"
 SAINT_EXPRESS_INT_DEFAULT_DIR = "/bin/SAINTexpress-int_default"
 SAINT_EXPRESS_SPC_DIR = "/bin/SAINTexpress-spc"
+
+
+def _build_saint_cmd(compress_n_rep, quant_type, imputation, prey_filename):
+    """Build the SAINTexpress command vector. Filenames are relative to cwd."""
+    if quant_type == "Spectral Counts":
+        if imputation == "1":
+            logger.warning("Imputation for spectral counts not yet implemented. Running SPC SAINT without imputation...")
+        return [SAINT_EXPRESS_SPC_DIR,
+                "-L", str(compress_n_rep),
+                "filtered_interaction.txt", "prey.txt", "bait.txt"]
+
+    if imputation in ("1", "2"):
+        return [SAINT_EXPRESS_INT_DIR,
+                "-L", str(compress_n_rep),
+                "filtered_interaction.txt", prey_filename, "bait.txt"]
+
+    return [SAINT_EXPRESS_INT_DEFAULT_DIR,
+            "-L", str(compress_n_rep),
+            "filtered_interaction.txt", prey_filename, "bait.txt"]
+
+
+def _choose_prey_filename(quant_type, imputation):
+    """SAINT reads imputed_prey.txt for intensity+imputation runs; prey.txt otherwise."""
+    if quant_type != "Spectral Counts" and imputation in ("1", "2"):
+        return "imputed_prey.txt"
+    return "prey.txt"
+
+
+def _run_saint(cwd, compress_n_rep, quant_type, imputation, prey_filename):
+    """Invoke SAINTexpress in `cwd`. Writes list.txt there. Exits on failure."""
+    saint_cmd = _build_saint_cmd(compress_n_rep, quant_type, imputation, prey_filename)
+    logger.info("SAINTexpress command (cwd=%s): %s", cwd, " ".join(saint_cmd))
+    p = subprocess.run(saint_cmd, cwd=cwd, capture_output=True, text=True)
+    if p.returncode != 0:
+        logger.error("SAINTexpress failed (exit code %d) in %s", p.returncode, cwd)
+        if p.stdout:
+            logger.error("SAINTexpress stdout:\n%s", p.stdout)
+        if p.stderr:
+            logger.error("SAINTexpress stderr:\n%s", p.stderr)
+        sys.exit(1)
+    logger.info("SAINTexpress completed successfully (cwd=%s)", cwd)
+    if p.stdout:
+        logger.debug("SAINTexpress stdout:\n%s", p.stdout)
+
+    list_path = os.path.join(cwd, "list.txt")
+    if not os.path.exists(list_path):
+        logger.error("SAINTexpress did not produce list.txt at %s", list_path)
+        sys.exit(1)
+
+
+def _build_group_saint_inputs(src_dir, group_dir, ed, group, use_imputed_prey):
+    """Build per-group SAINT inputs by filtering bait/interaction files to the group's
+    experiments and copying the global prey file(s) unchanged."""
+    tests, ctrls = ed.get_experiments_for_group(group)
+    allowed = {e.attributes["Experiment Name"] for e in (tests + ctrls)}
+
+    bait_in = pd.read_csv(
+        os.path.join(src_dir, "bait.txt"),
+        sep="\t", header=None, names=["ExperimentName", "Bait", "Type"],
+    )
+    bait_in[bait_in["ExperimentName"].isin(allowed)].to_csv(
+        os.path.join(group_dir, "bait.txt"),
+        sep="\t", header=False, index=False,
+    )
+
+    inter_in = pd.read_csv(
+        os.path.join(src_dir, "filtered_interaction.txt"),
+        sep="\t", header=None,
+        names=["ExperimentName", "Bait", "Prey", "Intensity"],
+    )
+    inter_in[inter_in["ExperimentName"].isin(allowed)].to_csv(
+        os.path.join(group_dir, "filtered_interaction.txt"),
+        sep="\t", header=False, index=False,
+    )
+
+    # Prey files stay global — SAINT's prey universe must match across groups
+    # so BFDR re-pooling is well-defined.
+    shutil.copy(os.path.join(src_dir, "prey.txt"), group_dir)
+    if use_imputed_prey:
+        shutil.copy(os.path.join(src_dir, "imputed_prey.txt"), group_dir)
+
 
 def main():
     start_time = time.time()
@@ -121,45 +206,63 @@ def main():
 
     ########################################################################################################################
 
-    # Run SAINT
-    logger.info("Running SAINTexpress (quantType=%s, imputation=%s)...", args.quantType, args.imputation)
-    if args.quantType == "Spectral Counts":
-        if args.imputation == "1":
-            logger.warning("Imputation for spectral counts not yet implemented. Running SPC SAINT without imputation...")
-        saint_cmd = [SAINT_EXPRESS_SPC_DIR,
-                     "-L", str(args.compress_n_rep),
-                     "filtered_interaction.txt", "prey.txt", "bait.txt"]
-    else:
-        if args.imputation in ("1", "2"):
-            saint_cmd = [SAINT_EXPRESS_INT_DIR,
-                         "-L", str(args.compress_n_rep),
-                         "filtered_interaction.txt", "imputed_prey.txt", "bait.txt"]
-        else:
-            saint_cmd = [SAINT_EXPRESS_INT_DEFAULT_DIR,
-                         "-L", str(args.compress_n_rep),
-                         "filtered_interaction.txt", "prey.txt", "bait.txt"]
-
-    logger.info("SAINTexpress command: %s", " ".join(saint_cmd))
-    p = subprocess.run(saint_cmd, cwd=args.scoreInputs,
-                       capture_output=True, text=True)
-
-    if p.returncode != 0:
-        logger.error("SAINTexpress failed (exit code %d)", p.returncode)
-        if p.stdout:
-            logger.error("SAINTexpress stdout:\n%s", p.stdout)
-        if p.stderr:
-            logger.error("SAINTexpress stderr:\n%s", p.stderr)
+    # Parse ED once to decide between legacy and grouped SAINT flow
+    try:
+        ed = ExperimentalDesign(args.experimentalDesign)
+    except Exception:
+        logger.exception("Failed to parse experimental design for grouping decision")
         sys.exit(1)
-    else:
-        logger.info("SAINTexpress completed successfully")
-        if p.stdout:
-            logger.debug("SAINTexpress stdout:\n%s", p.stdout)
 
-    # Verify SAINT produced list.txt
-    saint_output = os.path.join(args.scoreInputs, "list.txt")
-    if not os.path.exists(saint_output):
-        logger.error("SAINTexpress did not produce list.txt at %s", saint_output)
-        sys.exit(1)
+    prey_filename = _choose_prey_filename(args.quantType, args.imputation)
+    use_imputed_prey = (prey_filename == "imputed_prey.txt")
+
+    if ed.is_grouped():
+        groups = ed.get_groups()
+        logger.info("Running SAINTexpress in grouped mode (quantType=%s, imputation=%s, %d groups: %s)",
+                    args.quantType, args.imputation, len(groups), groups)
+
+        groups_root = os.path.join(args.outputPath, "groups")
+        os.makedirs(groups_root, exist_ok=True)
+
+        per_group_dfs = []
+        manifest_entries = []
+        for group in groups:
+            group_dir = os.path.join(groups_root, str(group))
+            os.makedirs(group_dir, exist_ok=True)
+            _build_group_saint_inputs(args.scoreInputs, group_dir, ed, group, use_imputed_prey)
+            _run_saint(group_dir, args.compress_n_rep, args.quantType,
+                       args.imputation, prey_filename)
+
+            df = pd.read_csv(os.path.join(group_dir, "list.txt"), sep="\t")
+            df["source_group"] = group
+            per_group_dfs.append(df)
+
+            tests, ctrls = ed.get_experiments_for_group(group)
+            manifest_entries.append({
+                "group": group,
+                "n_test": len(tests),
+                "n_control": len(ctrls),
+                "list_txt": f"groups/{group}/list.txt",
+            })
+
+        saint_merged = pd.concat(per_group_dfs, ignore_index=True)
+        saint_merged = recompute_bfdr(saint_merged)
+        saint_merged.to_csv(os.path.join(args.scoreInputs, "list.txt"), sep="\t", index=False)
+
+        with open(os.path.join(groups_root, "manifest.json"), "w") as f:
+            json.dump({
+                "run_mode": "grouped",
+                "groups": manifest_entries,
+                "imputation": args.imputation,
+                "quant_type": args.quantType,
+                "bfdr_repooled": True,
+            }, f, indent=2)
+        logger.info("Grouped SAINT complete; wrote concatenated list.txt (%d rows) and manifest.json",
+                    len(saint_merged))
+    else:
+        logger.info("Running SAINTexpress (quantType=%s, imputation=%s)...", args.quantType, args.imputation)
+        _run_saint(args.scoreInputs, args.compress_n_rep, args.quantType,
+                   args.imputation, prey_filename)
 
     ########################################################################################################################
     ########################################################################################################################
@@ -193,6 +296,10 @@ def main():
 
         # Drop Columns
         merged.drop(columns=["Bait_x","boosted_by"], inplace=True)
+
+        # Keep output schema stable: legacy runs get a NA source_group column
+        if "source_group" not in merged.columns:
+            merged["source_group"] = pd.NA
 
         # Write the merged dataframe to a file
         merged.to_csv(f"{args.outputPath}/merged.csv", index=False)
