@@ -10,12 +10,10 @@ import matplotlib.pyplot as plt
 from patsy import dmatrix
 from sklearn.linear_model import LinearRegression
 from statsmodels.api import GLM, families
+from log_config import get_logger
 
-# For development, I'll start with hardcoded values for pi
-# pi = 0.342 # OLS Avg
-# pi = 0.356 # OLS Weighted Avg
-# pi = 0.297 # GLM Avg
-pi = 0.313 # GLM Weighted Avg
+logger = get_logger(__name__)
+
 
 def protein_log_likelihood(prey_intensities, mu, sigma, Tlim, pi):
     y = np.asarray(prey_intensities)
@@ -78,9 +76,80 @@ def get_initial_params(prey_intensities):
     return (mu, sigma)
 
 
+def _fit_logistic_spline_at_max(prey_stats, df=5):
+    """Fit logistic (GLM Binomial) spline to missingness vs mean_log2;
+    return predicted missingness at max observed mean_log2."""
+    x = prey_stats['mean_log2'].values
+    y = prey_stats['missingness'].values
+    spline_basis = np.asarray(dmatrix("cr(x, df={})".format(df), {"x": x}))
+    x_smooth = np.linspace(x.min(), x.max(), 300)
+    spline_smooth = np.asarray(dmatrix(
+        "cr(x_smooth, df={}, lower_bound={}, upper_bound={})".format(df, x.min(), x.max()),
+        {"x_smooth": x_smooth}))
+    y_clamped = np.clip(y, 1e-6, 1 - 1e-6)
+    glm_model = GLM(y_clamped, spline_basis, family=families.Binomial()).fit()
+    y_glm = glm_model.predict(spline_smooth)
+    return float(y_glm[-1])
+
+
+def _pi_for_experiments(interaction, experiments, df=5, min_preys=10):
+    sub = interaction[interaction['ExperimentID'].isin(experiments)]
+    prey_stats = sub.groupby('Prey')['Intensity'].agg(
+        missingness=lambda x: (x == 0).mean(),
+        mean_log2=lambda x: np.log2(x[x > 0]).mean()
+    ).dropna()
+    if len(prey_stats) < min_preys:
+        raise RuntimeError(f"only {len(prey_stats)} preys available (need >= {min_preys})")
+    return _fit_logistic_spline_at_max(prey_stats, df=df)
+
+
+def estimate_pi(interaction, ed, method, selected_bait=None, min_replicates=3):
+    """Return a scalar pi from control data. Raises on any error condition."""
+    controls = ed[ed['Type'] == 'C']
+    bait_exps = controls.groupby('Bait')['Experiment Name'].agg(list)
+
+    if method == 'single_bait':
+        if not selected_bait:
+            raise ValueError("method='single_bait' requires selected_bait")
+        if selected_bait not in bait_exps.index:
+            raise ValueError(f"control bait '{selected_bait}' not found in ED")
+        exps = bait_exps[selected_bait]
+        if len(exps) < min_replicates:
+            raise ValueError(
+                f"bait '{selected_bait}' has {len(exps)} replicates (need >= {min_replicates})"
+            )
+        pi = _pi_for_experiments(interaction, exps)
+        logger.info("pi=%.4f from single bait '%s' (n=%d)", pi, selected_bait, len(exps))
+        return pi
+
+    if method == 'weighted_average':
+        eligible = {b: e for b, e in bait_exps.items() if len(e) >= min_replicates}
+        if not eligible:
+            raise ValueError(
+                f"no control baits with >= {min_replicates} replicates for weighted_average pi estimation"
+            )
+        pis, weights = [], []
+        for bait, exps in eligible.items():
+            try:
+                pi_b = _pi_for_experiments(interaction, exps)
+                pis.append(pi_b)
+                weights.append(len(exps))
+                logger.info("  control '%s' (n=%d): pi=%.4f", bait, len(exps), pi_b)
+            except Exception as err:
+                logger.warning("  control '%s' spline fit skipped: %s", bait, err)
+        if not pis:
+            raise RuntimeError("all eligible control-bait spline fits failed")
+        pi = float(np.average(pis, weights=weights))
+        logger.info("pi=%.4f (weighted average over %d baits)", pi, len(pis))
+        return pi
+
+    raise ValueError(f"unknown pi method: {method}")
+
+
 #### MAIN function ####
 
-def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False):
+def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False,
+                  pi_method='weighted_average', pi_bait=None):
     # Read in interaction data
     interaction = pd.read_csv(interaction_path, sep='\t', header=None)
     # Create column names
@@ -103,6 +172,8 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
         prey_data.columns = ['PreyID', 'PreyGene']
         # Add a column for the mu parameter for each prey
         prey_data['mu'] = 0.0
+
+        pi = estimate_pi(interaction, ed, method=pi_method, selected_bait=pi_bait)
 
         # Start a timer to track how long the imputation takes
         start = time.time()
@@ -251,7 +322,10 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
 
     if impute:
         prey_data.to_csv(output_dir + 'imputed_prey.txt', sep='\t', index=False, header=False)
-    interaction.to_csv(output_dir + 'filtered_interaction.txt', sep='\t', index=False, header=False)
+    # Drop the internal BaitID helper column so the written file matches the
+    # expected 4-column SAINT format (ExperimentID, Bait, Prey, Intensity).
+    interaction[['ExperimentID', 'Bait', 'Prey', 'Intensity']].to_csv(
+        output_dir + 'filtered_interaction.txt', sep='\t', index=False, header=False)
 
 
 def main():

@@ -15,19 +15,31 @@ usage() {
     echo "  saint     - SAINT bait.txt, prey.txt, interaction.txt"
     echo ""
     echo "Arguments:"
-    echo "  --organism   - human (default), mouse, or yeast"
-    echo "  quant_type   - Intensity, LFQ, or 'Spectral Counts'"
-    echo "  n_iterations - Number of CompPASS resampling iterations"
-    echo "  imputation   - 0 (none), 1 (prey-specific AFT), or 2 (refactored AFT)"
+    echo "  --organism    - human (default), mouse, or yeast"
+    echo "  --pi-method   - weighted_average (default) or single_bait; applies when imputation=2"
+    echo "  --pi-bait     - required when --pi-method=single_bait: control Bait name"
+    echo "  quant_type    - Intensity, LFQ, or 'Spectral Counts'"
+    echo "  n_iterations  - Number of CompPASS resampling iterations"
+    echo "  imputation    - 0 (none), 1 (prey-specific AFT), or 2 (refactored AFT)"
     exit 1
 }
 
-# Parse optional --organism flag
+# Parse optional top-level flags (--organism, --pi-method, --pi-bait) in any order
 organism="human"
-if [ "$1" == "--organism" ]; then
-    organism=$2
-    shift 2
-fi
+pi_method="weighted_average"
+pi_bait=""
+while true; do
+    case "$1" in
+        --organism)   organism="$2"; shift 2 ;;
+        --pi-method)  pi_method="$2"; shift 2 ;;
+        --pi-bait)    pi_bait="$2"; shift 2 ;;
+        *) break ;;
+    esac
+done
+
+# Reusable arg array threaded into each score.py invocation
+pi_args=(--pi-method "$pi_method")
+[ -n "$pi_bait" ] && pi_args+=(--pi-bait "$pi_bait")
 
 # Check for --format flag
 if [ "$1" != "--format" ] || [ -z "$2" ]; then
@@ -66,7 +78,7 @@ case "$format" in
             --outputPath "$output_dir" \
             --n-iterations "$niters" \
             --imputation "$imp" \
-            --quantType "$quant" 2>&1 | tee -a "$output_dir/log.txt"
+            --quantType "$quant" "${pi_args[@]}" 2>&1 | tee -a "$output_dir/log.txt"
 
         echo "=== Annotating ==="
         python3 /Scripts/annotator.py \
@@ -103,7 +115,7 @@ case "$format" in
             --outputPath "$output_dir" \
             --n-iterations "$niters" \
             --imputation "$imp" \
-            --quantType "$quant" 2>&1 | tee -a "$output_dir/log.txt"
+            --quantType "$quant" "${pi_args[@]}" 2>&1 | tee -a "$output_dir/log.txt"
 
         echo "=== Annotating ==="
         python3 /Scripts/annotator.py \
@@ -140,7 +152,7 @@ case "$format" in
             --outputPath "$output_dir" \
             --n-iterations "$niters" \
             --imputation "$imp" \
-            --quantType "$quant" 2>&1 | tee -a "$output_dir/log.txt"
+            --quantType "$quant" "${pi_args[@]}" 2>&1 | tee -a "$output_dir/log.txt"
 
         echo "=== Annotating ==="
         python3 /Scripts/annotator.py \
@@ -180,7 +192,7 @@ case "$format" in
             --outputPath "$output_dir" \
             --n-iterations "$niters" \
             --imputation "$imp" \
-            --quantType "$quant" 2>&1 | tee -a "$output_dir/log.txt"
+            --quantType "$quant" "${pi_args[@]}" 2>&1 | tee -a "$output_dir/log.txt"
 
         echo "=== Annotating ==="
         python3 /Scripts/annotator.py \

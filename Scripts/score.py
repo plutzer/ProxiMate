@@ -73,13 +73,28 @@ def _build_group_saint_inputs(src_dir, group_dir, ed, group, use_imputed_prey):
     """Build per-group SAINT inputs by filtering bait/interaction files to the group's
     experiments and copying the global prey file(s) unchanged."""
     tests, ctrls = ed.get_experiments_for_group(group)
-    allowed = {e.attributes["Experiment Name"] for e in (tests + ctrls)}
+    # Force str — ED values round-trip as CSV so they are strings; if Experiment
+    # Names look numeric, pandas will infer int64 on the files below and the
+    # isin() match would silently return zero rows.
+    allowed = {str(e.attributes["Experiment Name"]) for e in (tests + ctrls)}
+    logger.info("Group %s: %d test + %d control experiments; allowed names: %s",
+                group, len(tests), len(ctrls), sorted(allowed))
 
     bait_in = pd.read_csv(
         os.path.join(src_dir, "bait.txt"),
         sep="\t", header=None, names=["ExperimentName", "Bait", "Type"],
+        usecols=[0, 1, 2],
+        dtype={"ExperimentName": str, "Bait": str, "Type": str},
     )
-    bait_in[bait_in["ExperimentName"].isin(allowed)].to_csv(
+    bait_out = bait_in[bait_in["ExperimentName"].isin(allowed)]
+    logger.info("Group %s bait.txt: %d rows in, %d rows after filter",
+                group, len(bait_in), len(bait_out))
+    if bait_out.empty and not bait_in.empty:
+        logger.error("Group %s bait.txt filter produced zero rows. "
+                     "Sample ExperimentName values in bait.txt (dtype=%s): %s",
+                     group, bait_in["ExperimentName"].dtype,
+                     bait_in["ExperimentName"].head(5).tolist())
+    bait_out.to_csv(
         os.path.join(group_dir, "bait.txt"),
         sep="\t", header=False, index=False,
     )
@@ -88,8 +103,18 @@ def _build_group_saint_inputs(src_dir, group_dir, ed, group, use_imputed_prey):
         os.path.join(src_dir, "filtered_interaction.txt"),
         sep="\t", header=None,
         names=["ExperimentName", "Bait", "Prey", "Intensity"],
+        usecols=[0, 1, 2, 3],
+        dtype={"ExperimentName": str, "Bait": str, "Prey": str},
     )
-    inter_in[inter_in["ExperimentName"].isin(allowed)].to_csv(
+    inter_out = inter_in[inter_in["ExperimentName"].isin(allowed)]
+    logger.info("Group %s filtered_interaction.txt: %d rows in, %d rows after filter",
+                group, len(inter_in), len(inter_out))
+    if inter_out.empty and not inter_in.empty:
+        logger.error("Group %s filtered_interaction.txt filter produced zero rows. "
+                     "Sample ExperimentName values in file (dtype=%s): %s",
+                     group, inter_in["ExperimentName"].dtype,
+                     inter_in["ExperimentName"].head(5).tolist())
+    inter_out.to_csv(
         os.path.join(group_dir, "filtered_interaction.txt"),
         sep="\t", header=False, index=False,
     )
@@ -157,6 +182,14 @@ def main():
                         help="SAINT: quantification type (intensity, spc, LFQ)",
                         default="Intensity")
 
+    # pi estimation options (imputation=2 only)
+    parser.add_argument("--pi-method", dest="pi_method",
+                        choices=["weighted_average", "single_bait"],
+                        default="weighted_average",
+                        help="Refactored AFT (imputation=2): how to estimate pi from controls.")
+    parser.add_argument("--pi-bait", dest="pi_bait", default=None,
+                        help="Required when --pi-method=single_bait: control Bait name to fit.")
+
     args = parser.parse_args()
 
     ########################################################################################################################
@@ -179,13 +212,19 @@ def main():
     # Run the imputation
     try:
         if args.imputation == "2":
-            logger.info("Running refactored AFT imputation...")
+            if args.pi_method == "single_bait" and not args.pi_bait:
+                logger.error("--pi-method=single_bait requires --pi-bait")
+                sys.exit(1)
+            logger.info("Running refactored AFT imputation (pi_method=%s, pi_bait=%s)...",
+                        args.pi_method, args.pi_bait)
             refactored_aft.filter_impute(
                 f"{args.scoreInputs}/prey.txt",
                 f"{args.scoreInputs}/interaction.txt",
                 f"{args.scoreInputs}/",
                 args.experimentalDesign,
-                impute=True)
+                impute=True,
+                pi_method=args.pi_method,
+                pi_bait=args.pi_bait)
         else:
             logger.info("Running imputation filter (impute=%s)...", bool(int(args.imputation)))
             aft_impute_saint.filter_impute(
