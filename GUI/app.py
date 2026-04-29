@@ -54,7 +54,7 @@ app_ui = ui.page_navbar(
                                     ui.input_file("pg_file", "MaxQuant proteinGroups.txt file"),
                                     ui.tooltip(
                                         ui.input_file("ed_file", "Experimental Design File"),
-                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID. Group (optional, for paired controls): test rows specify one positive integer (e.g. 1); controls can list multiple (1,2) or use * for universal."
                                     ),
                                     ui.input_select("quant_type", "Quantification Type",
                                                   choices=["Intensity", "LFQ", "Spectral Counts"],
@@ -71,7 +71,7 @@ app_ui = ui.page_navbar(
                                     ui.input_file("diann_matrix_file", "DIA-NN report.pg_matrix.tsv file"),
                                     ui.tooltip(
                                         ui.input_file("ed_file", "Experimental Design File"),
-                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID. Group (optional, for paired controls): test rows specify one positive integer (e.g. 1); controls can list multiple (1,2) or use * for universal."
                                     )
                                 ),
                                 ui.output_data_frame("ed_table_diann"),
@@ -85,7 +85,7 @@ app_ui = ui.page_navbar(
                                     ui.input_file("fragpipe_file", "FragPipe combined_protein.tsv file"),
                                     ui.tooltip(
                                         ui.input_file("ed_file", "Experimental Design File"),
-                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID"
+                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID. Group (optional, for paired controls): test rows specify one positive integer (e.g. 1); controls can list multiple (1,2) or use * for universal."
                                     ),
                                     ui.input_select("quant_type", "Quantification Type",
                                                   choices=["Intensity", "LFQ", "Spectral Counts"],
@@ -125,6 +125,17 @@ app_ui = ui.page_navbar(
                             selected="human"),
                         ui.input_radio_buttons("imputation_method", "Imputation Method",
                                               choices={0: "Default", 1: "Prey-specific", 2: "Refactored AFT"}),
+                        ui.panel_conditional(
+                            "String(input.imputation_method) === '2'",
+                            ui.input_radio_buttons(
+                                "pi_method", "π Estimation Method",
+                                choices={"weighted_average": "Weighted avg of controls (≥3 replicates)",
+                                         "single_bait": "Single control bait"},
+                                selected="weighted_average"),
+                            ui.panel_conditional(
+                                "input.pi_method === 'single_bait'",
+                                ui.input_select("pi_bait", "Control Bait for π Fit", choices=[])),
+                        ),
                         ui.input_numeric("wdfdr_iterations", "WDFDR Iterations", value=1000),
                         ui.input_action_button("score_data", "Score Data")
                     ),
@@ -475,7 +486,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     ))
 
     ed_dataframe = reactive.Value(pd.DataFrame(
-        columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID"]
+        columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID", "Group"]
     ))
 
     @render.data_frame
@@ -536,6 +547,10 @@ def server(input: Inputs, output: Outputs, session: Session):
                 # Add Bait ID column if not present
                 if "Bait ID" not in ed_df.columns:
                     ed_df['Bait ID'] = 'None'
+
+                # Add Group column if not present (optional, for paired controls)
+                if "Group" not in ed_df.columns:
+                    ed_df['Group'] = ''
 
                 # Validate Type values
                 invalid_types = ed_df[~ed_df['Type'].isin(['C', 'T'])]
@@ -834,6 +849,33 @@ def server(input: Inputs, output: Outputs, session: Session):
             datasets.set(pd.read_csv(os.path.join(session_dest, "datasets.csv")))
 
 
+    @reactive.effect
+    @reactive.event(input.score_dataset, input.imputation_method, input.pi_method)
+    def update_pi_bait_choices():
+        """Populate pi_bait dropdown from the selected dataset's saved ED,
+        filtered to control baits with >= 3 replicates."""
+        if str(input.imputation_method.get()) != "2":
+            return
+        if input.pi_method.get() != "single_bait":
+            return
+        dataset = input.score_dataset.get()
+        if not dataset:
+            ui.update_select("pi_bait", choices=[])
+            return
+        ed_path = os.path.join(out_dir, dataset, "ED.csv")
+        if not os.path.exists(ed_path):
+            ui.update_select("pi_bait", choices=[])
+            return
+        try:
+            ed = pd.read_csv(ed_path)
+            controls = ed[ed['Type'] == 'C']
+            counts = controls.groupby('Bait').size()
+            eligible = sorted(counts[counts >= 3].index.tolist())
+            ui.update_select("pi_bait", choices=eligible,
+                             selected=eligible[0] if eligible else None)
+        except Exception:
+            ui.update_select("pi_bait", choices=[])
+
     # Scoring data
     @reactive.effect
     @reactive.event(input.score_data)
@@ -851,7 +893,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 progress.set(message="Scoring data", detail="Running SAINT...", value=25)
                 logger.info("Starting scoring for dataset '%s' (quant=%s)", dataset_name, quant_type)
 
-                result = subprocess.run([
+                score_cmd = [
                     "python3",
                     "/Scripts/score.py",
                     "--experimentalDesign",
@@ -866,7 +908,12 @@ def server(input: Inputs, output: Outputs, session: Session):
                     input.imputation_method.get(),
                     "--quantType",
                     quant_type,
-                ], capture_output=True, text=True)
+                ]
+                if str(input.imputation_method.get()) == "2":
+                    score_cmd += ["--pi-method", input.pi_method.get()]
+                    if input.pi_method.get() == "single_bait":
+                        score_cmd += ["--pi-bait", input.pi_bait.get()]
+                result = subprocess.run(score_cmd, capture_output=True, text=True)
 
                 if result.stdout:
                     logger.debug("score.py stdout:\n%s", result.stdout)
