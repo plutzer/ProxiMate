@@ -443,6 +443,27 @@ class EDPGCrossValidator:
             raise EDPGMismatchError(ed_only, [])
 
     @staticmethod
+    def validate_msstats_match(ed_df, msstats_df):
+        """
+        Validate that experiments in ED match originalRUN values in MSstats ProteinLevelData.
+        """
+        ed_experiments = set(ed_df['Experiment Name'].astype(str).unique())
+        msstats_experiments = set(msstats_df['originalRUN'].astype(str).unique())
+
+        ed_only = sorted(list(ed_experiments - msstats_experiments))
+        msstats_only = sorted(list(msstats_experiments - ed_experiments))
+
+        if msstats_only:
+            examples = ", ".join(msstats_only[:5])
+            if len(msstats_only) > 5:
+                examples += f" (and {len(msstats_only) - 5} more)"
+            logger.warning("%d run(s) in MSstats ProteinLevelData will be ignored (not in ED): %s",
+                           len(msstats_only), examples)
+
+        if ed_only:
+            raise EDPGMismatchError(ed_only, [])
+
+    @staticmethod
     def validate_fragpipe_match(ed_df, fp_df):
         """
         Validate that experiments in ED match columns in FragPipe combined_protein.tsv.
@@ -572,6 +593,77 @@ def validate_diann_inputs(ed_file, diann_file):
     EDPGCrossValidator.validate_diann_match(ed_df, diann_df)
 
     return ed_df, diann_df
+
+
+def validate_msstats_inputs(ed_file, msstats_file):
+    """
+    Validate MSstats inputs (ED + ProteinLevelData.csv).
+    Returns (ed_df, msstats_df) if successful.
+
+    Args:
+        ed_file: Path to experimental design CSV file
+        msstats_file: Path to MSstats ProteinLevelData.csv file
+
+    Returns:
+        tuple: (ed_df, msstats_df) - Validated DataFrames
+
+    Raises:
+        EDFileError: If ED file has validation issues
+        PGFileError: If MSstats file has validation issues
+        EDPGMismatchError: If experiment names don't match
+    """
+    ed_df = EDValidator.validate_ed_file(ed_file)
+
+    if not msstats_file or not os.path.exists(msstats_file):
+        raise PGFileNotFoundError(msstats_file)
+
+    if os.path.getsize(msstats_file) == 0:
+        raise PGFileError(
+            message="MSstats ProteinLevelData file is empty",
+            user_message="The MSstats ProteinLevelData.csv file is empty",
+            suggestions=["Ensure the file contains data from MSstats::dataProcess()"]
+        )
+
+    msstats_df = None
+    last_err = None
+    for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+        try:
+            msstats_df = pd.read_csv(msstats_file, encoding=encoding)
+            if not msstats_df.empty:
+                break
+        except UnicodeDecodeError as e:
+            last_err = e
+            continue
+        except Exception as e:
+            last_err = e
+            break
+
+    if msstats_df is None or msstats_df.empty:
+        raise PGFileError(
+            message=f"Error reading MSstats ProteinLevelData: {last_err}",
+            user_message="Unable to read MSstats ProteinLevelData.csv file",
+            suggestions=[
+                "Ensure this is a valid ProteinLevelData CSV produced by MSstats::dataProcess()",
+                "File should be comma-separated",
+                f"Technical details: {last_err}"
+            ]
+        )
+
+    required = ["Protein", "originalRUN", "GROUP", "SUBJECT", "LABEL", "LogIntensities"]
+    missing = [c for c in required if c not in msstats_df.columns]
+    if missing:
+        raise PGFileError(
+            message=f"MSstats ProteinLevelData missing columns: {missing}",
+            user_message=f"The MSstats ProteinLevelData.csv file is missing required column(s): {', '.join(missing)}",
+            suggestions=[
+                "Ensure the file is the ProteinLevelData output from MSstats::dataProcess()",
+                f"Required columns: {', '.join(required)}",
+            ]
+        )
+
+    EDPGCrossValidator.validate_msstats_match(ed_df, msstats_df)
+
+    return ed_df, msstats_df
 
 
 def validate_fragpipe_inputs(ed_file, fp_file):

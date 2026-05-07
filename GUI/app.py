@@ -43,7 +43,7 @@ app_ui = ui.page_navbar(
                                         "Dataset Name",
                                         placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
                             ui.input_select("input_format", "Input Format",
-                                           choices=["MaxQuant", "DIA-NN", "FragPipe", "SAINT"],
+                                           choices=["MaxQuant", "DIA-NN", "FragPipe", "MSstats", "SAINT"],
                                            selected="MaxQuant"),
                             col_widths=[4, 8]
                         ),
@@ -92,6 +92,24 @@ app_ui = ui.page_navbar(
                                                   selected="Intensity")
                                 ),
                                 ui.output_data_frame("ed_table_fragpipe"),
+                                col_widths=[4, 8]
+                            )
+                        ),
+                        ui.panel_conditional(
+                            "input.input_format === 'MSstats'",
+                            ui.layout_columns(
+                                ui.div(
+                                    ui.input_file("msstats_file", "MSstats ProteinLevelData.csv file"),
+                                    ui.tooltip(
+                                        ui.input_file("ed_file", "Experimental Design File"),
+                                        "ED Experiment Name must match originalRUN values in ProteinLevelData. ED Format: Experiment Name, Type, Bait, Replicate, Bait ID."
+                                    ),
+                                    ui.tags.small(
+                                        "Note: MSstats data is already log2-transformed, normalized, and imputed. Set Imputation Method to 'Default' (0).",
+                                        style="color: #888; display: block; margin-top: 8px;"
+                                    )
+                                ),
+                                ui.output_data_frame("ed_table_msstats"),
                                 col_widths=[4, 8]
                             )
                         ),
@@ -509,6 +527,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Return the ED table for FragPipe input
         return render.DataGrid(ed_dataframe.get(), editable=True)
 
+    @render.data_frame
+    def ed_table_msstats():
+        # Return the ED table for MSstats input
+        return render.DataGrid(ed_dataframe.get(), editable=True)
+
     @reactive.effect
     @reactive.event(input.bait)
     def update_bait_table():
@@ -572,7 +595,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.event(input.input_format)
     def clear_tables_on_format_change():
         # Clear tables when format changes to avoid showing stale data
-        if input.input_format.get() in ["MaxQuant", "DIA-NN", "FragPipe"]:
+        if input.input_format.get() in ["MaxQuant", "DIA-NN", "FragPipe", "MSstats"]:
             # Clear SAINT bait table
             saint_baits.set(pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"]))
         elif input.input_format.get() == "SAINT":
@@ -695,6 +718,38 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                     new_row = pd.DataFrame(
                         [[dataset_name, 'FragPipe', input.quant_type.get(), n_exp, n_ctrl, '', '', '']],
+                        columns=datasets.get().columns
+                    )
+                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
+                    datasets.set(updated_datasets)
+                    progress.set(1.0)
+
+                elif input_format == "MSstats":
+                    progress.set(message="Parsing MSstats inputs", value=0.25)
+
+                    if not input.msstats_file.get() or not input.ed_file.get():
+                        ui.notification_show(
+                            "Please upload both ProteinLevelData.csv and Experimental Design files",
+                            type="error"
+                        )
+                        return "Error: Missing files"
+
+                    progress.set(0.45)
+
+                    n_exp, n_ctrl = parse.parse_msstats(
+                        input.msstats_file.get()[0]['datapath'],
+                        input.ed_file.get()[0]['datapath'],
+                        output_path
+                    )
+
+                    # Overwrite ED.csv with edited table data
+                    ed_df = ed_table_msstats.data_view()
+                    ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+
+                    progress.set(0.85)
+
+                    new_row = pd.DataFrame(
+                        [[dataset_name, 'MSstats', 'Intensity', n_exp, n_ctrl, '', '', '']],
                         columns=datasets.get().columns
                     )
                     updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)

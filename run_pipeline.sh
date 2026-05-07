@@ -6,12 +6,14 @@ usage() {
     echo "  $0 [--organism ORG] --format maxquant  ED_file PG_file quant_type output_dir n_iterations imputation"
     echo "  $0 [--organism ORG] --format diann     ED_file matrix_file output_dir n_iterations imputation"
     echo "  $0 [--organism ORG] --format fragpipe  ED_file FP_file quant_type output_dir n_iterations imputation"
+    echo "  $0 [--organism ORG] --format msstats   ED_file ProteinLevelData.csv output_dir n_iterations imputation"
     echo "  $0 [--organism ORG] --format saint     bait_file prey_file interaction_file quant_type output_dir n_iterations imputation"
     echo ""
     echo "Formats:"
     echo "  maxquant  - MaxQuant proteinGroups.txt + experimental design CSV"
     echo "  diann     - DIA-NN report.pg_matrix.tsv + experimental design CSV"
     echo "  fragpipe  - FragPipe combined_protein.tsv + experimental design CSV"
+    echo "  msstats   - MSstats ProteinLevelData.csv (already log2/normalized/imputed) + experimental design CSV"
     echo "  saint     - SAINT bait.txt, prey.txt, interaction.txt"
     echo ""
     echo "Arguments:"
@@ -161,6 +163,47 @@ case "$format" in
             --outputDir "$output_dir" 2>&1 | tee -a "$output_dir/log.txt"
         ;;
 
+    msstats)
+        if [ "$#" -ne 5 ]; then
+            echo "Error: msstats format requires 5 arguments"
+            usage
+        fi
+        ed_file=$1
+        msstats_file=$2
+        output_dir=$3
+        niters=$4
+        imp=$5
+        quant="Intensity"
+
+        mkdir -p "$output_dir"
+
+        if [ "$imp" != "0" ]; then
+            echo "WARNING: MSstats data is already imputed by MBimpute; running AFT (imputation=$imp) will re-fit on imputed values. Pass imputation=0 to skip." | tee -a "$output_dir/log.txt"
+        fi
+
+        echo "=== Parsing (MSstats) ==="
+        python3 /Scripts/parse.py \
+            --experimentalDesign "$ed_file" \
+            --msstatsFile "$msstats_file" \
+            --quantType "$quant" \
+            --outputPath "$output_dir" 2>&1 | tee -a "$output_dir/log.txt"
+
+        echo "=== Scoring ==="
+        python3 /Scripts/score.py \
+            --experimentalDesign "$ed_file" \
+            --scoreInputs "$output_dir" \
+            --outputPath "$output_dir" \
+            --n-iterations "$niters" \
+            --imputation "$imp" \
+            --quantType "$quant" "${pi_args[@]}" 2>&1 | tee -a "$output_dir/log.txt"
+
+        echo "=== Annotating ==="
+        python3 /Scripts/annotator.py \
+            --organism "$organism" \
+            --scoreFile "$output_dir/merged.csv" \
+            --outputDir "$output_dir" 2>&1 | tee -a "$output_dir/log.txt"
+        ;;
+
     saint)
         if [ "$#" -ne 7 ]; then
             echo "Error: saint format requires 7 arguments"
@@ -202,7 +245,7 @@ case "$format" in
         ;;
 
     *)
-        echo "Error: Unknown format '$format'. Must be maxquant, diann, fragpipe, or saint."
+        echo "Error: Unknown format '$format'. Must be maxquant, diann, fragpipe, msstats, or saint."
         usage
         ;;
 esac
