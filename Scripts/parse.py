@@ -8,7 +8,7 @@ from protein_groups import ProteinGroups
 import shutil
 import re
 import tempfile
-from ed_validation import validate_maxquant_inputs, validate_diann_inputs, validate_fragpipe_inputs
+from ed_validation import validate_maxquant_inputs, validate_diann_inputs, validate_fragpipe_inputs, validate_msstats_inputs
 from ed_exceptions import ProxiMateError
 from log_config import get_logger, add_file_handler
 
@@ -208,6 +208,135 @@ def parse_diann(diannMatrix, experimentalDesign, quantType, outputPath):
 
     return num_expts, num_ctrls
 
+def _read_msstats_csv(msstats_file):
+    """Read an MSstats ProteinLevelData.csv with the standard encoding fallback chain."""
+    last_err = None
+    for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+        try:
+            df = pd.read_csv(msstats_file, encoding=encoding)
+            if not df.empty:
+                return df
+        except UnicodeDecodeError as e:
+            last_err = e
+            continue
+    raise ValueError(f"Could not read MSstats file {msstats_file}: {last_err}")
+
+
+def convert_msstats_to_maxquant_format(msstats_file, experimental_design):
+    """
+    Convert an MSstats::dataProcess() ProteinLevelData.csv to a MaxQuant-like
+    proteinGroups format consumable by ProteinGroups.
+
+    LogIntensities are log2(normalized_abundance) — back-transform to linear
+    (2 ** LogIntensities) so the rest of the pipeline (which assumes raw
+    intensities) sees a normalized intensity matrix. SAINT will re-log
+    internally; that round-trip is a no-op but preserves the normalization.
+    """
+    df = _read_msstats_csv(msstats_file)
+
+    # Label-free filter
+    n_heavy = int((df["LABEL"] == "H").sum())
+    if n_heavy > 0:
+        logger.warning("Dropping %d SILAC heavy (LABEL=='H') rows; only label-free is supported.", n_heavy)
+    df = df[df["LABEL"] == "L"].copy()
+
+    # Drop unimputed missing values (only present when MBimpute=FALSE)
+    n_na = int(df["LogIntensities"].isna().sum())
+    if n_na > 0:
+        logger.warning("Dropping %d rows with NA LogIntensities (run dataProcess with MBimpute=TRUE to impute).", n_na)
+    df = df.dropna(subset=["LogIntensities"]).copy()
+
+    # Collapse any accidental duplicates on (Protein, originalRUN)
+    dup_mask = df.duplicated(subset=["Protein", "originalRUN"], keep=False)
+    if dup_mask.any():
+        n_dup_groups = df.loc[dup_mask, ["Protein", "originalRUN"]].drop_duplicates().shape[0]
+        logger.warning("Found %d (Protein, originalRUN) groups with multiple rows; averaging LogIntensities.",
+                       n_dup_groups)
+        df = (df.groupby(["Protein", "originalRUN"], as_index=False)
+                .agg({"LogIntensities": "mean"}))
+
+    # Back-transform log2 → linear normalized intensity
+    df["Intensity"] = np.power(2.0, df["LogIntensities"].astype(float))
+
+    # Wide pivot: Protein × originalRUN, missing → 0
+    wide = (df.pivot_table(index="Protein", columns="originalRUN",
+                           values="Intensity", aggfunc="mean")
+              .fillna(0.0)
+              .reset_index())
+
+    mq_data = pd.DataFrame()
+    mq_data["Majority protein IDs"] = wide["Protein"].astype(str)
+    mq_data["Protein names"] = ""
+    mq_data["Gene names"] = wide["Protein"].astype(str)
+    mq_data["Reverse"] = "-"
+    mq_data["Only identified by site"] = "-"
+    mq_data["Potential contaminant"] = "-"
+    mq_data["Sequence length"] = 1
+
+    for col in wide.columns:
+        if col == "Protein":
+            continue
+        run_name = str(col)
+        if run_name in experimental_design.name2experiment:
+            mq_data[f"Intensity {run_name}"] = wide[col].fillna(0.0).astype(float)
+
+    return mq_data
+
+
+def parse_msstats(msstatsFile, experimentalDesign, outputPath):
+    """
+    Parse an MSstats ProteinLevelData.csv (output of MSstats::dataProcess())
+    plus an ED file. The MSstats data is already log2-transformed, normalized,
+    and (optionally) imputed; we back-transform to linear intensities and feed
+    the existing pipeline. Recommended: run scoring with --imputation 0.
+    """
+    try:
+        ed_df, msstats_df = validate_msstats_inputs(experimentalDesign, msstatsFile)
+    except ProxiMateError:
+        raise
+
+    if not os.path.exists(outputPath):
+        logger.info("Creating output directory: %s", outputPath)
+        os.makedirs(outputPath)
+
+    add_file_handler(os.path.join(outputPath, "proximate.log"))
+
+    shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
+    shutil.copy(msstatsFile, f"{outputPath}/ProteinLevelData.csv")
+
+    experimental_design = ExperimentalDesign(experimentalDesign)
+    num_expts = experimental_design.num_experiments
+    num_ctrls = experimental_design.num_controls
+
+    mq_format_data = convert_msstats_to_maxquant_format(msstatsFile, experimental_design)
+
+    # QC sidecar: preserve MSstats-only columns for downstream inspection
+    qc_cols = [c for c in ["Protein", "originalRUN", "GROUP", "SUBJECT",
+                           "NumMeasuredFeature", "NumImputedFeature",
+                           "MissingPercentage", "more50missing"]
+               if c in msstats_df.columns]
+    if qc_cols:
+        msstats_df[qc_cols].to_csv(os.path.join(outputPath, "msstats_qc.csv"), index=False)
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, newline='') as tmp_file:
+        tmp_path = tmp_file.name
+        mq_format_data.to_csv(tmp_file, sep="\t", index=False)
+
+    shutil.copy(tmp_path, f"{outputPath}/proteinGroups.txt")
+
+    try:
+        # MSstats output is always intensity-style; pin quant type accordingly.
+        protein_groups = ProteinGroups(experimental_design, tmp_path,
+                                       "Intensity", "Intensity")
+        protein_groups.to_SAINT(outputPath)
+        protein_groups.to_CompPASS(outputPath)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    return num_expts, num_ctrls
+
+
 def convert_fragpipe_to_maxquant_format(fp_file, experimental_design, quant_type):
     """
     Convert FragPipe combined_protein.tsv to a MaxQuant-like proteinGroups format.
@@ -323,6 +452,10 @@ def main():
                         help="path to FragPipe combined_protein.tsv file",
                         default=None)
 
+    parser.add_argument("--msstatsFile",
+                        help="path to MSstats ProteinLevelData.csv file",
+                        default=None)
+
     # SAINT format arguments
     parser.add_argument("--bait",
                         help="path to SAINT bait.txt file",
@@ -357,6 +490,12 @@ def main():
         # DIA-NN input mode
         if args.experimentalDesign is not None:
             parse_diann(args.diannMatrix, args.experimentalDesign, args.quantType, args.outputPath)
+        else:
+            logger.error("No experimental design file provided.")
+    elif args.msstatsFile is not None:
+        # MSstats input mode
+        if args.experimentalDesign is not None:
+            parse_msstats(args.msstatsFile, args.experimentalDesign, args.outputPath)
         else:
             logger.error("No experimental design file provided.")
     elif args.fragpipeFile is not None:
@@ -413,7 +552,7 @@ def main():
         shutil.copy(args.prey, os.path.join(args.outputPath, "prey.txt"))
         shutil.copy(args.interaction, os.path.join(args.outputPath, "interaction.txt"))
     else:
-        logger.error("No input file provided. Please specify --proteinGroups, --diannMatrix, --fragpipeFile, or --bait/--prey/--interaction.")
+        logger.error("No input file provided. Please specify --proteinGroups, --diannMatrix, --fragpipeFile, --msstatsFile, or --bait/--prey/--interaction.")
 
 if __name__ == "__main__":
     main()
