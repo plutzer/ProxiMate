@@ -8,6 +8,7 @@ import json
 import pandas as pd
 import aft_impute_saint
 import refactored_aft
+import one_component_aft
 import compPASS_pval
 import time
 from log_config import get_logger, add_file_handler
@@ -30,7 +31,7 @@ def _build_saint_cmd(compress_n_rep, quant_type, imputation, prey_filename):
                 "-L", str(compress_n_rep),
                 "filtered_interaction.txt", "prey.txt", "bait.txt"]
 
-    if imputation in ("1", "2"):
+    if imputation in ("1", "2", "3"):
         return [SAINT_EXPRESS_INT_DIR,
                 "-L", str(compress_n_rep),
                 "filtered_interaction.txt", prey_filename, "bait.txt"]
@@ -42,7 +43,7 @@ def _build_saint_cmd(compress_n_rep, quant_type, imputation, prey_filename):
 
 def _choose_prey_filename(quant_type, imputation):
     """SAINT reads imputed_prey.txt for intensity+imputation runs; prey.txt otherwise."""
-    if quant_type != "Spectral Counts" and imputation in ("1", "2"):
+    if quant_type != "Spectral Counts" and imputation in ("1", "2", "3"):
         return "imputed_prey.txt"
     return "prey.txt"
 
@@ -174,7 +175,7 @@ def main():
 
     # Argument for imputation
     parser.add_argument("--imputation",
-                        help="SAINT: whether to impute missing values (1) or not (0)",
+                        help="0 (none), 1 (prey-specific AFT), 2 (refactored AFT), 3 (one-component AFT)",
                         default="0")
 
     # Argument for quantification type
@@ -225,6 +226,14 @@ def main():
                 impute=True,
                 pi_method=args.pi_method,
                 pi_bait=args.pi_bait)
+        elif args.imputation == "3":
+            logger.info("Running one-component AFT imputation...")
+            one_component_aft.filter_impute(
+                f"{args.scoreInputs}/prey.txt",
+                f"{args.scoreInputs}/interaction.txt",
+                f"{args.scoreInputs}/",
+                args.experimentalDesign,
+                impute=True)
         else:
             logger.info("Running imputation filter (impute=%s)...", bool(int(args.imputation)))
             aft_impute_saint.filter_impute(

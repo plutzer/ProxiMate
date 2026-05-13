@@ -142,7 +142,9 @@ app_ui = ui.page_navbar(
                                      "yeast": "Yeast (S. cerevisiae)"},
                             selected="human"),
                         ui.input_radio_buttons("imputation_method", "Imputation Method",
-                                              choices={0: "Default", 1: "Prey-specific", 2: "Refactored AFT"}),
+                                              choices={0: "Default", 1: "Prey-specific",
+                                                       2: "Refactored AFT (two-component)",
+                                                       3: "One-component AFT"}),
                         ui.panel_conditional(
                             "String(input.imputation_method) === '2'",
                             ui.input_radio_buttons(
@@ -1030,7 +1032,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 # Update the datasets dataframe only on success
                 curr_dataset = datasets.get().copy()
 
-                imp_mapping = {0: 'Default', 1: 'Prey-specific', 2: 'Refactored AFT'}
+                imp_mapping = {0: 'Default', 1: 'Prey-specific', 2: 'Refactored AFT', 3: 'One-component AFT'}
 
                 curr_dataset.loc[curr_dataset['Dataset Name'] == dataset_name, 'Scored'] = 'Yes'
                 curr_dataset.loc[curr_dataset['Dataset Name'] == dataset_name, 'Imputation'] = imp_mapping[int(input.imputation_method.get())]
