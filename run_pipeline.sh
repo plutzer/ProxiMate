@@ -20,7 +20,7 @@ usage() {
     echo "  --pi-bait     - required when --pi-method=single_bait: control Bait name"
     echo "  quant_type    - Intensity, LFQ, or 'Spectral Counts'"
     echo "  n_iterations  - Number of CompPASS resampling iterations"
-    echo "  imputation    - 0 (none), 1 (prey-specific AFT), or 2 (refactored AFT)"
+    echo "  imputation    - 0 (none), 1 (prey-specific AFT), 2 (refactored AFT), or 3 (one-component AFT)"
     exit 1
 }
 
