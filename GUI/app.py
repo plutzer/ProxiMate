@@ -1977,7 +1977,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 available_columns = df.columns.tolist()
                 # Sort the columns alphabetically
                 available_columns.sort()
-                ui.update_selectize("custom_columns", choices=available_columns, selected=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"])
+                ui.update_selectize("custom_columns", choices=available_columns, selected=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"], server=True)
 
     custom_dataset = reactive.Value(pd.DataFrame())
     custom_dataset_total = reactive.Value(0)
