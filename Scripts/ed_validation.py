@@ -7,6 +7,7 @@ clear, early feedback about file format and content issues.
 
 import pandas as pd
 import os
+import re
 from log_config import get_logger
 from ed_exceptions import (
     EDFileNotFoundError,
@@ -17,12 +18,17 @@ from ed_exceptions import (
     EDInvalidReplicateError,
     EDMissingValueError,
     EDDuplicateExperimentError,
+    EDInvalidGroupError,
     PGFileNotFoundError,
     PGFileError,
     PGMissingColumnError,
     FPMissingColumnError,
     EDPGMismatchError
 )
+
+
+GROUP_WILDCARD = "*"
+_GROUP_INT_PATTERN = re.compile(r"^[1-9][0-9]*$")
 
 
 logger = get_logger(__name__)
@@ -117,6 +123,124 @@ class EDValidator:
             raise EDDuplicateExperimentError(duplicates)
 
     @classmethod
+    def validate_group_column(cls, df):
+        """Validate the optional Group column for paired-control runs.
+
+        Absent column or all-empty column = legacy run, no validation.
+        Grouped run (any non-empty cell): enforce the full rule set.
+        """
+        if "Group" not in df.columns:
+            return
+
+        # Parse each row's cell into (row_number, type, parsed_spec) or collect per-category errors.
+        invalid_value_rows = []
+        test_multi_rows = []
+        test_wildcard_rows = []
+        wildcard_mix_rows = []
+
+        parsed = []  # list of (row_number, type, spec) where spec: None | "*" | frozenset[int]
+
+        for idx, row in df.iterrows():
+            row_number = idx + 2  # 1-based header + 0-based index
+            row_type = row["Type"]
+            raw = row.get("Group")
+
+            if pd.isna(raw):
+                parsed.append((row_number, row_type, None))
+                continue
+
+            s = str(raw).strip()
+            if s == "":
+                parsed.append((row_number, row_type, None))
+                continue
+
+            if s == GROUP_WILDCARD:
+                if row_type == "T":
+                    test_wildcard_rows.append(row_number)
+                parsed.append((row_number, row_type, GROUP_WILDCARD))
+                continue
+
+            tokens = [t.strip() for t in s.split(",")]
+            has_wildcard = GROUP_WILDCARD in tokens
+            explicit = [t for t in tokens if t != GROUP_WILDCARD and t != ""]
+
+            if has_wildcard and explicit:
+                wildcard_mix_rows.append(row_number)
+                parsed.append((row_number, row_type, None))
+                continue
+
+            malformed = False
+            values = set()
+            for t in explicit:
+                if not _GROUP_INT_PATTERN.match(t):
+                    invalid_value_rows.append(row_number)
+                    malformed = True
+                    break
+                values.add(int(t))
+
+            if malformed:
+                parsed.append((row_number, row_type, None))
+                continue
+
+            if not values:
+                invalid_value_rows.append(row_number)
+                parsed.append((row_number, row_type, None))
+                continue
+
+            if row_type == "T" and len(values) > 1:
+                test_multi_rows.append(row_number)
+
+            parsed.append((row_number, row_type, frozenset(values)))
+
+        # Raise errors in priority order (most actionable first)
+        if invalid_value_rows:
+            raise EDInvalidGroupError("invalid_group_value", invalid_value_rows)
+        if wildcard_mix_rows:
+            raise EDInvalidGroupError("control_wildcard_with_explicit_groups", wildcard_mix_rows)
+        if test_wildcard_rows:
+            raise EDInvalidGroupError("test_row_wildcard", test_wildcard_rows)
+        if test_multi_rows:
+            raise EDInvalidGroupError("test_row_multi_group", test_multi_rows)
+
+        # If no row has a non-empty group, this is a legacy run (column present but unused).
+        non_empty = [p for p in parsed if p[2] is not None]
+        if not non_empty:
+            return
+
+        # Grouped run: every test row must declare a group
+        missing_on_test = [
+            rn for (rn, t, g) in parsed
+            if t == "T" and g is None
+        ]
+        if missing_on_test:
+            raise EDInvalidGroupError("test_row_missing_group_in_grouped_run", missing_on_test)
+
+        # Every test group must be covered by at least one control (universal or explicit)
+        test_groups = set()
+        for rn, t, g in parsed:
+            if t == "T" and isinstance(g, frozenset):
+                test_groups |= g
+
+        has_universal = any(t == "C" and g == GROUP_WILDCARD for (rn, t, g) in parsed)
+        explicit_ctrl_groups = set()
+        for rn, t, g in parsed:
+            if t == "C" and isinstance(g, frozenset):
+                explicit_ctrl_groups |= g
+
+        if not has_universal:
+            orphans = sorted(test_groups - explicit_ctrl_groups)
+            if orphans:
+                raise EDInvalidGroupError("bait_group_has_no_control", orphans)
+
+        # Non-fatal: warn about controls whose declared groups are never referenced by any test
+        unreferenced = sorted(explicit_ctrl_groups - test_groups)
+        if unreferenced:
+            logger.warning(
+                "Control row(s) reference groups with no test baits: %s",
+                ", ".join(str(g) for g in unreferenced),
+            )
+
+    @classmethod
     def validate_ed_file(cls, filepath):
         """
         Complete validation of ED file.
@@ -127,6 +251,7 @@ class EDValidator:
         df = cls.validate_file_format(filepath)
         cls.validate_required_columns(df)
         cls.validate_column_values(df)
+        cls.validate_group_column(df)
 
         return df
 
@@ -318,6 +443,27 @@ class EDPGCrossValidator:
             raise EDPGMismatchError(ed_only, [])
 
     @staticmethod
+    def validate_msstats_match(ed_df, msstats_df):
+        """
+        Validate that experiments in ED match originalRUN values in MSstats ProteinLevelData.
+        """
+        ed_experiments = set(ed_df['Experiment Name'].astype(str).unique())
+        msstats_experiments = set(msstats_df['originalRUN'].astype(str).unique())
+
+        ed_only = sorted(list(ed_experiments - msstats_experiments))
+        msstats_only = sorted(list(msstats_experiments - ed_experiments))
+
+        if msstats_only:
+            examples = ", ".join(msstats_only[:5])
+            if len(msstats_only) > 5:
+                examples += f" (and {len(msstats_only) - 5} more)"
+            logger.warning("%d run(s) in MSstats ProteinLevelData will be ignored (not in ED): %s",
+                           len(msstats_only), examples)
+
+        if ed_only:
+            raise EDPGMismatchError(ed_only, [])
+
+    @staticmethod
     def validate_fragpipe_match(ed_df, fp_df):
         """
         Validate that experiments in ED match columns in FragPipe combined_protein.tsv.
@@ -447,6 +593,77 @@ def validate_diann_inputs(ed_file, diann_file):
     EDPGCrossValidator.validate_diann_match(ed_df, diann_df)
 
     return ed_df, diann_df
+
+
+def validate_msstats_inputs(ed_file, msstats_file):
+    """
+    Validate MSstats inputs (ED + ProteinLevelData.csv).
+    Returns (ed_df, msstats_df) if successful.
+
+    Args:
+        ed_file: Path to experimental design CSV file
+        msstats_file: Path to MSstats ProteinLevelData.csv file
+
+    Returns:
+        tuple: (ed_df, msstats_df) - Validated DataFrames
+
+    Raises:
+        EDFileError: If ED file has validation issues
+        PGFileError: If MSstats file has validation issues
+        EDPGMismatchError: If experiment names don't match
+    """
+    ed_df = EDValidator.validate_ed_file(ed_file)
+
+    if not msstats_file or not os.path.exists(msstats_file):
+        raise PGFileNotFoundError(msstats_file)
+
+    if os.path.getsize(msstats_file) == 0:
+        raise PGFileError(
+            message="MSstats ProteinLevelData file is empty",
+            user_message="The MSstats ProteinLevelData.csv file is empty",
+            suggestions=["Ensure the file contains data from MSstats::dataProcess()"]
+        )
+
+    msstats_df = None
+    last_err = None
+    for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+        try:
+            msstats_df = pd.read_csv(msstats_file, encoding=encoding)
+            if not msstats_df.empty:
+                break
+        except UnicodeDecodeError as e:
+            last_err = e
+            continue
+        except Exception as e:
+            last_err = e
+            break
+
+    if msstats_df is None or msstats_df.empty:
+        raise PGFileError(
+            message=f"Error reading MSstats ProteinLevelData: {last_err}",
+            user_message="Unable to read MSstats ProteinLevelData.csv file",
+            suggestions=[
+                "Ensure this is a valid ProteinLevelData CSV produced by MSstats::dataProcess()",
+                "File should be comma-separated",
+                f"Technical details: {last_err}"
+            ]
+        )
+
+    required = ["Protein", "originalRUN", "GROUP", "SUBJECT", "LABEL", "LogIntensities"]
+    missing = [c for c in required if c not in msstats_df.columns]
+    if missing:
+        raise PGFileError(
+            message=f"MSstats ProteinLevelData missing columns: {missing}",
+            user_message=f"The MSstats ProteinLevelData.csv file is missing required column(s): {', '.join(missing)}",
+            suggestions=[
+                "Ensure the file is the ProteinLevelData output from MSstats::dataProcess()",
+                f"Required columns: {', '.join(required)}",
+            ]
+        )
+
+    EDPGCrossValidator.validate_msstats_match(ed_df, msstats_df)
+
+    return ed_df, msstats_df
 
 
 def validate_fragpipe_inputs(ed_file, fp_file):
