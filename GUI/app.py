@@ -142,8 +142,9 @@ app_ui = ui.page_navbar(
                                      "yeast": "Yeast (S. cerevisiae)"},
                             selected="human"),
                         ui.input_radio_buttons("imputation_method", "Imputation Method",
-                                              choices={0: "Default", 1: "Prey-specific",
-                                                       2: "Refactored AFT (two-component)",
+                                              choices={0: "Default", 
+                                                    #    1: "Prey-specific",
+                                                       2: "Two-component AFT",
                                                        3: "One-component AFT"}),
                         ui.panel_conditional(
                             "String(input.imputation_method) === '2'",
