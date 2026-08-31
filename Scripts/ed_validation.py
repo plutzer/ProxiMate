@@ -74,6 +74,10 @@ class EDValidator:
 
             return df
 
+        # A file with no data rows is empty, not malformed.  The catch-all below
+        # would relabel it as a format error and send the user looking for one.
+        except EDFileEmptyError:
+            raise
         except pd.errors.ParserError as e:
             raise EDFileFormatError(f"CSV parsing error: {str(e)}")
         except Exception as e:
@@ -285,6 +289,10 @@ class PGValidator:
                     suggestions=["Ensure the file contains data"]
                 )
             return df
+        # The empty-file error above is raised inside this try; without re-raising it
+        # first, the catch-all reports it as an unreadable file.
+        except PGFileError:
+            raise
         except Exception as e:
             raise PGFileError(
                 message=f"Error reading proteinGroups: {str(e)}",
@@ -578,6 +586,10 @@ def validate_diann_inputs(ed_file, diann_file):
                 user_message="The DIA-NN matrix file is empty",
                 suggestions=["Ensure the file contains data"]
             )
+    # As above: the empty-matrix error is raised inside this try and must not be
+    # rewritten by the catch-all.
+    except PGFileError:
+        raise
     except Exception as e:
         raise PGFileError(
             message=f"Error reading DIA-NN matrix: {str(e)}",

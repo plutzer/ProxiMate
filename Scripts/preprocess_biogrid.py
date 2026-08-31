@@ -70,9 +70,8 @@ def preprocess_biogrid(biogrid_all_path, biogrid_mv_path, output_dir, organism_i
     output_path = f"{output_dir}/biogrid_summary.csv"
     summ_biogrid.to_csv(output_path, index=False)
 
-# Script entry point
-
-args = parser.parse_args()
-preprocess_biogrid(args.biogrid_all, args.biogrid_mv,
-                   output_dir=args.output_dir, organism_id=args.organism_id)
+if __name__ == "__main__":
+    args = parser.parse_args()
+    preprocess_biogrid(args.biogrid_all, args.biogrid_mv,
+                       output_dir=args.output_dir, organism_id=args.organism_id)
 
