@@ -1,14 +1,8 @@
-import os
-import sys
-import tempfile
-import unittest
-
 import numpy as np
 import pandas as pd
+import pytest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import parse  # noqa: E402
+import parse
 
 
 def _make_protein_level_data():
@@ -56,60 +50,79 @@ def _make_ed(runs):
     return pd.DataFrame(rows)
 
 
-class TestParseMsstats(unittest.TestCase):
-    def test_smoke(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            pld, runs = _make_protein_level_data()
-            ed = _make_ed(runs)
+@pytest.fixture
+def msstats_outputs(tmp_path):
+    """Run parse_msstats on synthetic inputs; yield its return value and output dir."""
+    pld, runs = _make_protein_level_data()
+    ed = _make_ed(runs)
 
-            pld_path = os.path.join(tmp, "ProteinLevelData.csv")
-            ed_path = os.path.join(tmp, "ED.csv")
-            out_dir = os.path.join(tmp, "out")
-            pld.to_csv(pld_path, index=False)
-            ed.to_csv(ed_path, index=False)
+    pld_path = tmp_path / "ProteinLevelData.csv"
+    ed_path = tmp_path / "ED.csv"
+    out_dir = tmp_path / "out"
+    pld.to_csv(pld_path, index=False)
+    ed.to_csv(ed_path, index=False)
 
-            n_exp, n_ctrl = parse.parse_msstats(pld_path, ed_path, out_dir)
-            self.assertEqual(n_exp, 3)
-            self.assertEqual(n_ctrl, 3)
-
-            for fname in ["bait.txt", "prey.txt", "interaction.txt",
-                          "to_CompPASS.csv", "msstats_qc.csv",
-                          "ED.csv", "ProteinLevelData.csv", "proteinGroups.txt"]:
-                self.assertTrue(os.path.exists(os.path.join(out_dir, fname)),
-                                f"missing output: {fname}")
-
-            interaction = pd.read_csv(
-                os.path.join(out_dir, "interaction.txt"),
-                sep="\t", header=None,
-                names=["ExperimentName", "Bait", "Prey", "Intensity"],
-            )
-
-            self.assertGreater(len(interaction), 0)
-
-            # Every ED experiment should appear; every prey writes one row per ED experiment
-            n_proteins = len(pld["Protein"].unique())
-            self.assertEqual(set(interaction["ExperimentName"]), set(runs))
-            # write_interaction_file emits N_proteins * N_runs rows (zeros included)
-            self.assertEqual(len(interaction), n_proteins * len(runs))
-
-            nonzero = interaction[interaction["Intensity"] > 0]
-            self.assertGreater(len(nonzero), 0)
-            # Back-transform sanity: 2 ** N(8, 1.5) ≈ [1, 1e4]
-            self.assertTrue((nonzero["Intensity"] >= 1.0).all())
-            self.assertTrue((nonzero["Intensity"] <= 1e6).all())
-
-            # Bait file matches ED rows
-            bait = pd.read_csv(os.path.join(out_dir, "bait.txt"),
-                               sep="\t", header=None,
-                               names=["ExpName", "Bait", "Type"])
-            self.assertEqual(len(bait), 6)
-            self.assertEqual(set(bait["ExpName"]), set(runs))
-
-            # Prey file: one line per protein, no header
-            prey = pd.read_csv(os.path.join(out_dir, "prey.txt"),
-                               sep="\t", header=None)
-            self.assertEqual(len(prey), n_proteins)
+    n_exp, n_ctrl = parse.parse_msstats(str(pld_path), str(ed_path), str(out_dir))
+    return {
+        "pld": pld,
+        "runs": runs,
+        "out_dir": out_dir,
+        "n_exp": n_exp,
+        "n_ctrl": n_ctrl,
+        "n_proteins": len(pld["Protein"].unique()),
+    }
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_counts_test_and_control_experiments(msstats_outputs):
+    assert msstats_outputs["n_exp"] == 3
+    assert msstats_outputs["n_ctrl"] == 3
+
+
+@pytest.mark.parametrize("fname", [
+    "bait.txt", "prey.txt", "interaction.txt", "to_CompPASS.csv",
+    "msstats_qc.csv", "ED.csv", "ProteinLevelData.csv", "proteinGroups.txt",
+])
+def test_output_file_written(msstats_outputs, fname):
+    assert (msstats_outputs["out_dir"] / fname).exists(), f"missing output: {fname}"
+
+
+def test_interaction_file_covers_every_protein_run_pair(msstats_outputs):
+    interaction = pd.read_csv(
+        msstats_outputs["out_dir"] / "interaction.txt",
+        sep="\t", header=None,
+        names=["ExperimentName", "Bait", "Prey", "Intensity"],
+    )
+
+    assert len(interaction) > 0
+    # Every ED experiment should appear; every prey writes one row per ED experiment
+    assert set(interaction["ExperimentName"]) == set(msstats_outputs["runs"])
+    # write_interaction_file emits N_proteins * N_runs rows (zeros included)
+    assert len(interaction) == msstats_outputs["n_proteins"] * len(msstats_outputs["runs"])
+
+
+def test_interaction_intensities_are_back_transformed(msstats_outputs):
+    interaction = pd.read_csv(
+        msstats_outputs["out_dir"] / "interaction.txt",
+        sep="\t", header=None,
+        names=["ExperimentName", "Bait", "Prey", "Intensity"],
+    )
+
+    nonzero = interaction[interaction["Intensity"] > 0]
+    assert len(nonzero) > 0
+    # Back-transform sanity: 2 ** N(8, 1.5) ≈ [1, 1e4]
+    assert (nonzero["Intensity"] >= 1.0).all()
+    assert (nonzero["Intensity"] <= 1e6).all()
+
+
+def test_bait_file_matches_ed_rows(msstats_outputs):
+    bait = pd.read_csv(msstats_outputs["out_dir"] / "bait.txt",
+                       sep="\t", header=None,
+                       names=["ExpName", "Bait", "Type"])
+    assert len(bait) == 6
+    assert set(bait["ExpName"]) == set(msstats_outputs["runs"])
+
+
+def test_prey_file_has_one_line_per_protein(msstats_outputs):
+    prey = pd.read_csv(msstats_outputs["out_dir"] / "prey.txt",
+                       sep="\t", header=None)
+    assert len(prey) == msstats_outputs["n_proteins"]

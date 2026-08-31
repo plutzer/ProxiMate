@@ -62,22 +62,23 @@ def split_and_clean(annotations):
     else:
         return set()
 
+RESULT_COLUMNS = ['Bait', 'Feature', 'Feature_type', 'k', 'n', 'K', 'M',
+                  'p_value', 'enrichment', 'adj_p']
+
+
 def process_refactored(data, columns_for_analysis, threshold):
     # Get the unique experiments from the data
     experiments = list(data['Experiment.ID'].unique())
 
-    # Initialize a dataframe for the results
-    results = pd.DataFrame(columns=['Bait', 'Feature', 'Feature_type', 'k','n','K','M','p_value','enrichment', 'adj_p'])
-
     # Get the unique proteins from the data
     all_proteins = set(data['Prey.ID'].unique())
 
-    for column in columns_for_analysis:
-        # Create a temporary dataframe to store results for this feature type
-        temp_df = pd.DataFrame(columns=['Bait', 'Feature', 'Feature_type', 'k','n','K','M','p_value','enrichment'])
+    # Results accumulate in a list and are concatenated once.  Concatenating onto an
+    # empty frame instead would leave the count columns as object dtype.
+    frames = []
 
+    for column in columns_for_analysis:
         # Create a feature map for this feature type
-        feature_map = {}
         feature_df = data[['Prey.ID', column]].copy()
         feature_df.loc[:, 'list'] = feature_df[column].apply(split_and_clean)
         feature_map = dict(zip(feature_df['Prey.ID'], feature_df['list']))
@@ -88,25 +89,22 @@ def process_refactored(data, columns_for_analysis, threshold):
             foreground_ids = set(foreground['Prey.ID'].unique())
 
             result = enrich_foreground(foreground_ids, all_proteins, feature_map)
+            if result.empty:
+                continue
 
             # Add information about the bait and feature type
             result['Bait'] = experiment
             result['Feature_type'] = column
 
-            # calculate an adjusted p-value for the results
-            if len(result) > 0:
-                result['adj_p'] = multipletests(result['p_value'], method='fdr_bh')[1]
-            else:
-                continue
+            # Correction is within one bait and feature type, not across them.
+            result['adj_p'] = multipletests(result['p_value'], method='fdr_bh')[1]
 
-            # Concatenate the results to the temp_df
-            if not result.empty:
-                temp_df = pd.concat([temp_df, result], ignore_index=True)
-        
-        # Add the temp_df to the results dataframe
-        results = pd.concat([results, temp_df], ignore_index=True)
+            frames.append(result)
 
-    return results
+    if not frames:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
+
+    return pd.concat(frames, ignore_index=True)[RESULT_COLUMNS]
 
 def plot_results(results, feature_type, num_features=30):
     # Filter the results for the specific feature type

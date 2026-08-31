@@ -8,6 +8,7 @@ import sys
 import shutil
 import time
 import subprocess
+import provenance
 from log_config import get_logger, add_file_handler
 
 logger = get_logger(__name__)
@@ -127,6 +128,53 @@ def complex_id(prey_id, complex_dict):
                 return key
     return None
 
+def check_annotation_coverage(matched, total, source):
+    """Report an annotation source that matched nothing at all.
+
+    Across a whole dataset, zero matches is far more often a mismatch between
+    the identifiers being joined — the wrong column, or placeholder IDs from an
+    input format that has none — than a real absence of annotation.  Either way
+    the output is a column of False, which reads as a negative result.
+    """
+    if total and not matched:
+        logger.warning(
+            "%s matched none of the %d interactions; check that the identifiers "
+            "being joined are of the same kind.", source, total)
+    return matched
+
+
+def collapse_hpa_locations(name_loc):
+    """Reduce the HPA gene/location table to one row per gene.
+
+    ``subcellular_location.tsv`` repeats some gene names.  Merged as-is on gene
+    name, each repeat multiplies every interaction row whose prey is that gene,
+    inflating network sizes and enrichment counts with rows that look real.
+
+    Most repeats carry an identical location and collapse cleanly.  A few carry
+    genuinely different ones, which are joined rather than resolved by row order
+    — dropping one would discard a real annotation — and reported, so a future
+    release that introduces a new conflict is visible rather than silent.
+    """
+    deduped = name_loc.drop_duplicates()
+
+    conflicting = deduped[deduped.duplicated(subset=['Gene name'], keep=False)]
+    if not conflicting.empty:
+        genes = sorted(conflicting['Gene name'].dropna().unique())
+        logger.warning(
+            "HPA lists differing main locations for %d gene(s); joining them: %s",
+            len(genes), ", ".join(genes))
+
+    def join_locations(values):
+        distinct = sorted(values.dropna().unique())
+        return "; ".join(distinct) if distinct else None
+
+    collapsed = (deduped.groupby('Gene name', as_index=False, sort=False)
+                        ['Main location'].agg(join_locations))
+    logger.info("HPA subcellular locations: %d genes from %d rows",
+                len(collapsed), len(name_loc))
+    return collapsed
+
+
 def main():
     description = "This is the entry point to the program. It will execute the requested tasks."
 
@@ -174,6 +222,18 @@ def main():
 
     args = parser.parse_args()
 
+    # Attach the dataset log before resolving anything, so a failure while
+    # resolving organism defaults is recorded in the output directory too.
+    os.makedirs(args.outputDir, exist_ok=True)
+    add_file_handler(os.path.join(args.outputDir, "proximate.log"))
+
+    with provenance.stage(args.outputDir, "annotate", entrypoint="annotator.main",
+                          cli_args=vars(args)) as record:
+        _annotate(args, record)
+
+
+def _annotate(args, record):
+    """Annotate the scored interactions, recording provenance into `record`."""
     # Resolve organism-specific default paths
     datasets_dir = "/Datasets"
     organism_dir = f"{datasets_dir}/{args.organism}"
@@ -192,7 +252,12 @@ def main():
     bait_col = args.baitColumn
     gene_col = args.preyGeneColumn
 
-    add_file_handler(os.path.join(args.outputDir, "proximate.log"))
+    record.extra(organism=args.organism, prey_column=prey_col,
+                 bait_column=bait_col, gene_column=gene_col)
+    for role in ("scoreFile", "uniprotFile", "biogridFile", "locationFile", "complexFile"):
+        path = getattr(args, role)
+        if path:
+            record.add_input(path, role=role)
 
     # Validate that the score file exists
     if not os.path.exists(args.scoreFile):
@@ -229,6 +294,7 @@ def main():
     try:
         raw_scores = pd.read_csv(args.scoreFile)
         logger.info("Scored data: %d rows, columns: %s", len(raw_scores), list(raw_scores.columns))
+        record.metric("scored_rows_in", len(raw_scores))
     except Exception:
         logger.exception("Failed to load score file")
         sys.exit(1)
@@ -246,7 +312,7 @@ def main():
         logger.info("Loading HPA annotations from %s", args.locationFile)
         try:
             hpa = pd.read_csv(args.locationFile, sep='\t')
-            name_loc = hpa[['Gene name', 'Main location']]
+            name_loc = collapse_hpa_locations(hpa[['Gene name', 'Main location']])
 
             annotated_scores['Matched_Gene_Name'] = annotated_scores['First_Prey_Gene'].apply(get_match, subcellular=name_loc['Gene name'].to_numpy(), uniprot=uniprot['Gene Names'].to_numpy())
 
@@ -394,6 +460,13 @@ def main():
     output_path = f"{args.outputDir}/annotated_scores.csv"
     annotated_scores.to_csv(output_path, index=False)
     logger.info("Annotated scores written to %s (%d rows)", output_path, len(annotated_scores))
+
+    record.metric("annotated_rows", len(annotated_scores))
+    if "In.BioGRID" in annotated_scores.columns:
+        in_biogrid = int(annotated_scores["In.BioGRID"].sum())
+        check_annotation_coverage(in_biogrid, len(annotated_scores), "BioGRID")
+        record.metric("in_biogrid", in_biogrid)
+    record.add_output(output_path, rows=len(annotated_scores))
 
     # Copy build info to output directory so users know dataset versions
     build_info = f"{datasets_dir}/build_info.txt"

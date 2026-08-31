@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import argparse
+import functools
+import inspect
 import os
 import sys
 from experimental_design import ExperimentalDesign
@@ -8,11 +10,75 @@ from protein_groups import ProteinGroups
 import shutil
 import re
 import tempfile
+import provenance
 from ed_validation import validate_maxquant_inputs, validate_diann_inputs, validate_fragpipe_inputs, validate_msstats_inputs
 from ed_exceptions import ProxiMateError
-from log_config import get_logger, add_file_handler
+from log_config import get_logger, add_file_handler, dataset_log
 
 logger = get_logger(__name__)
+
+# Files a parse entry point produces for the scoring stage to consume.
+PARSE_OUTPUTS = ("ED.csv", "prey.txt", "bait.txt", "interaction.txt", "to_CompPASS.csv")
+
+# Parameters of the parse entry points that name a file. Everything else is a
+# value (quantType is "LFQ", not a path) and is recorded as a parameter instead.
+# Listed explicitly rather than inferred from the value, so that a genuinely
+# missing input is still fingerprinted as missing rather than quietly skipped.
+PARSE_FILE_PARAMS = frozenset({
+    "proteinGroups", "experimentalDesign", "diannMatrix", "msstatsFile",
+    "fp_file", "preyfile", "interactionfile",
+})
+
+
+def _parse_stage(fn):
+    """Record a parse entry point in the dataset's run manifest.
+
+    Applied as a decorator so the entry points' bodies stay as they are: the
+    output directory and the input files are read off the call signature, which
+    every entry point shares in shape.  A parse that fails validation still
+    leaves a manifest saying so.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        bound = inspect.signature(fn).bind(*args, **kwargs)
+        bound.apply_defaults()
+        output_path = bound.arguments["outputPath"]
+
+        params, inputs = {}, {}
+        for name, value in bound.arguments.items():
+            if name == "outputPath":
+                continue
+            if name in PARSE_FILE_PARAMS:
+                inputs[name] = value
+                params[name] = str(value)
+            elif isinstance(value, pd.DataFrame):
+                # Callers pass frames as well as paths; a frame's shape is the
+                # only part of it worth putting in a manifest.
+                params[name] = f"DataFrame{value.shape}"
+            else:
+                params[name] = value
+
+        # Attach the dataset log around the whole call, not just the part after
+        # validation: an entry point that rejects its inputs never reaches its
+        # own add_file_handler, and that failure is the one most worth reading.
+        with dataset_log(output_path), \
+                provenance.stage(output_path, "parse",
+                                 entrypoint=f"parse.{fn.__name__}",
+                                 params=params) as record:
+            for role, path in inputs.items():
+                record.add_input(path, role=role)
+
+            result = fn(*args, **kwargs)
+
+            num_expts, num_ctrls = result
+            record.metric("n_experiments", num_expts)
+            record.metric("n_controls", num_ctrls)
+            for produced in PARSE_OUTPUTS:
+                path = os.path.join(str(output_path), produced)
+                if os.path.exists(path):
+                    record.add_output(path)
+            return result
+    return wrapper
 
 def validate_name(s: str, datasets):
     """
@@ -32,6 +98,7 @@ def validate_name(s: str, datasets):
         return f"Error: Dataset name '{s}' already exists in the datasets"
     return 0
 
+@_parse_stage
 def parse_ed_pg(proteinGroups, experimentalDesign, quantType, outputPath):
     """
     This is the parse call used by the GUI.
@@ -78,11 +145,22 @@ def parse_ed_pg(proteinGroups, experimentalDesign, quantType, outputPath):
 
     return num_expts, num_ctrls
 
+@_parse_stage
 def parse_from_saint(bait_df, preyfile, interactionfile, outputPath):
+
+    if not os.path.exists(outputPath):
+        logger.info("Creating output directory: %s", outputPath)
+        os.makedirs(outputPath)
+
+    add_file_handler(os.path.join(outputPath, "proximate.log"))
+
+    logger.info("Parsing SAINT inputs: prey=%s interaction=%s", preyfile, interactionfile)
 
     # bait = pd.read_csv(baitfile, sep="\t", header=None, names=["Experiment Name", "Bait", "Type", ])
     prey = pd.read_csv(preyfile, sep="\t", header=None, names=["Prey", "Prey.Name"])
     interaction = pd.read_csv(interactionfile, sep="\t", header=None, names=["Experiment.ID", "Bait", "Prey", "Spectral.Count"])
+    logger.info("Read %d preys and %d interaction rows across %d experiments",
+                len(prey), len(interaction), interaction["Experiment.ID"].nunique())
     # Recreate the experimental design file
     new_ed = bait_df.copy()[["Experiment Name", "Type", "Bait", "Bait ID"]]
     # Add replicate numbers
@@ -101,9 +179,23 @@ def parse_from_saint(bait_df, preyfile, interactionfile, outputPath):
     to_compass = compass[["Bait", "Replicate", "Bait ID", "Prey", "Prey.Name", "Spectral.Count"]].rename(columns={"Bait ID": "Bait", "Bait": "Experiment.ID"})
     to_compass.to_csv(os.path.join(outputPath, "to_CompPASS.csv"), index=False)
 
-    # Return information needed for the GUI Datasets table
-    n_expts = len(new_ed["Experiment Name"].unique())
+    # Return information needed for the GUI Datasets table.  Counts exclude
+    # controls, matching ExperimentalDesign.num_experiments, which is what the
+    # other parse entry points return and what scoring reports for the same
+    # dataset.
     n_ctrls = len(new_ed[new_ed["Type"] == "C"]["Experiment Name"].unique())
+    n_expts = len(new_ed[new_ed["Type"] != "C"]["Experiment Name"].unique())
+    logger.info("Parsed SAINT inputs: %d experiments (%d controls), %d CompPASS rows",
+                n_expts, n_ctrls, len(to_compass))
+
+    # bait.txt has no column for the bait's protein ID, so anything keyed on it
+    # cannot be derived later.  Left unsaid, the resulting empty annotations
+    # read as negative findings rather than as an absent input.
+    if not new_ed["Bait ID"].astype(str).str.strip().replace("None", "").any():
+        logger.warning(
+            "SAINT bait.txt carries no bait protein IDs, so BioGRID and "
+            "self-interaction annotation cannot be derived for this dataset.")
+
     return n_expts, n_ctrls
 
 def convert_diann_to_maxquant_format(diann_file, experimental_design):
@@ -149,6 +241,7 @@ def convert_diann_to_maxquant_format(diann_file, experimental_design):
 
     return mq_data
 
+@_parse_stage
 def parse_diann(diannMatrix, experimentalDesign, quantType, outputPath):
     """
     Parse DIA-NN report.pg_matrix.tsv file and experimental design file.
@@ -283,6 +376,7 @@ def convert_msstats_to_maxquant_format(msstats_file, experimental_design):
     return mq_data
 
 
+@_parse_stage
 def parse_msstats(msstatsFile, experimentalDesign, outputPath):
     """
     Parse an MSstats ProteinLevelData.csv (output of MSstats::dataProcess())
@@ -374,6 +468,7 @@ def convert_fragpipe_to_maxquant_format(fp_file, experimental_design, quant_type
     mq_data["Sequence length"] = fp_data["Protein Length"]
 
     # Copy and rename quantification columns
+    matched = set()
     for col in fp_data.columns:
         if col.endswith(fp_suffix):
             # Disambiguate: when in Intensity mode, skip MaxLFQ Intensity columns
@@ -382,9 +477,25 @@ def convert_fragpipe_to_maxquant_format(fp_file, experimental_design, quant_type
             sample_name = col[:-len(fp_suffix)]
             if sample_name in experimental_design.name2experiment:
                 mq_data[f"{mq_prefix}{sample_name}"] = fp_data[col].fillna(0)
+                matched.add(sample_name)
+
+    # A name that appears in the design but not in the file contributes no
+    # quantification at all, which is otherwise indistinguishable from a run of
+    # all-zero intensities.
+    unmatched = set(experimental_design.name2experiment) - matched
+    if unmatched:
+        logger.warning("No '%s' column in %s for %d experiment(s) in the design: %s",
+                       fp_suffix.strip(), os.path.basename(fp_file),
+                       len(unmatched), sorted(unmatched))
+    if not matched:
+        logger.error("No quantification columns matched the experimental design; "
+                     "check that quantType=%r matches the FragPipe export.", quant_type)
+    logger.info("Matched %d of %d design experiments to FragPipe columns",
+                len(matched), len(experimental_design.name2experiment))
 
     return mq_data
 
+@_parse_stage
 def parse_fragpipe(fp_file, experimentalDesign, quantType, outputPath):
     """
     Parse FragPipe combined_protein.tsv file and experimental design file.
@@ -407,13 +518,19 @@ def parse_fragpipe(fp_file, experimentalDesign, quantType, outputPath):
 
     add_file_handler(os.path.join(outputPath, "proximate.log"))
 
+    logger.info("Parsing FragPipe file: %s (quantType=%s)", fp_file, quantType)
+    logger.info("FragPipe input: %d rows, %d columns", len(fp_df), len(fp_df.columns))
+
     shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
 
     experimental_design = ExperimentalDesign(experimentalDesign)
     num_expts = experimental_design.num_experiments
     num_ctrls = experimental_design.num_controls
+    logger.info("Experimental design: %d experiments (%d controls)", num_expts, num_ctrls)
 
     mq_format_data = convert_fragpipe_to_maxquant_format(fp_file, experimental_design, quantType)
+    logger.info("Converted FragPipe to MaxQuant format: %d proteins x %d columns",
+                len(mq_format_data), len(mq_format_data.columns))
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, newline='') as tmp_file:
         tmp_path = tmp_file.name
@@ -507,27 +624,8 @@ def main():
     elif args.proteinGroups is not None:
         # MaxQuant input mode
         if args.experimentalDesign is not None:
-            # Check to see if the output directory exists. If not, create it.
-            if not os.path.exists(args.outputPath):
-                os.makedirs(args.outputPath)
-
-            # Copy the experimental design file to the output directory
-            shutil.copy(args.experimentalDesign, os.path.join(args.outputPath, "ED.csv"))
-
-            logger.info("Parsing Experimental Design file: %s", args.experimentalDesign)
-
-            # parse experimental design
-            experimental_design = ExperimentalDesign(args.experimentalDesign)
-
-            logger.info("Parsing Protein Groups file: %s", args.proteinGroups)
-            logger.info("Quantification type: %s", args.quantType)
-
-            # process MaxQuant proteinGroups
-            protein_groups = ProteinGroups(experimental_design, args.proteinGroups,
-                                        args.quantType, args.quantType)
-
-            protein_groups.to_SAINT(args.outputPath)
-            protein_groups.to_CompPASS(args.outputPath)
+            parse_ed_pg(args.proteinGroups, args.experimentalDesign,
+                        args.quantType, args.outputPath)
         else:
             logger.error("No experimental design file provided.")
     elif args.bait is not None:

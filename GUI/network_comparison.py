@@ -164,6 +164,18 @@ def calculate_volcano_data(dataset_name, bait_a, bait_b, thresholds_a, threshold
     if len(common_preys) == 0:
         return pd.DataFrame()
 
+    # Threshold passing comes from the shared helper so the volcano's categories agree
+    # with the filtered networks shown elsewhere.  It reads a NaN WDFDR as 1.0, which
+    # fails the threshold; scoring with 0 CompPASS iterations produces those NaNs.
+    if scores is not None:
+        passing_a = set(apply_score_thresholds(
+            scores[scores['Experiment.ID'] == bait_a], thresholds_a)['Prey.ID'])
+        passing_b = set(apply_score_thresholds(
+            scores[scores['Experiment.ID'] == bait_b], thresholds_b)['Prey.ID'])
+    else:
+        passing_a = set()
+        passing_b = set()
+
     results = []
     for prey_id in common_preys:
         # Get test intensities for bait A
@@ -208,30 +220,8 @@ def calculate_volcano_data(dataset_name, bait_a, bait_b, thresholds_a, threshold
         # Determine category based on threshold passing from annotated scores
         category = 'Neither'
         if scores is not None:
-            # Get scored data for both baits
-            score_a = scores[(scores['Experiment.ID'] == bait_a) & (scores['Prey.ID'] == prey_id)]
-            score_b = scores[(scores['Experiment.ID'] == bait_b) & (scores['Prey.ID'] == prey_id)]
-
-            passes_a = False
-            passes_b = False
-
-            if len(score_a) > 0:
-                row_a = score_a.iloc[0]
-                passes_a = (
-                    row_a['SaintScore'] >= thresholds_a['SaintScore'] and
-                    row_a['BFDR'] <= thresholds_a['BFDR'] and
-                    row_a['WD'] >= thresholds_a['WD'] and
-                    (pd.isna(row_a['WDFDR']) or row_a['WDFDR'] <= thresholds_a['WDFDR'])
-                )
-
-            if len(score_b) > 0:
-                row_b = score_b.iloc[0]
-                passes_b = (
-                    row_b['SaintScore'] >= thresholds_b['SaintScore'] and
-                    row_b['BFDR'] <= thresholds_b['BFDR'] and
-                    row_b['WD'] >= thresholds_b['WD'] and
-                    (pd.isna(row_b['WDFDR']) or row_b['WDFDR'] <= thresholds_b['WDFDR'])
-                )
+            passes_a = prey_id in passing_a
+            passes_b = prey_id in passing_b
 
             # Determine category
             if passes_a and passes_b:

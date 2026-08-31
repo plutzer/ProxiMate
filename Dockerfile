@@ -43,7 +43,28 @@ RUN make -C /SAINTexpress_v3.6.3__2018-03-09/SAINT-MRF-spc clean
 RUN make -C /SAINTexpress_v3.6.3__2018-03-09/SAINT-MRF-int
 RUN cp /SAINTexpress_v3.6.3__2018-03-09/bin/SAINTexpress-int /bin/SAINTexpress-int
 
-RUN apt-get update && apt-get install -y python3-pip
+# Python 3.12 is built from source: focal's apt tops out at 3.9 and the deadsnakes
+# PPA publishes nothing for this release, while the pinned requirements need >= 3.11.
+# Building here rather than on a newer base image keeps gcc 9, which is what the
+# vendored Boost 1.57 and nlopt 2.3 compiled above still build under.
+# altinstall installs the interpreter as python3.12; the /usr/local/bin symlinks are
+# what make `python3` and `pip3` resolve to it for every later stage and for the
+# subprocess calls in GUI/app.py and run_pipeline.sh.
+ARG PYTHON_VERSION=3.12.14
+RUN apt-get update && apt-get install -y \
+        zlib1g-dev libssl-dev libffi-dev libbz2-dev \
+        libreadline-dev libsqlite3-dev liblzma-dev ca-certificates \
+ && wget -q https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz \
+ && tar -xf Python-${PYTHON_VERSION}.tgz \
+ && cd Python-${PYTHON_VERSION} \
+ && ./configure --quiet \
+ && make -j"$(nproc)" \
+ && make altinstall \
+ && cd / && rm -rf /Python-${PYTHON_VERSION} /Python-${PYTHON_VERSION}.tgz \
+ && python3.12 -m ensurepip --upgrade \
+ && python3.12 -m pip install --upgrade pip \
+ && ln -sf /usr/local/bin/python3.12 /usr/local/bin/python3 \
+ && ln -sf /usr/local/bin/pip3.12 /usr/local/bin/pip3
 
 COPY requirements.txt ../requirements.txt
 RUN pip3 install -r ../requirements.txt
@@ -62,6 +83,19 @@ RUN dos2unix /run_pipeline.sh
 
 ENV PYTHONPATH=/Scripts:/Scripts/GOGO
 ENV PATH="/Scripts/GOGO:${PATH}"
+
+# Identifies the code in every run.json.  The image carries no .git, so this is
+# the only place the version can come from:
+#   docker build --build-arg PROXIMATE_VERSION=$(git rev-parse --short HEAD) ...
+ARG PROXIMATE_VERSION=unknown
+ENV PROXIMATE_VERSION=${PROXIMATE_VERSION}
+
+# Logging defaults, overridable with `docker run -e`.
+ENV LOG_LEVEL=INFO
+ENV PROXIMATE_LOG_DIR=/Outputs
+# Subprocess output is piped; without this it would sit in a block buffer
+# instead of streaming to the terminal while a stage runs.
+ENV PYTHONUNBUFFERED=1
 
 # Create a directory for output files
 RUN mkdir -p /Outputs

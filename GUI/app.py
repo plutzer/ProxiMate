@@ -3,6 +3,8 @@ from shiny import App, Inputs, Outputs, Session, reactive, render, ui, run_app
 import plotly.graph_objects as go
 import plotly.express as px
 from shinywidgets import output_widget, render_widget, render_plotly
+import logging
+import platform
 import pandas as pd
 import os
 import sys
@@ -26,11 +28,13 @@ from network_comparison import (
 )
 from plot_exports import pca_plot_matplotlib, saint_scatter_matplotlib
 import py4cytoscape as p4c
+import log_config
+import provenance
 from log_config import get_logger
 
 logger = get_logger(__name__)
 
-out_dir = "/Outputs"
+out_dir = os.environ.get("PROXIMATE_OUTPUT_DIR", "/Outputs")
 
 app_ui = ui.page_navbar(
     ui.nav_spacer(),
@@ -477,6 +481,93 @@ def get_cytoscape_base_url():
         return "http://127.0.0.1:1234/v1"
 
 
+def _edited_ed_file(grid, uploaded_path):
+    """Write the experimental design grid to a temp file and return its path.
+
+    The grid is the design the user actually intends, and it is what ends up in
+    ED.csv.  Parsing must read the same table: otherwise an edit to Bait, Type
+    or Bait ID reaches scoring, which reads ED.csv, but not the SAINT inputs,
+    which are built during parsing.
+
+    Falls back to the uploaded file if the grid is empty, so a design that never
+    reached the table cannot silently parse as no experiments at all.
+    """
+    frame = grid.data_view()
+    if frame is None or frame.empty:
+        logger.warning("Experimental design table is empty; parsing the uploaded "
+                       "file instead of the edited table.")
+        return uploaded_path, None
+
+    handle = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
+                                         newline="", encoding="utf-8")
+    with handle:
+        frame.to_csv(handle, index=False)
+    logger.info("Parsing the edited experimental design table (%d rows)", len(frame))
+    return handle.name, handle.name
+
+
+def _log_size(dataset_path):
+    """Current size of a dataset's log, for use as a read offset."""
+    try:
+        return os.path.getsize(os.path.join(dataset_path, "proximate.log"))
+    except OSError:
+        return 0
+
+
+def _log_tail_since(dataset_path, offset, max_chars=1500):
+    """Return the log text a child process appended after `offset`.
+
+    Reading from an offset rather than from the end of the file matters when the
+    child fails before it attaches its own handler — argparse rejecting a flag,
+    say.  The tail of the file would then be the *previous* run's output, which
+    reads as a plausible but wrong explanation of this failure.
+    """
+    try:
+        with open(os.path.join(dataset_path, "proximate.log"), encoding="utf-8") as handle:
+            handle.seek(offset)
+            new_text = handle.read().strip()
+    except OSError:
+        return ""
+    if len(new_text) > max_chars:
+        new_text = "..." + new_text[-max_chars:]
+    return new_text
+
+
+def _run_stage_subprocess(command, dataset_path, run_id):
+    """Run a pipeline stage, streaming its output to this process's terminal.
+
+    The child configures logging the same way this process does, so letting it
+    inherit stdout and stderr gives correctly formatted output that appears
+    while the stage runs, instead of one silent wait followed by a burst.  It
+    also writes to the dataset's own log, so nothing needs re-logging here.
+
+    Returns (returncode, text the child appended to the dataset log).
+    """
+    child_env = dict(os.environ, PROXIMATE_RUN_ID=run_id)
+    logger.info("Running: %s", " ".join(command))
+
+    # Take the offset after logging the command, so the returned text is the
+    # child's alone.  A child that dies before attaching its handler — a bad
+    # flag, a failed import — must yield nothing here, or the caller cannot
+    # tell that apart from a child that explained itself.
+    offset = _log_size(dataset_path)
+    result = subprocess.run(command, env=child_env)
+    return result.returncode, _log_tail_since(dataset_path, offset)
+
+
+def notify(message, type="message", duration=5, exc_info=False):
+    """Show a Shiny notification and log the same text.
+
+    Notifications are raised only through here.  A message shown to the user
+    that leaves no trace on the server gives a later support request nothing to
+    work from, and the toast itself is gone as soon as it is dismissed.
+    """
+    level = {"error": logging.ERROR, "warning": logging.WARNING}.get(type, logging.INFO)
+    logger.log(level, "notification [%s]: %s", type,
+               " | ".join(str(message).splitlines()), exc_info=exc_info)
+    ui.notification_show(message, type=type, duration=duration)
+
+
 def format_error_notification(error):
     """
     Format a ProxiMateError into a user-friendly notification message.
@@ -546,9 +637,20 @@ def server(input: Inputs, output: Outputs, session: Session):
             # Catch bad input files here
 
             # Check to make sure the columns are correct and don't have any missing values
-            saint_baits.set(pd.read_csv(input.bait.get()[0]['datapath'], sep="\t", header=None, index_col=None, names=["Experiment Name", "Bait", "Type"]))
-            # Add a new column for Bait ID
-            saint_baits.get()['Bait ID'] = 'None'  # Default value for Bait ID
+            bait_path = input.bait.get()[0]['datapath']
+            try:
+                baits = pd.read_csv(bait_path, sep="\t", header=None, index_col=None,
+                                    names=["Experiment Name", "Bait", "Type"])
+                # Set the column before publishing: mutating the frame afterwards
+                # through .get() changes it without notifying dependants.
+                baits['Bait ID'] = 'None'  # Default value for Bait ID
+                saint_baits.set(baits)
+                logger.info("Read SAINT bait file: %d experiments", len(baits))
+            except Exception as e:
+                notify(f"Could not read the bait file: {e}\n\n"
+                       "Expected a tab-separated file with columns: "
+                       "Experiment Name, Bait, Type.",
+                       type="error", duration=10, exc_info=True)
 
     @reactive.effect
     @reactive.event(input.ed_file)
@@ -564,7 +666,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 required_cols = ["Experiment Name", "Type", "Bait", "Replicate"]
                 missing_cols = [col for col in required_cols if col not in ed_df.columns]
                 if missing_cols:
-                    ui.notification_show(
+                    notify(
                         f"ED file is missing required columns: {', '.join(missing_cols)}",
                         type="error"
                     )
@@ -581,7 +683,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 # Validate Type values
                 invalid_types = ed_df[~ed_df['Type'].isin(['C', 'T'])]
                 if len(invalid_types) > 0:
-                    ui.notification_show(
+                    notify(
                         f"ED file contains invalid Type values. Must be 'C' or 'T'.",
                         type="error"
                     )
@@ -589,9 +691,10 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                 ed_dataframe.set(ed_df)
             except Exception as e:
-                ui.notification_show(
+                notify(
                     f"Error reading ED file: {str(e)}",
-                    type="error"
+                    type="error",
+                    exc_info=True
                 )
 
     @reactive.effect
@@ -612,7 +715,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         dataset_name = input.dataset_name.get()
         check_result = parse.validate_name(dataset_name, datasets.get()['Dataset Name'].tolist())
         if check_result != 0:
-            ui.notification_show(
+            notify(
                     f"Parser: {check_result}",
                     type="error",
                 )
@@ -622,14 +725,22 @@ def server(input: Inputs, output: Outputs, session: Session):
         input_format = input.input_format.get()
         output_path = out_dir + '/' + dataset_name
 
+        # The parse entry points run in this process, so scope the dataset's log
+        # to this action: attached permanently, every later line about any other
+        # dataset would also be written here.
+        run_id = log_config.new_run_id()
+
         try:
-            with ui.Progress(min=0, max=1) as progress:
+            with ui.Progress(min=0, max=1) as progress, \
+                    log_config.run_context(run_id), \
+                    log_config.dataset_log(output_path):
+                logger.info("Parsing dataset '%s' (format=%s)", dataset_name, input_format)
                 if input_format == "MaxQuant":
                     progress.set(message="Parsing MaxQuant inputs", value=0.25)
 
                     # Check if files are uploaded
                     if not input.pg_file.get() or not input.ed_file.get():
-                        ui.notification_show(
+                        notify(
                             "Please upload both proteinGroups.txt and Experimental Design files",
                             type="error"
                         )
@@ -637,16 +748,18 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                     progress.set(0.45)
 
-                    n_exp, n_ctrl = parse.parse_ed_pg(
-                        input.pg_file.get()[0]['datapath'],
-                        input.ed_file.get()[0]['datapath'],
-                        input.quant_type.get(),
-                        output_path
-                    )
-
-                    # Overwrite ED.csv with edited table data
-                    ed_df = ed_table_mq.data_view()
-                    ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+                    ed_path, ed_tmp = _edited_ed_file(
+                        ed_table_mq, input.ed_file.get()[0]['datapath'])
+                    try:
+                        n_exp, n_ctrl = parse.parse_ed_pg(
+                            input.pg_file.get()[0]['datapath'],
+                            ed_path,
+                            input.quant_type.get(),
+                            output_path
+                        )
+                    finally:
+                        if ed_tmp:
+                            os.unlink(ed_tmp)
 
                     progress.set(0.85)
 
@@ -664,7 +777,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                     # Check if files are uploaded
                     if not input.diann_matrix_file.get() or not input.ed_file.get():
-                        ui.notification_show(
+                        notify(
                             "Please upload both DIA-NN matrix and Experimental Design files",
                             type="error"
                         )
@@ -672,16 +785,18 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                     progress.set(0.45)
 
-                    n_exp, n_ctrl = parse.parse_diann(
-                        input.diann_matrix_file.get()[0]['datapath'],
-                        input.ed_file.get()[0]['datapath'],
-                        "Intensity",  # DIA-NN always uses intensity
-                        output_path
-                    )
-
-                    # Overwrite ED.csv with edited table data
-                    ed_df = ed_table_diann.data_view()
-                    ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+                    ed_path, ed_tmp = _edited_ed_file(
+                        ed_table_diann, input.ed_file.get()[0]['datapath'])
+                    try:
+                        n_exp, n_ctrl = parse.parse_diann(
+                            input.diann_matrix_file.get()[0]['datapath'],
+                            ed_path,
+                            "Intensity",  # DIA-NN always uses intensity
+                            output_path
+                        )
+                    finally:
+                        if ed_tmp:
+                            os.unlink(ed_tmp)
 
                     progress.set(0.85)
 
@@ -698,7 +813,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                     progress.set(message="Parsing FragPipe inputs", value=0.25)
 
                     if not input.fragpipe_file.get() or not input.ed_file.get():
-                        ui.notification_show(
+                        notify(
                             "Please upload both combined_protein.tsv and Experimental Design files",
                             type="error"
                         )
@@ -706,16 +821,18 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                     progress.set(0.45)
 
-                    n_exp, n_ctrl = parse.parse_fragpipe(
-                        input.fragpipe_file.get()[0]['datapath'],
-                        input.ed_file.get()[0]['datapath'],
-                        input.quant_type.get(),
-                        output_path
-                    )
-
-                    # Overwrite ED.csv with edited table data
-                    ed_df = ed_table_fragpipe.data_view()
-                    ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+                    ed_path, ed_tmp = _edited_ed_file(
+                        ed_table_fragpipe, input.ed_file.get()[0]['datapath'])
+                    try:
+                        n_exp, n_ctrl = parse.parse_fragpipe(
+                            input.fragpipe_file.get()[0]['datapath'],
+                            ed_path,
+                            input.quant_type.get(),
+                            output_path
+                        )
+                    finally:
+                        if ed_tmp:
+                            os.unlink(ed_tmp)
 
                     progress.set(0.85)
 
@@ -731,7 +848,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                     progress.set(message="Parsing MSstats inputs", value=0.25)
 
                     if not input.msstats_file.get() or not input.ed_file.get():
-                        ui.notification_show(
+                        notify(
                             "Please upload both ProteinLevelData.csv and Experimental Design files",
                             type="error"
                         )
@@ -739,15 +856,17 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                     progress.set(0.45)
 
-                    n_exp, n_ctrl = parse.parse_msstats(
-                        input.msstats_file.get()[0]['datapath'],
-                        input.ed_file.get()[0]['datapath'],
-                        output_path
-                    )
-
-                    # Overwrite ED.csv with edited table data
-                    ed_df = ed_table_msstats.data_view()
-                    ed_df.to_csv(f"{output_path}/ED.csv", index=False)
+                    ed_path, ed_tmp = _edited_ed_file(
+                        ed_table_msstats, input.ed_file.get()[0]['datapath'])
+                    try:
+                        n_exp, n_ctrl = parse.parse_msstats(
+                            input.msstats_file.get()[0]['datapath'],
+                            ed_path,
+                            output_path
+                        )
+                    finally:
+                        if ed_tmp:
+                            os.unlink(ed_tmp)
 
                     progress.set(0.85)
 
@@ -764,7 +883,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                     # Check if files are uploaded
                     if not input.bait.get() or not input.prey.get() or not input.interaction.get():
-                        ui.notification_show(
+                        notify(
                             "Please upload all three SAINT files (bait, prey, interaction)",
                             type="error"
                         )
@@ -798,7 +917,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                     progress.set(1.0)
 
             # Success notification
-            ui.notification_show(
+            notify(
                 f"Successfully parsed dataset '{dataset_name}'",
                 type="message",
                 duration=5
@@ -807,7 +926,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         except ProxiMateError as e:
             # Handle our custom exceptions with user-friendly messages
             error_msg = format_error_notification(e)
-            ui.notification_show(
+            notify(
                 error_msg,
                 type="error",
                 duration=None  # Keep error visible until dismissed
@@ -815,35 +934,38 @@ def server(input: Inputs, output: Outputs, session: Session):
             return f"Error: {e.user_message}"
 
         except FileNotFoundError as e:
-            ui.notification_show(
+            notify(
                 f"File not found: {str(e)}",
                 type="error",
-                duration=10
+                duration=10,
+                exc_info=True
             )
             return "Error: File not found"
 
         except PermissionError as e:
-            ui.notification_show(
+            notify(
                 f"Permission denied accessing file: {str(e)}",
                 type="error",
-                duration=10
+                duration=10,
+                exc_info=True
             )
             return "Error: Permission denied"
 
         except pd.errors.ParserError as e:
-            ui.notification_show(
+            notify(
                 f"Error parsing file: {str(e)}\n\nEnsure files are in correct format.",
                 type="error",
-                duration=10
+                duration=10,
+                exc_info=True
             )
             return "Error: File parsing failed"
 
         except Exception as e:
             # Catch-all for unexpected errors
-            import traceback
-            traceback.print_exc()
-            ui.notification_show(
-                f"An unexpected error occurred:\n{str(e)}\n\nPlease check the console for details.",
+            logger.exception("Unexpected error parsing dataset '%s'", dataset_name)
+            notify(
+                f"An unexpected error occurred while parsing '{dataset_name}':\n{str(e)}\n\n"
+                f"The full error was written to {dataset_name}/proximate.log (run {run_id}).",
                 type="error",
                 duration=None
             )
@@ -855,14 +977,29 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     def do_clear_datasets():
         datasets.set(pd.DataFrame(columns=['Dataset Name', 'Input Type', 'Quant Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']))
+        logger.info("Clearing all datasets under %s", out_dir)
+
+        # The operational log lives here too and must outlive the datasets it
+        # describes; deleting it would also leave its handler writing to a
+        # removed file.
+        keep = {log_config.SERVER_LOG_FILENAME}
+
         # Clear the output folder
         for root, dirs, files in os.walk(out_dir):
             for file in files:
+                if root == out_dir and file.startswith(tuple(keep)):
+                    continue
                 abs_file = os.path.join(root, file)
-                os.remove(abs_file)
+                try:
+                    os.remove(abs_file)
+                except OSError:
+                    logger.exception("Could not remove %s", abs_file)
             for dir in dirs:
                 abs_dir = os.path.join(root, dir)
-                shutil.rmtree(abs_dir)
+                try:
+                    shutil.rmtree(abs_dir)
+                except OSError:
+                    logger.exception("Could not remove %s", abs_dir)
 
     @reactive.effect
     @reactive.event(input.clear_datasets)
@@ -871,20 +1008,26 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.download()
     def download_session():
-        # Save the current state of the datasets dataframe to a CSV file
-        datasets.get().to_csv(out_dir + "/datasets.csv", index=False)
+        try:
+            # Save the current state of the datasets dataframe to a CSV file
+            datasets.get().to_csv(out_dir + "/datasets.csv", index=False)
 
-        file_prefix = f"ProxiMateSession_{datetime.datetime.now().strftime('%Y%m%d')}"
-        tmp_zip = tempfile.NamedTemporaryFile(prefix=file_prefix, suffix=".zip", delete=False)
-        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for root, _, files in os.walk(out_dir):
-                for file in files:
-                    abs_file = os.path.join(root, file)
-                    # Write the file using a relative path
-                    zipf.write(abs_file, arcname=os.path.relpath(abs_file, out_dir))
-        tmp_zip.close()
-        # Return the path of the zip file for download
-        return tmp_zip.name
+            file_prefix = f"ProxiMateSession_{datetime.datetime.now().strftime('%Y%m%d')}"
+            tmp_zip = tempfile.NamedTemporaryFile(prefix=file_prefix, suffix=".zip", delete=False)
+            with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for root, _, files in os.walk(out_dir):
+                    for file in files:
+                        abs_file = os.path.join(root, file)
+                        # Write the file using a relative path
+                        zipf.write(abs_file, arcname=os.path.relpath(abs_file, out_dir))
+            tmp_zip.close()
+            logger.info("Session archive written to %s", tmp_zip.name)
+            # Return the path of the zip file for download
+            return tmp_zip.name
+        except Exception as e:
+            notify(f"Could not build the session archive: {e}",
+                   type="error", duration=None, exc_info=True)
+            return None
     
     @reactive.effect
     @reactive.event(input.upload_session)
@@ -897,14 +1040,18 @@ def server(input: Inputs, output: Outputs, session: Session):
         if uploaded:
             # uploaded is a list of dicts; use the first file
             zip_path = uploaded[0]['datapath']
-            # Choose a destination directory (for example, your session directory)
-            session_dest = "/Outputs"
-            # Extract the zip file to the destination
-            with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                zip_ref.extractall(session_dest)
+            try:
+                logger.info("Restoring session from uploaded archive %s", zip_path)
+                with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                    zip_ref.extractall(out_dir)
 
-            # Load the datasets.csv file into the datasets reactive value
-            datasets.set(pd.read_csv(os.path.join(session_dest, "datasets.csv")))
+                # Load the datasets.csv file into the datasets reactive value
+                datasets.set(pd.read_csv(os.path.join(out_dir, "datasets.csv")))
+                logger.info("Session restored: %d datasets", len(datasets.get()))
+            except Exception as e:
+                logger.exception("Failed to restore session from %s", zip_path)
+                notify(f"Could not restore the session archive: {e}", type="error",
+                       duration=None)
 
 
     @reactive.effect
@@ -932,6 +1079,9 @@ def server(input: Inputs, output: Outputs, session: Session):
             ui.update_select("pi_bait", choices=eligible,
                              selected=eligible[0] if eligible else None)
         except Exception:
+            # An empty dropdown here is indistinguishable from "no eligible
+            # controls", so the reason has to be recorded somewhere.
+            logger.exception("Could not read control baits from %s", ed_path)
             ui.update_select("pi_bait", choices=[])
 
     # Scoring data
@@ -941,8 +1091,14 @@ def server(input: Inputs, output: Outputs, session: Session):
         dataset_name = input.score_dataset.get()
         dataset_path = out_dir + '/' + dataset_name
 
+        # One ID for this scoring run, inherited by score.py and annotator.py, so
+        # the four processes' log lines and manifest entries tie together.
+        run_id = log_config.new_run_id()
+
         try:
-            with ui.Progress(min=0, max=100) as progress:
+            with ui.Progress(min=0, max=100) as progress, \
+                    log_config.run_context(run_id), \
+                    log_config.dataset_log(dataset_path):
                 progress.set(message="Scoring data", detail="Gathering inputs...", value=0)
 
                 # Get the quant type from the datasets dataframe
@@ -971,18 +1127,14 @@ def server(input: Inputs, output: Outputs, session: Session):
                     score_cmd += ["--pi-method", input.pi_method.get()]
                     if input.pi_method.get() == "single_bait":
                         score_cmd += ["--pi-bait", input.pi_bait.get()]
-                result = subprocess.run(score_cmd, capture_output=True, text=True)
 
-                if result.stdout:
-                    logger.debug("score.py stdout:\n%s", result.stdout)
-                if result.stderr:
-                    logger.info("score.py stderr:\n%s", result.stderr)
+                returncode, log_tail = _run_stage_subprocess(score_cmd, dataset_path, run_id)
 
-                if result.returncode != 0:
-                    logger.error("score.py failed (exit code %d)", result.returncode)
-                    error_detail = result.stderr[-1000:] if result.stderr else "No error output captured"
-                    ui.notification_show(
-                        f"Scoring failed for '{dataset_name}':\n{error_detail}",
+                if returncode != 0:
+                    logger.error("score.py failed (exit code %d)", returncode)
+                    notify(
+                        f"Scoring failed for '{dataset_name}' (exit code {returncode}):\n"
+                        f"{log_tail or 'No output was logged; check the container logs.'}",
                         type="error",
                         duration=None
                     )
@@ -992,7 +1144,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 merged_path = dataset_path + "/merged.csv"
                 if not os.path.exists(merged_path):
                     logger.error("Scoring did not produce merged.csv at %s", merged_path)
-                    ui.notification_show(
+                    notify(
                         f"Scoring failed for '{dataset_name}': merged.csv was not produced",
                         type="error",
                         duration=None
@@ -1002,7 +1154,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 progress.set(message="Scoring data", detail="Adding protein annotation...", value=65)
                 logger.info("Starting annotation for dataset '%s'", dataset_name)
 
-                ann_result = subprocess.run([
+                ann_cmd = [
                     "python3",
                     "/Scripts/annotator.py",
                     "--organism",
@@ -1011,18 +1163,14 @@ def server(input: Inputs, output: Outputs, session: Session):
                     merged_path,
                     "--outputDir",
                     dataset_path,
-                ], capture_output=True, text=True)
+                ]
+                returncode, log_tail = _run_stage_subprocess(ann_cmd, dataset_path, run_id)
 
-                if ann_result.stdout:
-                    logger.debug("annotator.py stdout:\n%s", ann_result.stdout)
-                if ann_result.stderr:
-                    logger.info("annotator.py stderr:\n%s", ann_result.stderr)
-
-                if ann_result.returncode != 0:
-                    logger.error("annotator.py failed (exit code %d)", ann_result.returncode)
-                    error_detail = ann_result.stderr[-1000:] if ann_result.stderr else "No error output captured"
-                    ui.notification_show(
-                        f"Annotation failed for '{dataset_name}':\n{error_detail}",
+                if returncode != 0:
+                    logger.error("annotator.py failed (exit code %d)", returncode)
+                    notify(
+                        f"Annotation failed for '{dataset_name}' (exit code {returncode}):\n"
+                        f"{log_tail or 'No output was logged; check the container logs.'}",
                         type="error",
                         duration=None
                     )
@@ -1042,7 +1190,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 progress.set(message="Scoring data", detail="Done!", value=100)
 
                 logger.info("Scoring and annotation completed successfully for '%s'", dataset_name)
-                ui.notification_show(
+                notify(
                     f"Successfully scored and annotated dataset '{dataset_name}'",
                     type="message",
                     duration=5
@@ -1050,7 +1198,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         except Exception as e:
             logger.exception("Unexpected error during scoring of '%s'", dataset_name)
-            ui.notification_show(
+            notify(
                 f"Unexpected error during scoring: {str(e)}",
                 type="error",
                 duration=None
@@ -1296,7 +1444,14 @@ def server(input: Inputs, output: Outputs, session: Session):
                     style="color: orange; font-size: 0.9em; margin-top: 5px;"
                 )
         except Exception:
-            pass
+            # This check exists to warn about unusable results; if it cannot run,
+            # silence would read as "nothing to warn about".
+            logger.exception("Could not check WDFDR completeness in %s", results_path)
+            return ui.div(
+                ui.span("⚠ ", style="color: orange;"),
+                "Could not read the results file to check WDFDR values.",
+                style="color: orange; font-size: 0.9em; margin-top: 5px;"
+            )
         return None
 
     # Threshold presets for Data Thresholding tab
@@ -1363,12 +1518,12 @@ def server(input: Inputs, output: Outputs, session: Session):
     def download_pca_plot():
         dataset_name = input.qc_dataset.get()
         if not dataset_name:
-            ui.notification_show("No dataset selected.", type="error")
+            notify("No dataset selected.", type="error")
             return None
         interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
         ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
         if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
-            ui.notification_show("Required files not found.", type="error")
+            notify("Required files not found.", type="error")
             return None
         fig = pca_plot_matplotlib(interaction_path, ed_path)
         filepath = os.path.join(out_dir, "pca_plot.png")
@@ -1380,7 +1535,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         dataset_name = input.qc_dataset.get()
         bait_selection = input.qc_bait.get()
         if not dataset_name or bait_selection == "All":
-            ui.notification_show("Select a specific bait to export the scatter plot.", type="error")
+            notify("Select a specific bait to export the scatter plot.", type="error")
             return None
         results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
         saintscore_threshold = input.threshold_saintscore.get()
@@ -1393,11 +1548,11 @@ def server(input: Inputs, output: Outputs, session: Session):
     def download_heatmap():
         dataset = input.feature_dataset.get()
         if not dataset:
-            ui.notification_show("No dataset selected.", type="error")
+            notify("No dataset selected.", type="error")
             return None
         feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
         if not os.path.exists(feature_file):
-            ui.notification_show("Run feature analysis first.", type="error")
+            notify("Run feature analysis first.", type="error")
             return None
         feature_data = pd.read_csv(feature_file)
         feature_type = input.feature_type.get() or 'GO_CC'
@@ -1407,8 +1562,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             filepath = os.path.join(out_dir, "heatmap.png")
             fig.savefig(filepath, dpi=150, bbox_inches='tight')
             return filepath
-        except ValueError:
-            ui.notification_show("Insufficient data to generate heatmap.", type="error")
+        except ValueError as e:
+            notify(f"Insufficient data to generate heatmap: {e}", type="error")
             return None
 
     @render.download(filename="volcano_plot.png")
@@ -1418,15 +1573,15 @@ def server(input: Inputs, output: Outputs, session: Session):
         bait_a = input.comp_bait_a.get()
         bait_b = input.comp_bait_b.get()
         if not all([dataset_a, dataset_b, bait_a, bait_b]):
-            ui.notification_show("Select datasets and baits first.", type="error")
+            notify("Select datasets and baits first.", type="error")
             return None
         if dataset_a != dataset_b:
-            ui.notification_show("Volcano plot requires baits from the same dataset.", type="error")
+            notify("Volcano plot requires baits from the same dataset.", type="error")
             return None
         # Use cached volcano data
         volcano_data = comp_volcano_data_cached()
         if volcano_data.empty:
-            ui.notification_show("No data available for volcano plot.", type="error")
+            notify("No data available for volcano plot.", type="error")
             return None
         # Use matplotlib version for export
         fig = create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b)
@@ -1439,7 +1594,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         bait_a = input.comp_bait_a.get()
         bait_b = input.comp_bait_b.get()
         if not all([bait_a, bait_b]):
-            ui.notification_show("Select baits first.", type="error")
+            notify("Select baits first.", type="error")
             return None
         # Use cached filtered data to create sets
         data_a = comp_filtered_data_a_cached()
@@ -1447,7 +1602,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
         set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
         if len(set_a) == 0 and len(set_b) == 0:
-            ui.notification_show("No data available for Venn diagram.", type="error")
+            notify("No data available for Venn diagram.", type="error")
             return None
         # Use matplotlib version for clean export
         fig = create_venn_diagram_matplotlib(set_a, set_b, bait_a, bait_b)
@@ -1500,29 +1655,39 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.feature_analysis)
     def feature_analysis():
-        with ui.Progress(min=0, max=100) as progress:
-            progress.set(message="Running protein feature analysis", value=5)
+        dataset_name = input.feature_dataset.get()
+        try:
+            with ui.Progress(min=0, max=100) as progress, \
+                    log_config.dataset_log(os.path.join(out_dir, dataset_name)):
+                progress.set(message="Running protein feature analysis", value=5)
+                logger.info("Starting feature enrichment for '%s' (threshold=%s)",
+                            dataset_name, input.saint_threshold.get())
 
-            # Get the selected dataset
-            progress.set(message="Running protein feature analysis", detail="Loading dataset...", value=20)
-            dataset = pd.read_csv(os.path.join(out_dir, input.feature_dataset.get(), "annotated_scores.csv"))
+                # Get the selected dataset
+                progress.set(message="Running protein feature analysis", detail="Loading dataset...", value=20)
+                dataset = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
 
-            progress.set(message="Running protein feature analysis", detail="Processing data...", value=50)
-            result = process_refactored(
-                dataset,
-                columns_for_analysis = ['GO_CC', 'GO_BP', 'GO_MF', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains'],
-                threshold = input.saint_threshold.get()
-            )
+                progress.set(message="Running protein feature analysis", detail="Processing data...", value=50)
+                result = process_refactored(
+                    dataset,
+                    columns_for_analysis = ['GO_CC', 'GO_BP', 'GO_MF', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains'],
+                    threshold = input.saint_threshold.get()
+                )
 
-            progress.set(message="Running protein feature analysis", detail="Generating plots...", value=80)
-            # Store the results in the reactive value
-            feature_enrichment.set(result)
+                progress.set(message="Running protein feature analysis", detail="Generating plots...", value=80)
+                # Store the results in the reactive value
+                feature_enrichment.set(result)
 
-            progress.set(message="Running protein feature analysis", detail="Saving results...", value=90)
-            # Save the results to the dataset directory
-            result.to_csv(os.path.join(out_dir, input.feature_dataset.get(), "Feature_enrichment.csv"), index=False)
-            
-            progress.set(message="Running protein feature analysis", detail="Done!", value=100)
+                progress.set(message="Running protein feature analysis", detail="Saving results...", value=90)
+                # Save the results to the dataset directory
+                output_path = os.path.join(out_dir, dataset_name, "Feature_enrichment.csv")
+                result.to_csv(output_path, index=False)
+                logger.info("Feature enrichment written to %s (%d rows)", output_path, len(result))
+
+                progress.set(message="Running protein feature analysis", detail="Done!", value=100)
+        except Exception as e:
+            notify(f"Feature analysis failed for '{dataset_name}': {e}",
+                   type="error", duration=None, exc_info=True)
 
     @render.plot
     def feature_enrichment_plot():
@@ -1556,6 +1721,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             return heatmap
         except ValueError as e:
             # Handle case where there aren't enough features to cluster
+            logger.warning("Cannot plot %s enrichment for '%s': %s",
+                           feature_type, dataset, e)
             import matplotlib.pyplot as plt
             fig, ax = plt.subplots(figsize=(10, 6))
             ax.text(0.5, 0.5, f'Insufficient data to generate plot for {feature_type}\n\nTry selecting a different feature type or lowering the SAINT threshold.',
@@ -1582,7 +1749,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             baits = feature_data['Bait'].unique().tolist()
             baits.insert(0, "All")
             ui.update_select("download_bait_filter", choices=baits)
-        except Exception as e:
+        except Exception:
+            logger.exception("Could not read baits from %s", feature_file)
             ui.update_select("download_bait_filter", choices=["All"])
 
     @render.download()
@@ -1590,12 +1758,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         """Download filtered enrichment results."""
         dataset = input.feature_dataset.get()
         if not dataset:
-            ui.notification_show("No dataset selected.", type="error")
+            notify("No dataset selected.", type="error")
             return None
 
         feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
         if not os.path.exists(feature_file):
-            ui.notification_show("No enrichment results available. Please run feature analysis first.", type="error")
+            notify("No enrichment results available. Please run feature analysis first.", type="error")
             return None
 
         # Load enrichment data
@@ -1623,7 +1791,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         filtered_data = filtered_data[filtered_data['enrichment'] >= enrichment_threshold]
 
         if filtered_data.empty:
-            ui.notification_show("No results match the current filters. Try adjusting the thresholds.", type="warning")
+            notify("No results match the current filters. Try adjusting the thresholds.", type="warning")
             return None
 
         # Save to temp file and return
@@ -1667,8 +1835,11 @@ def server(input: Inputs, output: Outputs, session: Session):
                 baits.insert(0, "All")  # Add "All" option
                 ui.update_select("qc_bait", choices=baits)
             except FileNotFoundError:
+                # Expected before a dataset has been scored.
+                logger.debug("No annotated_scores.csv for %s yet", dataset_name)
                 ui.update_select("qc_bait", choices=["All"])  # Reset to default if file not found
-            except Exception as e:
+            except Exception:
+                logger.exception("Could not read baits for dataset %s", dataset_name)
                 ui.update_select("qc_bait", choices=["All"])
         else:
             ui.update_select("qc_bait", choices=["All"])  # Reset to default if no dataset is selected
@@ -1757,8 +1928,11 @@ def server(input: Inputs, output: Outputs, session: Session):
                 baits = scores['Experiment.ID'].unique().tolist()
                 ui.update_select("comp_bait_a", choices=baits)
             except FileNotFoundError:
+                # Expected before a dataset has been scored.
+                logger.debug("No annotated_scores.csv for %s yet", dataset_name)
                 ui.update_select("comp_bait_a", choices=[])
-            except Exception as e:
+            except Exception:
+                logger.exception("Could not read baits for dataset %s", dataset_name)
                 ui.update_select("comp_bait_a", choices=[])
         else:
             ui.update_select("comp_bait_a", choices=[])
@@ -1774,8 +1948,11 @@ def server(input: Inputs, output: Outputs, session: Session):
                 baits = scores['Experiment.ID'].unique().tolist()
                 ui.update_select("comp_bait_b", choices=baits)
             except FileNotFoundError:
+                # Expected before a dataset has been scored.
+                logger.debug("No annotated_scores.csv for %s yet", dataset_name)
                 ui.update_select("comp_bait_b", choices=[])
-            except Exception as e:
+            except Exception:
+                logger.exception("Could not read baits for dataset %s", dataset_name)
                 ui.update_select("comp_bait_b", choices=[])
         else:
             ui.update_select("comp_bait_b", choices=[])
@@ -2041,12 +2218,12 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.download()
     def download_custom_dataset():
         if custom_dataset.get().empty:
-            ui.notification_show(
+            notify(
                 "No custom dataset to download. Please select columns first.",
                 type="error",
             )
             return None
-        ui.notification_show("Preparing download...", type="message", duration=2)
+        notify("Preparing download...", type="message", duration=2)
         # Create a temporary file to save the custom dataset
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"custom_dataset_{timestamp}.csv"
@@ -2059,20 +2236,22 @@ def server(input: Inputs, output: Outputs, session: Session):
         """Download all results for a dataset as a ZIP file."""
         dataset = input.download_dataset.get()
         if not dataset:
-            ui.notification_show("No dataset selected.", type="error")
+            notify("No dataset selected.", type="error")
             return None
 
-        ui.notification_show("Preparing ZIP file...", type="message", duration=2)
+        notify("Preparing ZIP file...", type="message", duration=2)
         dataset_dir = os.path.join(out_dir, dataset)
         if not os.path.exists(dataset_dir):
-            ui.notification_show("Dataset directory not found.", type="error")
+            notify("Dataset directory not found.", type="error")
             return None
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         zip_filename = f"{dataset}_all_{timestamp}.zip"
         zip_path = os.path.join(out_dir, zip_filename)
 
-        # List of files to include in the ZIP
+        # List of files to include in the ZIP. The log, the run manifest and the
+        # database build stamp travel with the results so a recipient can see how
+        # they were produced.
         files_to_include = [
             'merged.csv',
             'annotated_scores.csv',
@@ -2080,7 +2259,10 @@ def server(input: Inputs, output: Outputs, session: Session):
             'bait.txt',
             'prey.txt',
             'interaction.txt',
-            'ED.csv'
+            'ED.csv',
+            'run.json',
+            'proximate.log',
+            'build_info.txt'
         ]
 
         included_files = []
@@ -2092,11 +2274,11 @@ def server(input: Inputs, output: Outputs, session: Session):
                     included_files.append(filename)
 
         if not included_files:
-            ui.notification_show("No files found to include in ZIP.", type="error")
+            notify("No files found to include in ZIP.", type="error")
             os.remove(zip_path)
             return None
 
-        ui.notification_show(f"ZIP created with {len(included_files)} files.", type="message", duration=3)
+        notify(f"ZIP created with {len(included_files)} files.", type="message", duration=3)
         return zip_path
 
     # Cytoscape tab
@@ -2113,8 +2295,10 @@ def server(input: Inputs, output: Outputs, session: Session):
             # Create a simple network if none exists
             try:
                 current_network = p4c.get_network_name(base_url=base_url)
-            except:
-                # No network exists, create one
+            except Exception as e:
+                # No network exists, create one. Narrowed from a bare `except`,
+                # which also swallowed KeyboardInterrupt and SystemExit.
+                logger.debug("No current Cytoscape network (%s); creating one", e)
                 nodes_df = pd.DataFrame({'id': ['InitialNode']})
                 edges_df = pd.DataFrame({'source': [], 'target': []})
                 p4c.create_network_from_data_frames(
@@ -2129,8 +2313,10 @@ def server(input: Inputs, output: Outputs, session: Session):
 
             # Update status
             status_message = f"✓ Successfully created 'TestNode_ProxiMate' in Cytoscape\nCytoscape version: {version['cytoscapeVersion']}"
+            logger.info("Created test node in Cytoscape %s", version['cytoscapeVersion'])
 
         except Exception as e:
+            logger.exception("Could not create a test node in Cytoscape")
             status_message = f"✗ Error connecting to Cytoscape:\n{str(e)}\n\nMake sure Cytoscape is running on your host machine."
 
         # Store status in reactive value for display
@@ -2150,8 +2336,10 @@ def server(input: Inputs, output: Outputs, session: Session):
             p4c.delete_selected_nodes(base_url=base_url)
 
             status_message = "✓ Successfully deleted 'TestNode_ProxiMate' from Cytoscape"
+            logger.info("Deleted test node from Cytoscape")
 
         except Exception as e:
+            logger.exception("Could not delete the test node from Cytoscape")
             status_message = f"✗ Error deleting node:\n{str(e)}\n\nMake sure the node exists and Cytoscape is running."
 
         _cytoscape_status_msg.set(status_message)
@@ -2159,6 +2347,30 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.text
     def cytoscape_status():
         return _cytoscape_status_msg.get()
+
+def log_startup():
+    """Record the configuration the server came up with.
+
+    Written at import so it also appears when an ASGI server loads this module
+    rather than running it as a script.  Without it the operational log stays
+    empty until someone acts, and there is no way to confirm from the logs which
+    version is serving or where it is writing.
+    """
+    version = provenance.proximate_version()
+    logger.info("ProxiMate starting: version=%s (%s), python=%s",
+                version["version"], version["source"], platform.python_version())
+    logger.info("Datasets in %s; operational log in %s; LOG_LEVEL=%s",
+                out_dir, os.environ.get("PROXIMATE_LOG_DIR", log_config.DEFAULT_LOG_DIR),
+                logging.getLevelName(logging.getLogger(log_config.PACKAGE).level))
+    build_info = provenance.read_build_info()
+    if build_info:
+        first_line = next((l for l in build_info.splitlines() if l.startswith("Build date")), None)
+        logger.info("Annotation databases: %s", first_line or "build_info.txt present")
+    else:
+        logger.warning("No /Datasets/build_info.txt; annotation database versions are unknown")
+
+
+log_startup()
 
 app = App(app_ui, server)
 

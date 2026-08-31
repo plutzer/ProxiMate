@@ -11,8 +11,12 @@ from patsy import dmatrix
 from sklearn.linear_model import LinearRegression
 from statsmodels.api import GLM, families
 from log_config import get_logger
+from interaction_filter import write_filtered_interaction
 
 logger = get_logger(__name__)
+
+# Preys per progress line, so a long imputation reports without flooding the log.
+PROGRESS_INTERVAL = 500
 
 
 def protein_log_likelihood(prey_intensities, mu, sigma, Tlim, pi):
@@ -206,7 +210,11 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
 
         # Loop through the preys and impute the intensity values
         for n, prey in enumerate(preys, 1):
-            print(f"Processing prey {prey}... ({n}/{len(preys)})")
+            # Per-prey detail is DEBUG: this loop runs once per prey, and at INFO
+            # it would bury every other line in the dataset log.
+            logger.debug("Imputing prey %s (%d/%d)", prey, n, len(preys))
+            if n % PROGRESS_INTERVAL == 0 or n == len(preys):
+                logger.info("Refactored AFT: imputed %d/%d preys", n, len(preys))
 
             # Fast group lookup instead of scanning the full DataFrame
             try:
@@ -317,15 +325,10 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
         if impute:
             output.to_csv(output_dir + 'imputed_params.csv', index=False)
 
-    # filter the interaction file to remove zero intensity values
-    interaction = interaction[interaction['Intensity'] > 0]
-
     if impute:
-        prey_data.to_csv(output_dir + 'imputed_prey.txt', sep='\t', index=False, header=False)
-    # Drop the internal BaitID helper column so the written file matches the
-    # expected 4-column SAINT format (ExperimentID, Bait, Prey, Intensity).
-    interaction[['ExperimentID', 'Bait', 'Prey', 'Intensity']].to_csv(
-        output_dir + 'filtered_interaction.txt', sep='\t', index=False, header=False)
+        prey_data.to_csv(output_dir + 'imputed_prey.txt', sep='	', index=False, header=False)
+
+    write_filtered_interaction(interaction, output_dir)
 
 
 def main():
@@ -363,7 +366,7 @@ def main_spline_test():
         ).dropna()
 
         if len(prey_stats) < 10:
-            print('Skipping {} - only {} preys'.format(bait, len(prey_stats)))
+            logger.info("Skipping %s - only %d preys", bait, len(prey_stats))
             continue
         fit_and_plot_spline(prey_stats, 'Control: {} (n={})'.format(bait, n_exp))
 
@@ -385,7 +388,7 @@ def main_spline_test():
         ).dropna()
 
         if len(prey_stats) < 10:
-            print('Skipping {} - only {} preys'.format(bait, len(prey_stats)))
+            logger.info("Skipping %s - only %d preys", bait, len(prey_stats))
             continue
         fit_and_plot_spline(prey_stats, 'Test: {} (n={})'.format(bait, n_exp))
 
@@ -397,7 +400,7 @@ def main_spline_test():
 
     fit_and_plot_spline(prey_stats_all, 'Full Dataset (n={})'.format(len(interaction['ExperimentID'].unique())))
 
-    print('Done!')
+    logger.info("Spline diagnostics complete")
 
 
 if __name__ == '__main__':

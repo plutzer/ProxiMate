@@ -7,6 +7,14 @@ from log_config import get_logger
 
 logger = get_logger(__name__)
 
+# Quantile level at which WD score matrices are normalized.  Observed and permuted
+# matrices must share this level for the permutation test to be valid.
+DEFAULT_NORM_FACTOR = 0.98
+
+# Seed for the permutation null.  Fixed by default so repeated runs over the same input
+# reproduce their WD p-values; any value works, the null only needs an arbitrary stream.
+DEFAULT_SEED = 0
+
 # Need a function for entropy calculation
 def entropy(xs):
     # Convert input to numpy array for easier manipulation
@@ -28,10 +36,13 @@ def get_ave_psm(input):
     ).reset_index()
     return ave_psm
 
-def permute_prey_matrices(ave_psm_values, prey_means_matrix, prey_sd_matrix, self_interaction, n_saw_values):
+def permute_prey_matrices(ave_psm_values, prey_means_matrix, prey_sd_matrix, self_interaction, n_saw_values, rng):
     # Returns a single permutation of prey values (counts), not labels
     # Permutes the prey values (spectral counts) within each prey (row), including zero values,
     # ensuring that the observed bait-prey structure and prey-specific variance are preserved.
+    # Every matrix is reordered by one shared index vector per row, so the permuted WD
+    # matrix holds the same multiset of values as the observed one.
+    # rng is a numpy Generator; the caller owns it so a run can be reproduced.
 
     permuted_ave_psm_values = np.zeros_like(ave_psm_values)
     permuted_prey_means_matrix = np.zeros_like(prey_means_matrix)
@@ -46,7 +57,7 @@ def permute_prey_matrices(ave_psm_values, prey_means_matrix, prey_sd_matrix, sel
         self_interactions = self_interaction[i, :]
         
         # Permute the values for this prey across experiments
-        permuted_indices = np.random.permutation(len(values))
+        permuted_indices = rng.permutation(len(values))
         permuted_values = values[permuted_indices]
         permuted_means = prey_means_matrix[i, :][permuted_indices]
         permuted_sd = prey_sd_matrix[i, :][permuted_indices]
@@ -83,7 +94,11 @@ def calculate_wd_matrix(ave_psm_values, prey_means_matrix, prey_sd_matrix, n_exp
 
     return normalized_wd_scores, q
 
-def calculate_wd_pvals_matrix(normalized_wd_scores, ave_psm_values, prey_means_matrix, prey_sd_matrix, self_interaction, n_exp_with_prey, n_saw_values, n_experiments, ave_psm, rows, columns, iterations, q):
+def calculate_wd_pvals_matrix(normalized_wd_scores, ave_psm_values, prey_means_matrix, prey_sd_matrix, self_interaction, n_exp_with_prey, n_saw_values, n_experiments, ave_psm, rows, columns, iterations, norm_factor, rng):
+    # norm_factor must be the level used for the observed scores.  Permutation preserves
+    # each row's multiset of WD values, so both matrices share a quantile at any given
+    # level and the two normalizations cancel; splitting the levels would rescale only the
+    # observed side and bias every p-value.
 
     # Do things one permutation at a time to reduce memory usage
     p_values = np.zeros((normalized_wd_scores.shape[0], normalized_wd_scores.shape[1]))
@@ -91,18 +106,27 @@ def calculate_wd_pvals_matrix(normalized_wd_scores, ave_psm_values, prey_means_m
     # Get a matrix of non-zero ave_psm values
 
     for i in range(iterations):
-        permuted_ave_psm_values, permuted_prey_means_matrix, permuted_prey_sd_matrix, permuted_self_interaction, permuted_n_saw_values = permute_prey_matrices(ave_psm_values, prey_means_matrix, prey_sd_matrix, self_interaction, n_saw_values)
-        permuted_normalized_wd_scores, _ = calculate_wd_matrix(permuted_ave_psm_values, permuted_prey_means_matrix, permuted_prey_sd_matrix, n_exp_with_prey, permuted_n_saw_values, n_experiments, norm_factor=0.98)
-        #permuted_normalized_wd_scores, _ = calculate_wd_matrix(permuted_ave_psm_values, permuted_self_interaction, n_exp_with_prey, n_saw_values, n_experiments, ave_psm, rows, columns)
-        permuted_normalized_wd_scores = permuted_normalized_wd_scores# / q
-        
+        permuted_ave_psm_values, permuted_prey_means_matrix, permuted_prey_sd_matrix, permuted_self_interaction, permuted_n_saw_values = permute_prey_matrices(ave_psm_values, prey_means_matrix, prey_sd_matrix, self_interaction, n_saw_values, rng)
+        permuted_normalized_wd_scores, _ = calculate_wd_matrix(permuted_ave_psm_values, permuted_prey_means_matrix, permuted_prey_sd_matrix, n_exp_with_prey, permuted_n_saw_values, n_experiments, norm_factor=norm_factor)
+
         # Standard incrementation
         p_values += normalized_wd_scores < permuted_normalized_wd_scores
 
     p_values = p_values / iterations
     return p_values
 
-def score_compPass(input, norm_factor, iterations=None):
+def score_compPass(input, norm_factor=DEFAULT_NORM_FACTOR, iterations=None, seed=DEFAULT_SEED):
+    """Score a CompPASS input table, optionally with permutation p-values for WD.
+
+    norm_factor is the quantile level used to normalize the WD matrix.  It rescales the
+    reported WD scores but leaves WD_pval and WDFDR unchanged, because the permutation
+    null is normalized at the same level.
+
+    seed fixes the permutation stream, so two calls on the same input return identical
+    WD_pval and WDFDR.  Pass None for a fresh stream on every call.
+    """
+
+    rng = np.random.default_rng(seed)
 
     ave_psm = get_ave_psm(input)
 
@@ -161,7 +185,7 @@ def score_compPass(input, norm_factor, iterations=None):
     z_scores = (ave_psm_values - prey_means_matrix) / prey_sd_matrix
 
     # Calculate the WD score matrix
-    normalized_wd_scores, norm_val = calculate_wd_matrix(ave_psm_values, prey_means_matrix, prey_sd_matrix, n_exp_with_prey, n_saw_values, n_experiments, norm_factor)
+    normalized_wd_scores, _ = calculate_wd_matrix(ave_psm_values, prey_means_matrix, prey_sd_matrix, n_exp_with_prey, n_saw_values, n_experiments, norm_factor)
 
     # Create a new dataframe to combine with the ave_psm dataframe
     experiment_ids = []
@@ -204,7 +228,7 @@ def score_compPass(input, norm_factor, iterations=None):
 
     if iterations:
         # Calculate p-values for WD scores
-        wd_pvals = calculate_wd_pvals_matrix(normalized_wd_scores, ave_psm_values, prey_means_matrix, prey_sd_matrix, self_interaction, n_exp_with_prey, n_saw_values, n_experiments, ave_psm, rows, columns, iterations, norm_val)
+        wd_pvals = calculate_wd_pvals_matrix(normalized_wd_scores, ave_psm_values, prey_means_matrix, prey_sd_matrix, self_interaction, n_exp_with_prey, n_saw_values, n_experiments, ave_psm, rows, columns, iterations, norm_factor, rng)
 
         # Create a vector to add to the dataframe
         wd_pvals_list = []
@@ -227,8 +251,9 @@ def main():
     parser = argparse.ArgumentParser(description='FastCompPASS')
 
     parser.add_argument('--input', type=str, required=True, help='Input file')
-    parser.add_argument('--norm_factor', type=str, default=0.98, help='Normalization factor')
+    parser.add_argument('--norm_factor', type=float, default=DEFAULT_NORM_FACTOR, help='Quantile level for WD score normalization')
     parser.add_argument('--iterations', type=int, default=None, help='Number of iterations for bootstrapping')
+    parser.add_argument('--seed', type=int, default=DEFAULT_SEED, help='Seed for the permutation null')
 
     args = parser.parse_args()
 
@@ -243,7 +268,7 @@ def main():
         input = pd.read_csv(args.input, sep=',', index_col=0).astype({'Prey': str, 'Bait': str})
 
 
-    result = score_compPass(input, float(args.norm_factor), args.iterations)
+    result = score_compPass(input, args.norm_factor, args.iterations, seed=args.seed)
 
     # Write output to file
     result.to_csv(output_dir + '/compPASS.csv', index=False)

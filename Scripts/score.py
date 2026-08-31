@@ -11,6 +11,7 @@ import refactored_aft
 import one_component_aft
 import compPASS_pval
 import time
+import provenance
 from log_config import get_logger, add_file_handler
 from experimental_design import ExperimentalDesign
 from bfdr_pool import recompute_bfdr
@@ -49,7 +50,12 @@ def _choose_prey_filename(quant_type, imputation):
 
 
 def _run_saint(cwd, compress_n_rep, quant_type, imputation, prey_filename):
-    """Invoke SAINTexpress in `cwd`. Writes list.txt there. Exits on failure."""
+    """Invoke SAINTexpress in `cwd`. Writes list.txt there. Exits on failure.
+
+    Returns the command vector, whose first element is the SAINTexpress build
+    that ran — three are installed, and which one produced a result is not
+    otherwise recoverable from the output.
+    """
     saint_cmd = _build_saint_cmd(compress_n_rep, quant_type, imputation, prey_filename)
     logger.info("SAINTexpress command (cwd=%s): %s", cwd, " ".join(saint_cmd))
     p = subprocess.run(saint_cmd, cwd=cwd, capture_output=True, text=True)
@@ -68,6 +74,7 @@ def _run_saint(cwd, compress_n_rep, quant_type, imputation, prey_filename):
     if not os.path.exists(list_path):
         logger.error("SAINTexpress did not produce list.txt at %s", list_path)
         sys.exit(1)
+    return saint_cmd
 
 
 def _build_group_saint_inputs(src_dir, group_dir, ed, group, use_imputed_prey):
@@ -128,7 +135,6 @@ def _build_group_saint_inputs(src_dir, group_dir, ed, group, use_imputed_prey):
 
 
 def main():
-    start_time = time.time()
 
     ########################################################################################################################
     # Command line argument parsing
@@ -173,6 +179,12 @@ def main():
                         type=int,
                         default=5)
 
+    # Argument for the CompPASS permutation seed
+    parser.add_argument("--seed",
+                        help="CompPASS: seed for the permutation null, so WD p-values reproduce",
+                        type=int,
+                        default=compPASS_pval.DEFAULT_SEED)
+
     # Argument for imputation
     parser.add_argument("--imputation",
                         help="0 (none), 1 (prey-specific AFT), 2 (refactored AFT), 3 (one-component AFT)",
@@ -193,22 +205,30 @@ def main():
 
     args = parser.parse_args()
 
-    ########################################################################################################################
-    # Main
-    ########################################################################################################################
-
-    # Check to see if the output directory exists. If not, create it.
+    # Attach the dataset log before anything else, so a failure in the run below
+    # is recorded in the output directory and not only on stderr.
     if not os.path.exists(args.outputPath):
         os.makedirs(args.outputPath)
-
     add_file_handler(os.path.join(args.outputPath, "proximate.log"))
+
+    with provenance.stage(args.outputPath, "score", entrypoint="score.main",
+                          cli_args=vars(args)) as record:
+        _score(args, record)
+
+
+def _score(args, record):
+    """Run the scoring pipeline, recording provenance into `record`."""
+    start_time = time.time()
 
     # Validate required input files exist
     for required_file in ["prey.txt", "interaction.txt", "bait.txt", "to_CompPASS.csv"]:
         fpath = os.path.join(args.scoreInputs, required_file)
+        record.add_input(fpath, role=required_file)
         if not os.path.exists(fpath):
             logger.error(f"Required input file not found: {fpath}")
             sys.exit(1)
+    if args.experimentalDesign:
+        record.add_input(args.experimentalDesign, role="experimentalDesign")
 
     # Run the imputation
     try:
@@ -263,6 +283,11 @@ def main():
 
     prey_filename = _choose_prey_filename(args.quantType, args.imputation)
     use_imputed_prey = (prey_filename == "imputed_prey.txt")
+    record.extra(prey_file=prey_filename, use_imputed_prey=use_imputed_prey,
+                 run_mode="grouped" if ed.is_grouped() else "legacy",
+                 compass_norm_factor=compPASS_pval.DEFAULT_NORM_FACTOR)
+    record.metric("n_experiments", ed.num_experiments)
+    record.metric("n_controls", ed.num_controls)
 
     if ed.is_grouped():
         groups = ed.get_groups()
@@ -278,12 +303,13 @@ def main():
             group_dir = os.path.join(groups_root, str(group))
             os.makedirs(group_dir, exist_ok=True)
             _build_group_saint_inputs(args.scoreInputs, group_dir, ed, group, use_imputed_prey)
-            _run_saint(group_dir, args.compress_n_rep, args.quantType,
-                       args.imputation, prey_filename)
+            saint_cmd = _run_saint(group_dir, args.compress_n_rep, args.quantType,
+                                   args.imputation, prey_filename)
 
             df = pd.read_csv(os.path.join(group_dir, "list.txt"), sep="\t")
             df["source_group"] = group
             per_group_dfs.append(df)
+            logger.info("Group %s: SAINT produced %d rows", group, len(df))
 
             tests, ctrls = ed.get_experiments_for_group(group)
             manifest_entries.append({
@@ -291,7 +317,10 @@ def main():
                 "n_test": len(tests),
                 "n_control": len(ctrls),
                 "list_txt": f"groups/{group}/list.txt",
+                "saint_rows": len(df),
             })
+        record.extra(saint_binary=saint_cmd[0], saint_cmd=saint_cmd,
+                     groups=manifest_entries)
 
         saint_merged = pd.concat(per_group_dfs, ignore_index=True)
         saint_merged = recompute_bfdr(saint_merged)
@@ -309,19 +338,25 @@ def main():
                     len(saint_merged))
     else:
         logger.info("Running SAINTexpress (quantType=%s, imputation=%s)...", args.quantType, args.imputation)
-        _run_saint(args.scoreInputs, args.compress_n_rep, args.quantType,
-                   args.imputation, prey_filename)
+        saint_cmd = _run_saint(args.scoreInputs, args.compress_n_rep, args.quantType,
+                               args.imputation, prey_filename)
+        record.extra(saint_binary=saint_cmd[0], saint_cmd=saint_cmd)
 
     ########################################################################################################################
     ########################################################################################################################
     # Run CompPASS
-    logger.info("Running CompPASS...")
+    logger.info("Running CompPASS (norm_factor=%s, iterations=%d, seed=%d)...",
+                compPASS_pval.DEFAULT_NORM_FACTOR, args.n_iterations, args.seed)
 
     try:
         comp_input = pd.read_csv(f"{args.outputPath}/to_CompPASS.csv", sep=',', index_col=0).astype({'Prey': str, 'Bait': str})
-        compPass_result = compPASS_pval.score_compPass(comp_input, 0.98, args.n_iterations)
+        compPass_result = compPASS_pval.score_compPass(comp_input, iterations=args.n_iterations, seed=args.seed)
         compPass_result.to_csv(f"{args.outputPath}/compPASS.csv", index=False)
-        logger.info("CompPASS completed successfully")
+        record.metric("comppass_rows_in", len(comp_input))
+        record.metric("comppass_rows_out", len(compPass_result))
+        record.add_output(f"{args.outputPath}/compPASS.csv", rows=len(compPass_result))
+        logger.info("CompPASS completed successfully (%d rows in, %d out)",
+                    len(comp_input), len(compPass_result))
     except Exception:
         logger.exception("CompPASS scoring failed")
         sys.exit(1)
@@ -334,6 +369,7 @@ def main():
     try:
         saint = pd.read_csv(f"{args.scoreInputs}/list.txt", sep="\t")
         logger.info("SAINT output: %d rows, columns: %s", len(saint), list(saint.columns))
+        record.metric("saint_rows", len(saint))
 
         merged = pd.merge(saint, compPass_result, how="left", left_on=["Bait", "Prey"], right_on=["Experiment.ID", "Prey"])
 
@@ -351,6 +387,8 @@ def main():
 
         # Write the merged dataframe to a file
         merged.to_csv(f"{args.outputPath}/merged.csv", index=False)
+        record.metric("merged_rows", len(merged))
+        record.add_output(f"{args.outputPath}/merged.csv", rows=len(merged))
         logger.info("Merged output written to %s/merged.csv (%d rows)", args.outputPath, len(merged))
     except Exception:
         logger.exception("Merging CompPASS and SAINT outputs failed")

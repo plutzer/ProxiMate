@@ -4,8 +4,15 @@ All-in-one GUI and scripts for analyzing proximity labelling data.
 ## How to run the tool
 ### Running the GUI locally (easiest)
 1. Download and install Docker: https://www.docker.com/products/docker-desktop/
-2. Run the pre-built container from dockerhub, exposing the 3838 port
-    `docker run -p 3838:3838 plutzer/proximate`
+2. Run the pre-built container from dockerhub, exposing the 3838 port and mounting
+   a directory for the results:
+    ```
+    docker run -p 3838:3838 \
+      --mount type=bind,source=<native_path_to_output_directory>,target=/Outputs \
+      plutzer/proximate
+    ```
+   Without the mount, everything the tool writes — datasets, logs and run manifests —
+   lives inside the container and is lost when it is removed.
 3. Access the GUI through a web browswer at localhost:3838
 
 ### Running the docker container interactively (experienced users)
@@ -48,7 +55,44 @@ docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/pr
 **Options:**
 - `--organism`: `human` (default), `mouse`, or `yeast` — add before `--format` if needed
 - `quant_type`: `Intensity`, `LFQ`, or `Spectral Counts` (DIA-NN always uses Intensity; FragPipe supports all three)
-- `imputation`: `0` (none), `1` (prey-specific AFT), or `2` (refactored AFT)
+- `imputation`: `0` (none), `1` (prey-specific AFT), `2` (refactored AFT), or `3` (one-component AFT)
+- `--seed`: CompPASS permutation seed, so WD p-values reproduce between runs
+
+The pipeline stops at the first stage that fails, rather than carrying on with
+missing inputs.
+
+## Logs and provenance
+
+Three artifacts record what the tool did.
+
+| File | Scope | Contents |
+| --- | --- | --- |
+| `<output_dir>/run.json` | one dataset | parameters, input checksums, row counts, which SAINTexpress binary ran, package versions, pass/fail per stage |
+| `<output_dir>/proximate.log` | one dataset | timestamped log from parsing, scoring and annotation |
+| `<output_dir>/log.txt` | one dataset, CLI only | raw console transcript, including output the logger never sees |
+| `$PROXIMATE_LOG_DIR/proximate-server.log` | all datasets | the server's operational log, rotated at 10 MB |
+
+Every line and every manifest entry carries a **run ID** shared by the GUI and the
+parse, score and annotate processes it launches, so one run can be traced across
+all four. Attach `run.json` to a bug report.
+
+**Environment variables**
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `LOG_LEVEL` | `INFO` | `DEBUG` adds per-prey imputation detail. Affects ProxiMate's own loggers only. |
+| `PROXIMATE_LOG_DIR` | `/Outputs` (container), the output directory (CLI) | where the operational log is written |
+| `PROXIMATE_OUTPUT_DIR` | `/Outputs` | where the GUI stores datasets |
+| `PROXIMATE_RUN_ID` | minted per run | set it to correlate an external job with a ProxiMate run |
+| `LOG_FILE` | unset | an additional rotating log at an explicit path |
+
+**Building with a version stamp.** The image contains no git repository, so the
+version recorded in `run.json` comes from a build argument:
+
+```
+docker build --build-arg PROXIMATE_VERSION=$(git rev-parse --short HEAD) \
+  -t plutzer/proximate:latest .
+```
 
 ## Annotations and Databases:
 I will periodically push newer versions of the tool with updated databases. 

@@ -5,6 +5,9 @@ from sklearn.decomposition import PCA
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.metrics import roc_curve, auc
+from log_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def apply_score_thresholds(df, thresholds):
@@ -65,7 +68,8 @@ def _load_biogrid_cached(biogrid_path="/Datasets/biogrid_summary.csv"):
 
         return _biogrid_cache
     except FileNotFoundError:
-        print(f"Warning: BioGRID file not found at {biogrid_path}")
+        logger.warning("BioGRID file not found at %s; known-interaction plots "
+                       "will have no reference set.", biogrid_path)
         return None
 
 
