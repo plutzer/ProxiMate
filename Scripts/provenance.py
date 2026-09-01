@@ -197,6 +197,39 @@ def read_build_info(datasets_dir=DEFAULT_DATASETS_DIR):
         return None
 
 
+def biogrid_summary_path(organism, datasets_dir=None):
+    """Where ``setup_datasets`` writes the BioGRID summary for one organism.
+
+    The summary is filtered by taxonomy id, so each organism gets its own; there is no
+    copy at the top of the datasets directory.  The filename comes from
+    ``setup_datasets`` so the two stay in step.
+    """
+    from setup_datasets import BIOGRID_SUMMARY_FILENAME
+
+    if datasets_dir is None:
+        datasets_dir = DEFAULT_DATASETS_DIR
+    return os.path.join(datasets_dir, organism, BIOGRID_SUMMARY_FILENAME)
+
+
+def dataset_organism(output_dir, default="human"):
+    """The organism a dataset's results were annotated against.
+
+    Falls back to ``default`` for a dataset whose manifest records none, which covers
+    every run scored before the organism became a parameter.  A manifest that cannot be
+    read is treated the same way: callers resolve this to draw a plot, and an unreadable
+    manifest is not a reason to fail one.
+    """
+    document = _load(os.path.join(str(output_dir), RUN_JSON_FILENAME))
+
+    organism = default
+    for run in document["runs"].values():
+        for entry in run.get("stages", []):
+            recorded = entry.get("extra", {}).get("organism")
+            if recorded:
+                organism = recorded
+    return organism
+
+
 def _load(manifest_path):
     """Read an existing manifest, starting fresh if it is unusable."""
     try:

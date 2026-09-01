@@ -7,7 +7,7 @@
 # Direct dependencies, from which this file is generated:
 #   numpy pandas matplotlib seaborn scipy statsmodels patsy scikit-learn pytest
 #   shiny plotly==5.24 kaleido ipywidgets shinywidgets anywidget
-#   py4cytoscape>=1.12.0 requests>=2.25.0
+#   py4cytoscape>=1.12.0 requests>=2.25.0 matplotlib-venn
 #
 # To regenerate, write those into a file and run:
 #   uv pip compile <file> --python-version 3.12 --no-header --output-file requirements.txt
@@ -113,9 +113,12 @@ markdown-it-py==4.2.0
 matplotlib==3.10.7
     # via
     #   (direct dependency)
+    #   matplotlib-venn
     #   seaborn
 matplotlib-inline==0.2.2
     # via ipython
+matplotlib-venn==1.1.2
+    # via (direct dependency)
 mdit-py-plugins==0.6.1
     # via shiny
 mdurl==0.1.2
@@ -129,6 +132,7 @@ numpy==2.3.5
     #   (direct dependency)
     #   contourpy
     #   matplotlib
+    #   matplotlib-venn
     #   pandas
     #   patsy
     #   scikit-learn
@@ -219,6 +223,7 @@ scikit-learn==1.8.0
 scipy==1.16.3
     # via
     #   (direct dependency)
+    #   matplotlib-venn
     #   scikit-learn
     #   statsmodels
 seaborn==0.13.2

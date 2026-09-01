@@ -1,3 +1,5 @@
+import os
+
 import plotly.express as px
 import pandas as pd
 import numpy as np
@@ -6,6 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.metrics import roc_curve, auc
 from log_config import get_logger
+import provenance
 
 logger = get_logger(__name__)
 
@@ -44,7 +47,7 @@ _biogrid_cache = None
 _biogrid_cache_path = None
 
 
-def _load_biogrid_cached(biogrid_path="/Datasets/biogrid_summary.csv"):
+def _load_biogrid_cached(biogrid_path):
     """
     Load BioGRID data with caching to avoid repeated I/O.
 
@@ -284,7 +287,7 @@ def roc_plot(results_path, known_type, ctrl_experiments=None):
     return fig
 
 
-def calculate_network_degrees(passing_interactions, biogrid_path="/Datasets/biogrid_summary.csv"):
+def calculate_network_degrees(passing_interactions, biogrid_path):
     """
     Calculate prey-prey network degree for each prey protein from BioGRID.
 
@@ -296,12 +299,14 @@ def calculate_network_degrees(passing_interactions, biogrid_path="/Datasets/biog
     passing_interactions : pd.DataFrame
         Filtered interactions with columns: First_ID (prey), Bait.ID (bait)
     biogrid_path : str
-        Path to biogrid_summary.csv file
+        Path to the biogrid_summary.csv built for the relevant organism
 
     Returns:
     --------
-    list of int
-        Network degrees for each unique prey (prey-prey interactions only)
+    list of int, or None
+        Network degrees for each unique prey (prey-prey interactions only).  None when
+        the reference set could not be read: a degree of zero is a real result for a
+        prey with no published partners, so absent data must not be reported as one.
     """
 
     # Handle edge cases
@@ -311,7 +316,7 @@ def calculate_network_degrees(passing_interactions, biogrid_path="/Datasets/biog
     # Load BioGRID data using cache
     biogrid = _load_biogrid_cached(biogrid_path)
     if biogrid is None:
-        return [0] * len(passing_interactions)
+        return None
 
     # Get unique prey and bait IDs from the passing interactions
     # Use set for O(1) lookup performance in filtering
@@ -351,7 +356,8 @@ def calculate_network_degrees(passing_interactions, biogrid_path="/Datasets/biog
     return degrees
 
 
-def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None):
+def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None,
+                                biogrid_path=None):
     """
     Calculate metrics for interactions passing thresholds.
 
@@ -364,6 +370,9 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None)
                                            'WD': float, 'WDFDR': float}
     ctrl_experiments : list, optional
         List of control experiment IDs to filter by
+    biogrid_path : str, optional
+        Reference set for the network degree.  Defaults to the summary built for the
+        organism the dataset was annotated against.
 
     Returns:
     --------
@@ -372,7 +381,8 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None)
         - median_network_size: Median number of interactions per bait after filtering
         - enrichment_ratio: Average enrichment of known interactions
         - mean_degree: Mean prey-prey network degree (average number of other
-                      passing prey proteins each prey interacts with in BioGRID)
+                      passing prey proteins each prey interacts with in BioGRID),
+                      or None when the organism's BioGRID summary is unavailable
         - total_before: Total interactions before filtering
         - total_after: Total interactions after filtering
     """
@@ -417,8 +427,14 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None)
 
     # Calculate mean prey-prey network degree from BioGRID
     if total_after > 0:
-        degrees = calculate_network_degrees(passing_all)
-        mean_degree = np.mean(degrees) if len(degrees) > 0 else 0
+        if biogrid_path is None:
+            organism = provenance.dataset_organism(os.path.dirname(results_path))
+            biogrid_path = provenance.biogrid_summary_path(organism)
+        degrees = calculate_network_degrees(passing_all, biogrid_path)
+        if degrees is None:
+            mean_degree = None
+        else:
+            mean_degree = np.mean(degrees) if len(degrees) > 0 else 0
     else:
         mean_degree = 0
 

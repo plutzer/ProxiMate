@@ -132,6 +132,14 @@ def test_foreground_outside_all_ids_produces_k_greater_than_k_population():
 
 # --- process_refactored --------------------------------------------------------
 
+OPEN_THRESHOLDS = {"SaintScore": 0.0, "BFDR": 1.0, "WD": 0.0, "WDFDR": 1.0}
+
+
+def _thresholds(**overrides):
+    """Thresholds that admit everything, narrowed by whichever one a test is about."""
+    return {**OPEN_THRESHOLDS, **overrides}
+
+
 @pytest.fixture
 def annotated_scores():
     """One row per (Experiment.ID, Prey.ID), as annotated_scores.csv carries.
@@ -157,13 +165,16 @@ def annotated_scores():
                 "Experiment.ID": experiment,
                 "Prey.ID": prey,
                 "SaintScore": 0.9 if prey in passing[experiment] else 0.1,
+                "BFDR": 0.01,
+                "WD": 5.0,
+                "WDFDR": 0.01,
                 "SCL": scl,
             })
     return pd.DataFrame(rows)
 
 
 def test_threshold_selects_the_foreground(annotated_scores):
-    results = process_refactored(annotated_scores, ["SCL"], threshold=0.7)
+    results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
     e1 = results[results["Bait"] == "E1"].set_index("Feature")
 
     # E1's foreground is four preys, three of them nuclear, out of twelve overall.
@@ -174,8 +185,8 @@ def test_threshold_selects_the_foreground(annotated_scores):
 
 
 def test_a_lower_threshold_widens_the_foreground(annotated_scores):
-    narrow = process_refactored(annotated_scores, ["SCL"], threshold=0.7)
-    wide = process_refactored(annotated_scores, ["SCL"], threshold=0.0)
+    narrow = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
+    wide = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.0))
 
     assert narrow[narrow["Bait"] == "E1"]["n"].iloc[0] == 4
     assert wide[wide["Bait"] == "E1"]["n"].iloc[0] == 12
@@ -183,7 +194,7 @@ def test_a_lower_threshold_widens_the_foreground(annotated_scores):
 
 def test_adjusted_pvalues_are_corrected_within_each_bait_and_feature_type(annotated_scores):
     """BH runs per (feature type, experiment) group, not across the whole result."""
-    results = process_refactored(annotated_scores, ["SCL"], threshold=0.7)
+    results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
 
     for (_, _), group in results.groupby(["Feature_type", "Bait"]):
         expected = multipletests(group["p_value"].tolist(), method="fdr_bh")[1]
@@ -192,7 +203,7 @@ def test_adjusted_pvalues_are_corrected_within_each_bait_and_feature_type(annota
 
 def test_result_columns_are_in_a_stable_order(annotated_scores):
     """The GUI and its CSV export read these positionally-familiar columns."""
-    results = process_refactored(annotated_scores, ["SCL"], threshold=0.7)
+    results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
 
     assert list(results.columns) == [
         "Bait", "Feature", "Feature_type", "k", "n", "K", "M",
@@ -200,8 +211,8 @@ def test_result_columns_are_in_a_stable_order(annotated_scores):
 
 
 def test_empty_result_keeps_the_same_columns(annotated_scores):
-    empty = process_refactored(annotated_scores, ["SCL"], threshold=1.5)
-    populated = process_refactored(annotated_scores, ["SCL"], threshold=0.7)
+    empty = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=1.5))
+    populated = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
 
     assert len(empty) == 0
     assert list(empty.columns) == list(populated.columns)
@@ -210,7 +221,7 @@ def test_empty_result_keeps_the_same_columns(annotated_scores):
 def test_count_columns_are_integers(annotated_scores):
     """k, n, K and M are counts.  Accumulating results onto an empty seed frame
     would leave them as object dtype."""
-    results = process_refactored(annotated_scores, ["SCL"], threshold=0.7)
+    results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
 
     for column in ("k", "n", "K", "M"):
         assert results[column].dtype == np.int64, column
@@ -220,11 +231,11 @@ def test_produces_no_pandas_warnings(annotated_scores):
     with warnings.catch_warnings():
         warnings.simplefilter("error", FutureWarning)
         warnings.simplefilter("error", DeprecationWarning)
-        process_refactored(annotated_scores, ["SCL"], threshold=0.7)
+        process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
 
 
 def test_carries_bait_and_feature_type_labels(annotated_scores):
-    results = process_refactored(annotated_scores, ["SCL"], threshold=0.7)
+    results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
 
     assert set(results["Bait"]) == {"E1", "E2"}
     assert set(results["Feature_type"]) == {"SCL"}
@@ -232,7 +243,7 @@ def test_carries_bait_and_feature_type_labels(annotated_scores):
 
 def test_experiments_with_no_passing_features_contribute_nothing(annotated_scores):
     """A threshold above every score leaves an empty foreground, so no rows are added."""
-    results = process_refactored(annotated_scores, ["SCL"], threshold=1.5)
+    results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=1.5))
 
     assert len(results) == 0
 
@@ -248,13 +259,46 @@ def test_feature_map_keeps_the_last_row_for_a_repeated_prey():
                 "Experiment.ID": experiment,
                 "Prey.ID": prey,
                 "SaintScore": 0.9,
+                "BFDR": 0.01,
+                "WD": 5.0,
+                "WDFDR": 0.01,
                 "SCL": scl_for_p01 if prey == "P01" else "Nucleus",
             })
     data = pd.DataFrame(rows)
 
-    results = process_refactored(data, ["SCL"], threshold=0.7)
+    results = process_refactored(data, ["SCL"], _thresholds(SaintScore=0.7))
     nucleus = results[results["Feature"] == "Nucleus"].iloc[0]
 
     # Seven preys, but P01's last row says Cytoplasm, so Nucleus counts only six.
     assert nucleus["M"] == 7
     assert nucleus["K"] == 6
+
+
+def test_every_score_narrows_the_foreground(annotated_scores):
+    """The foreground is selected the same way the thresholding and download tabs
+    filter, so a bait's enriched features answer to the same four scores."""
+    wide = process_refactored(annotated_scores, ["SCL"], _thresholds())
+    assert wide[wide["Bait"] == "E1"]["n"].iloc[0] == 12
+
+    for narrowing in ({"BFDR": 0.001}, {"WD": 9.0}, {"WDFDR": 0.001}):
+        results = process_refactored(annotated_scores, ["SCL"], _thresholds(**narrowing))
+        assert results.empty, f"{narrowing} did not reach the foreground"
+
+
+def test_the_thresholds_combine_as_they_do_elsewhere(annotated_scores):
+    """All conditions must hold at once; one open threshold does not readmit a prey the
+    others excluded."""
+    results = process_refactored(
+        annotated_scores, ["SCL"], _thresholds(SaintScore=0.7, BFDR=0.001))
+
+    assert results.empty
+
+
+def test_a_missing_wdfdr_fails_the_threshold(annotated_scores):
+    """Scoring with no permutations leaves WDFDR null.  Elsewhere a null fails the
+    filter rather than passing it by default, and the foreground agrees."""
+    annotated_scores.loc[:, "WDFDR"] = np.nan
+
+    results = process_refactored(annotated_scores, ["SCL"], _thresholds(WDFDR=0.05))
+
+    assert results.empty

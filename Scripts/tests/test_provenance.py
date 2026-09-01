@@ -359,3 +359,56 @@ def test_build_info_is_read_from_the_file_setup_datasets_writes(tmp_path):
 
 def test_missing_build_info_reads_as_none(tmp_path):
     assert provenance.read_build_info(str(tmp_path)) is None
+
+
+# ---------------------------------------------------------------------------
+# Locating a dataset's annotation databases
+# ---------------------------------------------------------------------------
+
+def test_the_biogrid_summary_is_looked_for_where_setup_datasets_writes_it(tmp_path):
+    """The summary is built per organism, so there is no copy at the top of the
+    datasets directory to fall back on."""
+    path = provenance.biogrid_summary_path("mouse", str(tmp_path))
+
+    assert path == os.path.join(str(tmp_path), "mouse",
+                                setup_datasets.BIOGRID_SUMMARY_FILENAME)
+
+
+def test_the_organism_is_read_from_the_run_that_annotated_the_dataset(tmp_path, run_id):
+    with provenance.stage(tmp_path, "annotate") as record:
+        record.extra(organism="yeast")
+
+    assert provenance.dataset_organism(tmp_path) == "yeast"
+
+
+def test_a_dataset_with_no_manifest_falls_back_to_human(tmp_path):
+    """Datasets scored before the organism was recorded still have to resolve to
+    something, and every one of them was human."""
+    assert provenance.dataset_organism(tmp_path) == "human"
+
+
+def test_a_manifest_recording_no_organism_falls_back_to_human(tmp_path, run_id):
+    with provenance.stage(tmp_path, "parse"):
+        pass
+
+    assert provenance.dataset_organism(tmp_path) == "human"
+
+
+def test_the_most_recently_recorded_organism_wins(tmp_path, monkeypatch):
+    """A dataset re-scored against another organism is annotated against that one."""
+    monkeypatch.setenv("PROXIMATE_RUN_ID", "20260831T120000Z-0badcafe")
+    with provenance.stage(tmp_path, "annotate") as record:
+        record.extra(organism="human")
+    monkeypatch.setenv("PROXIMATE_RUN_ID", "20260901T120000Z-1badcafe")
+    with provenance.stage(tmp_path, "annotate") as record:
+        record.extra(organism="mouse")
+
+    assert provenance.dataset_organism(tmp_path) == "mouse"
+
+
+def test_an_unreadable_manifest_falls_back_rather_than_raising(tmp_path):
+    """QC plots resolve this on every redraw; a corrupt manifest must not take the
+    panel down with it."""
+    (tmp_path / provenance.RUN_JSON_FILENAME).write_text("{not json", encoding="utf-8")
+
+    assert provenance.dataset_organism(tmp_path) == "human"

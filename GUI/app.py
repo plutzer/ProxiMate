@@ -22,7 +22,6 @@ from network_comparison import (
     load_and_filter_bait_data,
     calculate_volcano_data,
     create_volcano_plot,
-    create_venn_diagram,
     create_venn_diagram_matplotlib,
     create_volcano_plot_matplotlib
 )
@@ -206,7 +205,7 @@ app_ui = ui.page_navbar(
                             ui.input_slider("threshold_wd", "WD Score Threshold",
                                           min=0.0, max=10.0, value=0.0, step=0.1),
                             ui.input_slider("threshold_wdfdr", "WDFDR Threshold",
-                                          min=0.0, max=1.0, value=0.05, step=0.01),
+                                          min=0.0, max=1.0, value=1.0, step=0.01),
                             ui.p("Presets:", style="margin-top: 15px; margin-bottom: 5px; font-weight: 500;"),
                             ui.layout_columns(
                                 ui.input_action_button("qc_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
@@ -214,8 +213,8 @@ app_ui = ui.page_navbar(
                                 ui.input_action_button("qc_preset_relaxed", "Relaxed", class_="btn-sm btn-outline-secondary"),
                                 col_widths=(4, 4, 4)
                             ),
-                            ui.p("Note: Thresholds are shown as reference lines on plots. Data is not filtered.",
-                                 style="font-style: italic; color: #666; margin-top: 10px;"),
+                            # ui.p("Note: Thresholds are shown as reference lines on plots. Data is not filtered.",
+                            #      style="font-style: italic; color: #666; margin-top: 10px;"),
                             ui.output_ui("wdfdr_warning"),
                         ),
                         col_widths=(6, 6),
@@ -259,14 +258,36 @@ app_ui = ui.page_navbar(
                     ui.card(
                         ui.card_header("Parameters for Feature Analysis"),
                         ui.input_select("feature_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
-                        ui.input_slider("saint_threshold", "Saint Threshold", min=0.0, max=1.0, value=0.9),
+                        ui.p("Preys passing all four scores form the foreground tested for enrichment.",
+                             class_="text-muted small"),
+                        ui.input_slider("fa_threshold_saintscore", "SAINT Score (≥)",
+                                      min=0.0, max=1.0, value=0.9, step=0.01),
+                        ui.input_slider("fa_threshold_bfdr", "BFDR (≤)",
+                                      min=0.0, max=1.0, value=1.0, step=0.01),
+                        ui.input_slider("fa_threshold_wd", "WD Score (≥)",
+                                      min=0.0, max=10.0, value=0.0, step=0.1),
+                        ui.input_slider("fa_threshold_wdfdr", "WDFDR (≤)",
+                                      min=0.0, max=1.0, value=1.0, step=0.01),
+                        ui.p("Presets:", style="margin-top: 15px; margin-bottom: 5px; font-weight: 500;"),
+                        # Flex row rather than layout_columns, whose columns collapse to
+                        # full-width stacked rows at this card's width.
+                        ui.div(
+                            ui.input_action_button("fa_preset_stringent", "Stringent",
+                                                   class_="btn-sm btn-outline-primary flex-fill"),
+                            ui.input_action_button("fa_preset_moderate", "Moderate",
+                                                   class_="btn-sm btn-outline-secondary flex-fill"),
+                            ui.input_action_button("fa_preset_relaxed", "Relaxed",
+                                                   class_="btn-sm btn-outline-secondary flex-fill"),
+                            class_="d-flex gap-2 mb-3",
+                        ),
                         ui.input_action_button("feature_analysis", "Run Feature Analysis"),
                     ),
                     ui.card(
                         ui.card_header("Feature Enrichment Analysis"),
                         ui.input_select("feature_type", "Select Feature Type", choices=["GO_CC", "GO_BP", "GO_MF", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
                         ui.input_numeric("num_features", "Number of Features to Display", value=30, min=1, max=100),
-                        ui.output_plot("feature_enrichment_plot"),
+                        # Thirty feature rows need the height to stay readable.
+                        ui.output_plot("feature_enrichment_plot", height="650px"),
                         ui.download_button("download_heatmap", "Export Heatmap PNG", class_="btn-sm"),
                         ui.hr(),
                         ui.h5("Download Enrichment Results"),
@@ -302,8 +323,11 @@ app_ui = ui.page_navbar(
                               min=0.0, max=1.0, value=0.05, step=0.01),
                 ui.input_slider("comp_wd_a", "WD Score (≥)",
                               min=0.0, max=10.0, value=0.0, step=0.1),
+                # WDFDR compares a prey's WD across experiments, so among replicate
+                # baits each prey passes in only its max-WD experiment; filtering on
+                # it by default would empty the venn overlap.  Default = no filter.
                 ui.input_slider("comp_wdfdr_a", "WDFDR (≤)",
-                              min=0.0, max=1.0, value=0.05, step=0.01),
+                              min=0.0, max=1.0, value=1.0, step=0.01),
             ),
             # Bait B selector card
             ui.card(
@@ -317,7 +341,7 @@ app_ui = ui.page_navbar(
                 ui.input_slider("comp_wd_b", "WD Score (≥)",
                               min=0.0, max=10.0, value=0.0, step=0.1),
                 ui.input_slider("comp_wdfdr_b", "WDFDR (≤)",
-                              min=0.0, max=1.0, value=0.05, step=0.01),
+                              min=0.0, max=1.0, value=1.0, step=0.01),
             ),
             col_widths=(6, 6),
         ),
@@ -333,7 +357,10 @@ app_ui = ui.page_navbar(
             ui.card_header("Differential Abundance Volcano Plot"),
             output_widget("volcano_plot"),
             ui.download_button("download_volcano_plot", "Export PNG", class_="btn-sm"),
-            ui.p("Volcano plot only shown when baits are from the same dataset.",
+            ui.p("Volcano plot only shown when baits are from the same dataset. "
+                 "Flanking strips hold preys detected under only one bait "
+                 "(y = -log10 BFDR); the central panel holds shared preys "
+                 "(y = -log10 BH-adjusted p).",
                  style="font-style: italic; color: #666; margin-top: 10px;"),
         ),
 
@@ -1381,6 +1408,17 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Call the metrics calculation function
         metrics = calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=ctrls)
 
+        # A degree of zero is a real result, so an unreadable BioGRID summary is named
+        # rather than averaged into one.
+        if metrics['mean_degree'] is None:
+            return ui.value_box(
+                "Mean Prey-Prey Degree",
+                "No reference set",
+                ui.p("No BioGRID summary for this dataset's organism.",
+                     class_="small mb-0"),
+                showcase=None
+            )
+
         return ui.value_box(
             "Mean Prey-Prey Degree",
             f"{metrics['mean_degree']:.1f}",
@@ -1458,14 +1496,14 @@ def server(input: Inputs, output: Outputs, session: Session):
         return None
 
     # Threshold presets for Data Thresholding tab
-    # Preset values: Stringent (0.9, 0.01, 2.0, 0.01), Moderate (0.7, 0.05, 1.0, 0.05), Relaxed (0.5, 0.1, 0.0, 0.1)
+    # Preset values (SaintScore, BFDR, WD, WDFDR): Stringent (0.9, 0.01, 2.0, 0.05), Moderate (0.7, 0.05, 1.0, 0.1), Relaxed (0.5, 0.1, 0.0, 1.0)
     @reactive.effect
     @reactive.event(input.qc_preset_stringent)
     def apply_qc_stringent_preset():
         ui.update_slider("threshold_saintscore", value=0.9)
         ui.update_slider("threshold_bfdr", value=0.01)
         ui.update_slider("threshold_wd", value=2.0)
-        ui.update_slider("threshold_wdfdr", value=0.01)
+        ui.update_slider("threshold_wdfdr", value=0.05)
 
     @reactive.effect
     @reactive.event(input.qc_preset_moderate)
@@ -1473,7 +1511,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_slider("threshold_saintscore", value=0.7)
         ui.update_slider("threshold_bfdr", value=0.05)
         ui.update_slider("threshold_wd", value=1.0)
-        ui.update_slider("threshold_wdfdr", value=0.05)
+        ui.update_slider("threshold_wdfdr", value=0.1)
 
     @reactive.effect
     @reactive.event(input.qc_preset_relaxed)
@@ -1481,7 +1519,32 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_slider("threshold_saintscore", value=0.5)
         ui.update_slider("threshold_bfdr", value=0.1)
         ui.update_slider("threshold_wd", value=0.0)
-        ui.update_slider("threshold_wdfdr", value=0.1)
+        ui.update_slider("threshold_wdfdr", value=1.0)
+
+    # Threshold presets for Protein Feature Analysis tab
+    @reactive.effect
+    @reactive.event(input.fa_preset_stringent)
+    def apply_fa_stringent_preset():
+        ui.update_slider("fa_threshold_saintscore", value=0.9)
+        ui.update_slider("fa_threshold_bfdr", value=0.01)
+        ui.update_slider("fa_threshold_wd", value=2.0)
+        ui.update_slider("fa_threshold_wdfdr", value=0.05)
+
+    @reactive.effect
+    @reactive.event(input.fa_preset_moderate)
+    def apply_fa_moderate_preset():
+        ui.update_slider("fa_threshold_saintscore", value=0.7)
+        ui.update_slider("fa_threshold_bfdr", value=0.05)
+        ui.update_slider("fa_threshold_wd", value=1.0)
+        ui.update_slider("fa_threshold_wdfdr", value=0.1)
+
+    @reactive.effect
+    @reactive.event(input.fa_preset_relaxed)
+    def apply_fa_relaxed_preset():
+        ui.update_slider("fa_threshold_saintscore", value=0.5)
+        ui.update_slider("fa_threshold_bfdr", value=0.1)
+        ui.update_slider("fa_threshold_wd", value=0.0)
+        ui.update_slider("fa_threshold_wdfdr", value=1.0)
 
     # Threshold presets for Downloads tab
     @reactive.effect
@@ -1490,7 +1553,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_slider("dl_threshold_saintscore", value=0.9)
         ui.update_slider("dl_threshold_bfdr", value=0.01)
         ui.update_slider("dl_threshold_wd", value=2.0)
-        ui.update_slider("dl_threshold_wdfdr", value=0.01)
+        ui.update_slider("dl_threshold_wdfdr", value=0.05)
 
     @reactive.effect
     @reactive.event(input.dl_preset_moderate)
@@ -1498,7 +1561,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_slider("dl_threshold_saintscore", value=0.7)
         ui.update_slider("dl_threshold_bfdr", value=0.05)
         ui.update_slider("dl_threshold_wd", value=1.0)
-        ui.update_slider("dl_threshold_wdfdr", value=0.05)
+        ui.update_slider("dl_threshold_wdfdr", value=0.1)
 
     @reactive.effect
     @reactive.event(input.dl_preset_relaxed)
@@ -1506,7 +1569,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_slider("dl_threshold_saintscore", value=0.5)
         ui.update_slider("dl_threshold_bfdr", value=0.1)
         ui.update_slider("dl_threshold_wd", value=0.0)
-        ui.update_slider("dl_threshold_wdfdr", value=0.1)
+        ui.update_slider("dl_threshold_wdfdr", value=1.0)
 
     @reactive.effect
     @reactive.event(input.dl_preset_none)
@@ -1663,8 +1726,14 @@ def server(input: Inputs, output: Outputs, session: Session):
             with ui.Progress(min=0, max=100) as progress, \
                     log_config.dataset_log(os.path.join(out_dir, dataset_name)):
                 progress.set(message="Running protein feature analysis", value=5)
-                logger.info("Starting feature enrichment for '%s' (threshold=%s)",
-                            dataset_name, input.saint_threshold.get())
+                thresholds = {
+                    'SaintScore': input.fa_threshold_saintscore.get(),
+                    'BFDR': input.fa_threshold_bfdr.get(),
+                    'WD': input.fa_threshold_wd.get(),
+                    'WDFDR': input.fa_threshold_wdfdr.get()
+                }
+                logger.info("Starting feature enrichment for '%s' (thresholds=%s)",
+                            dataset_name, thresholds)
 
                 # Get the selected dataset
                 progress.set(message="Running protein feature analysis", detail="Loading dataset...", value=20)
@@ -1674,7 +1743,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 result = process_refactored(
                     dataset,
                     columns_for_analysis = ['GO_CC', 'GO_BP', 'GO_MF', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains'],
-                    threshold = input.saint_threshold.get()
+                    thresholds = thresholds
                 )
 
                 progress.set(message="Running protein feature analysis", detail="Generating plots...", value=80)

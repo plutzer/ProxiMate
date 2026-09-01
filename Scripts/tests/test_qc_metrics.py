@@ -5,10 +5,13 @@ presentation and are only touched where a figure is the sole way to observe a
 calculation, as with the ROC curves' AUC.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
 
+import provenance
 import QC_plots
 from QC_plots import (
     apply_score_thresholds,
@@ -104,18 +107,23 @@ def test_preys_with_no_edges_get_zero(tmp_path):
     assert calculate_network_degrees(passing, biogrid) == [0, 0]
 
 
-def test_missing_biogrid_file_returns_zeros_per_row_not_per_prey(tmp_path):
-    """Documented inconsistency: the missing-file path returns one zero per interaction
-    row, while the no-edges path returns one per unique prey.  mean_degree is therefore
-    an average over a different denominator depending on which branch ran, and a
-    missing database reads as a real degree of zero rather than as absent data."""
+def test_a_missing_reference_set_is_reported_as_absent_not_as_zeros(tmp_path):
+    """A degree of zero is a real answer — a prey with no published partners among the
+    other passing preys.  Absent data has to be distinguishable from it, or the metric
+    reads as a measurement when no measurement was made."""
     passing = pd.DataFrame({"First_ID": ["P1", "P1", "P2"],
                             "Bait.ID": ["B1", "B2", "B1"]})
 
-    degrees = calculate_network_degrees(passing, str(tmp_path / "absent.csv"))
+    assert calculate_network_degrees(passing, str(tmp_path / "absent.csv")) is None
 
-    assert degrees == [0, 0, 0]
-    assert len(degrees) == 3          # rows, though there are only 2 unique preys
+
+def test_an_empty_reference_set_still_gives_real_zeros(tmp_path):
+    """The distinction above only works if a readable database that happens to share no
+    edges still counts as a measurement."""
+    biogrid = _write_biogrid(tmp_path / "bg.csv", [("X1", "X2")])
+    passing = pd.DataFrame({"First_ID": ["P1", "P2"], "Bait.ID": ["B1", "B1"]})
+
+    assert calculate_network_degrees(passing, biogrid) == [0, 0]
 
 
 # --- calculate_threshold_metrics -----------------------------------------------
@@ -193,13 +201,76 @@ def test_enrichment_ratio_is_zero_when_no_known_interactions_exist(tmp_path):
     assert metrics["enrichment_ratio"] == 0
 
 
-def test_mean_degree_is_zero_without_the_packaged_biogrid_file(scores_csv):
-    """calculate_threshold_metrics calls calculate_network_degrees without a path, so it
-    always reads /Datasets/biogrid_summary.csv.  Outside the container that file is
-    absent and mean_degree silently reports 0 instead of signalling missing data."""
+def test_mean_degree_is_absent_when_the_reference_set_is_missing(scores_csv):
+    """The GUI shows this as "no reference set" rather than as a number."""
     metrics = calculate_threshold_metrics(scores_csv, PASSING)
 
-    assert metrics["mean_degree"] == 0
+    assert metrics["mean_degree"] is None
+
+
+# --- locating the reference set ------------------------------------------------
+
+def _biogrid_for(datasets_dir, organism, edges):
+    """Write a BioGRID summary where setup_datasets puts one, for one organism."""
+    organism_dir = datasets_dir / organism
+    organism_dir.mkdir(parents=True, exist_ok=True)
+    return _write_biogrid(organism_dir / "biogrid_summary.csv", edges)
+
+
+@pytest.fixture
+def datasets_dir(tmp_path, monkeypatch):
+    """Stand in for the container's /Datasets tree."""
+    root = tmp_path / "Datasets"
+    root.mkdir()
+    monkeypatch.setattr(provenance, "DEFAULT_DATASETS_DIR", str(root))
+    return root
+
+
+def test_the_reference_set_comes_from_the_organism_the_dataset_was_annotated_against(
+        datasets_dir, scores_csv, monkeypatch):
+    """The summary is built per organism.  Reading another organism's file would score
+    a mouse experiment against human interactions."""
+    monkeypatch.setenv("PROXIMATE_RUN_ID", "20260901T120000Z-0badcafe")
+    with provenance.stage(os.path.dirname(scores_csv), "annotate") as record:
+        record.extra(organism="mouse")
+    _biogrid_for(datasets_dir, "mouse", [("P1", "P2"), ("P1", "P3")])
+    _biogrid_for(datasets_dir, "human", [])
+
+    metrics = calculate_threshold_metrics(scores_csv, PASSING)
+
+    assert metrics["mean_degree"] > 0
+
+
+def test_the_top_of_the_datasets_directory_is_not_where_the_summary_is_sought(
+        datasets_dir, scores_csv):
+    """setup_datasets writes no summary there, so a build looking for one finds nothing
+    and every dataset reports a degree of zero."""
+    _write_biogrid(datasets_dir / "biogrid_summary.csv",
+                   [("P1", "P2"), ("P1", "P3")])
+
+    metrics = calculate_threshold_metrics(scores_csv, PASSING)
+
+    assert metrics["mean_degree"] is None
+
+
+def test_a_dataset_with_no_manifest_falls_back_to_the_human_reference_set(
+        datasets_dir, scores_csv):
+    _biogrid_for(datasets_dir, "human", [("P1", "P2"), ("P1", "P3")])
+
+    metrics = calculate_threshold_metrics(scores_csv, PASSING)
+
+    assert metrics["mean_degree"] > 0
+
+
+def test_an_explicit_reference_set_overrides_the_recorded_organism(
+        datasets_dir, scores_csv, tmp_path):
+    """The command-line annotator takes an explicit path; the metric honors one too."""
+    _biogrid_for(datasets_dir, "human", [])
+    explicit = _write_biogrid(tmp_path / "elsewhere.csv", [("P1", "P2"), ("P1", "P3")])
+
+    metrics = calculate_threshold_metrics(scores_csv, PASSING, biogrid_path=explicit)
+
+    assert metrics["mean_degree"] > 0
 
 
 # --- roc_plot ------------------------------------------------------------------
