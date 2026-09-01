@@ -214,6 +214,39 @@ def test_version_prefers_the_baked_in_environment_variable(tmp_path, monkeypatch
     assert version["source"] == "env"
 
 
+def test_a_baked_version_is_labelled_bare(monkeypatch):
+    """What a built image shows: the stamp and nothing else."""
+    monkeypatch.setattr(provenance, "proximate_version",
+                        lambda: {"version": "9f2c1ab", "source": "env"})
+
+    assert provenance.version_label() == "version 9f2c1ab"
+
+
+def test_a_source_checkout_is_labelled_as_one(monkeypatch):
+    """A commit read from a working tree may include uncommitted edits, so it must not
+    be mistaken for the build that commit produced."""
+    monkeypatch.setattr(provenance, "proximate_version",
+                        lambda: {"version": "9f2c1ab", "source": "git"})
+
+    assert provenance.version_label() == "version 9f2c1ab (source checkout)"
+
+
+def test_an_unidentifiable_build_is_labelled_unknown(monkeypatch):
+    monkeypatch.setattr(provenance, "proximate_version",
+                        lambda: {"version": None, "source": "unknown"})
+
+    assert provenance.version_label() == "version unknown"
+
+
+def test_an_unstamped_image_is_also_labelled_unknown(monkeypatch):
+    """The Dockerfile defaults PROXIMATE_VERSION to the literal "unknown", so an image
+    built without the build argument reports that string rather than nothing.  It says
+    as little as an absent version and must read the same way."""
+    monkeypatch.setenv("PROXIMATE_VERSION", "unknown")
+
+    assert provenance.version_label() == "version unknown"
+
+
 # ---------------------------------------------------------------------------
 # Robustness — provenance must never fail a scientific run
 # ---------------------------------------------------------------------------

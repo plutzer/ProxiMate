@@ -430,6 +430,9 @@ app_ui = ui.page_navbar(
     ),
     sidebar=ui.sidebar(
         ui.h4("ProxiMate Beta"),
+        # Resolved once: the build cannot change while the server is running, and this
+        # is the identifier a bug report has to quote to be reproducible.
+        ui.div(provenance.version_label(), class_="text-muted small"),
         ui.hr(),
         ui.p(
             "Welcome! This is a ",
@@ -1006,7 +1009,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def clear_datasets():
         do_clear_datasets()
 
-    @render.download()
+    @render.download_button()
     def download_session():
         try:
             # Save the current state of the datasets dataframe to a CSV file
@@ -1514,7 +1517,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_slider("dl_threshold_wdfdr", value=1.0)
 
     # Plot export download handlers (using matplotlib for PNG export)
-    @render.download(filename="pca_plot.png")
+    @render.download_button(filename="pca_plot.png")
     def download_pca_plot():
         dataset_name = input.qc_dataset.get()
         if not dataset_name:
@@ -1530,7 +1533,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download(filename="scatter_plot.png")
+    @render.download_button(filename="scatter_plot.png")
     def download_scatter_plot():
         dataset_name = input.qc_dataset.get()
         bait_selection = input.qc_bait.get()
@@ -1544,7 +1547,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download(filename="heatmap.png")
+    @render.download_button(filename="heatmap.png")
     def download_heatmap():
         dataset = input.feature_dataset.get()
         if not dataset:
@@ -1566,7 +1569,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             notify(f"Insufficient data to generate heatmap: {e}", type="error")
             return None
 
-    @render.download(filename="volcano_plot.png")
+    @render.download_button(filename="volcano_plot.png")
     def download_volcano_plot():
         dataset_a = input.comp_dataset_a.get()
         dataset_b = input.comp_dataset_b.get()
@@ -1589,7 +1592,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download(filename="venn_diagram.png")
+    @render.download_button(filename="venn_diagram.png")
     def download_venn_diagram():
         bait_a = input.comp_bait_a.get()
         bait_b = input.comp_bait_b.get()
@@ -1753,7 +1756,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             logger.exception("Could not read baits from %s", feature_file)
             ui.update_select("download_bait_filter", choices=["All"])
 
-    @render.download()
+    @render.download_button()
     def download_enrichment():
         """Download filtered enrichment results."""
         dataset = input.feature_dataset.get()
@@ -2215,7 +2218,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         return f"Showing {len(df)} of {total} interactions"
     
     # Add a download button for the custom dataset
-    @render.download()
+    @render.download_button()
     def download_custom_dataset():
         if custom_dataset.get().empty:
             notify(
@@ -2231,7 +2234,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         custom_dataset.get().to_csv(savepath, index=False)
         return savepath
 
-    @render.download()
+    @render.download_button()
     def download_batch():
         """Download all results for a dataset as a ZIP file."""
         dataset = input.download_dataset.get()

@@ -100,6 +100,23 @@ def proximate_version():
     return {"version": None, "source": "unknown"}
 
 
+def version_label():
+    """Describe the running build in one line, for display to a user.
+
+    A commit read from a working tree may carry uncommitted edits, so it is marked as a
+    checkout rather than presented as the build that commit produced.  An image built
+    without ``--build-arg PROXIMATE_VERSION`` carries the literal "unknown" the
+    Dockerfile defaults to, which identifies the build no better than an absent version
+    and so reads the same way.
+    """
+    version = proximate_version()
+    if not version["version"]:
+        return "version unknown"
+    if version["source"] == "git":
+        return f"version {version['version']} (source checkout)"
+    return f"version {version['version']}"
+
+
 def _package_versions():
     from importlib import metadata
     versions = {}
