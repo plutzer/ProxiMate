@@ -10,8 +10,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 
+from QC_plots import prepare_pca_matrix, load_pca_metadata
 
-def pca_plot_matplotlib(interaction, experimentalDesign):
+
+def pca_plot_matplotlib(interaction, experimentalDesign, matrix=None):
     """
     Create a matplotlib PCA plot for export.
 
@@ -21,36 +23,25 @@ def pca_plot_matplotlib(interaction, experimentalDesign):
         Path to interaction.txt file
     experimentalDesign : str
         Path to ED.csv file
+    matrix : pd.DataFrame, optional
+        Preprocessed prey x experiment matrix from prepare_pca_matrix; computed
+        with default settings when omitted.
 
     Returns:
     --------
     matplotlib.figure.Figure
         PCA scatter plot
     """
-    # Load data
-    int_df = pd.read_csv(interaction, sep="\t", header=0)
-    int_df.columns = ['Experiment', 'BaitName', 'Prey', 'Intensity']
-    ed = pd.read_csv(experimentalDesign, sep=",")
-
-    # Make the int table wide
-    data = int_df.pivot(index='Prey', columns='Experiment', values='Intensity')
-
-    metadata = int_df[['Experiment', 'BaitName']].drop_duplicates()
-    metadata = metadata.merge(ed[['Experiment Name', 'Type']],
-                              left_on='Experiment', right_on='Experiment Name', how='left')
-
-    # Clean up the data
-    data = data.replace(0, np.nan)
-    data = data.dropna(thresh=len(data.columns) * 0.5)
-    data = data.apply(lambda row: row.fillna(row.min()), axis=1)
-    data = data.apply(lambda row: (row - row.mean()) / row.std(), axis=1)
+    if matrix is None:
+        matrix = prepare_pca_matrix(interaction)
+    metadata = load_pca_metadata(interaction, experimentalDesign)
 
     # Perform PCA
     pca = PCA(n_components=2)
-    pca_result = pca.fit_transform(data.T)
+    pca_result = pca.fit_transform(matrix.T)
 
     pca_df = pd.DataFrame(data=pca_result, columns=['PC1', 'PC2'])
-    pca_df['Experiment'] = data.columns
+    pca_df['Experiment'] = matrix.columns
     pca_df = pca_df.merge(metadata, left_on='Experiment', right_on='Experiment', how='left')
 
     explained_variance = pca.explained_variance_ratio_
@@ -89,6 +80,76 @@ def pca_plot_matplotlib(interaction, experimentalDesign):
     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12),
               ncol=min(4, len(unique_baits)), fontsize=9)
 
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    return fig
+
+
+def prey_pca_matplotlib(matrix, color_values=None, color_label=None,
+                        color_mode="none", color_threshold=None):
+    """
+    Create a matplotlib prey-level PCA plot for export.
+
+    Parameters:
+    -----------
+    matrix : pd.DataFrame
+        Preprocessed prey x experiment matrix from prepare_pca_matrix
+    color_values : pd.Series, optional
+        Per-prey color data indexed by prey ID (numeric for 'continuous',
+        labels for 'categorical')
+    color_label : str, optional
+        Legend / colorbar title
+    color_mode : str
+        'none', 'continuous', or 'categorical'
+
+    Returns:
+    --------
+    matplotlib.figure.Figure
+        PCA scatter plot
+    """
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(matrix)
+    explained_variance = pca.explained_variance_ratio_
+
+    prey_df = pd.DataFrame(data=pca_result, columns=['PC1', 'PC2'])
+    prey_df['Prey'] = matrix.index
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    if color_mode == "continuous":
+        values = prey_df['Prey'].map(color_values)
+        if color_threshold is not None:
+            below = values < color_threshold
+            ax.scatter(prey_df.loc[below, 'PC1'], prey_df.loc[below, 'PC2'],
+                       c='lightgrey', s=20, alpha=0.7,
+                       label=f"{color_label} < {color_threshold:g}")
+            sc = ax.scatter(prey_df.loc[~below, 'PC1'], prey_df.loc[~below, 'PC2'],
+                            c=values[~below], cmap='viridis', s=20, alpha=0.7)
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=9)
+        else:
+            sc = ax.scatter(prey_df['PC1'], prey_df['PC2'], c=values,
+                            cmap='viridis', s=20, alpha=0.7)
+        fig.colorbar(sc, ax=ax, label=color_label)
+    elif color_mode == "categorical":
+        labels = prey_df['Prey'].map(color_values)
+        categories = [c for c in labels.dropna().unique()
+                      if c not in ("Other", "Unknown")]
+        categories = sorted(categories) + ["Other", "Unknown"]
+        colors = plt.cm.tab20(np.linspace(0, 1, len(categories)))
+        for category, color in zip(categories, colors):
+            subset = prey_df[labels == category]
+            if len(subset) > 0:
+                ax.scatter(subset['PC1'], subset['PC2'], c=[color],
+                           s=20, alpha=0.7, label=category)
+        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12),
+                  ncol=4, fontsize=9, title=color_label)
+    else:
+        ax.scatter(prey_df['PC1'], prey_df['PC2'], s=20, alpha=0.7)
+
+    ax.set_xlabel(f"PC1 ({explained_variance[0]*100:.2f}% variance)", fontsize=12)
+    ax.set_ylabel(f"PC2 ({explained_variance[1]*100:.2f}% variance)", fontsize=12)
+    ax.set_title("Prey PCA", fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
 

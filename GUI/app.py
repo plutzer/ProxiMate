@@ -16,7 +16,7 @@ import zipfile
 import tempfile
 import datetime
 import shutil
-from QC_plots import pca_plot, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics, apply_score_thresholds
+from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
 from Ann_Enrichment import process_refactored, plot_results
 from network_comparison import (
     load_and_filter_bait_data,
@@ -25,7 +25,9 @@ from network_comparison import (
     create_venn_diagram_matplotlib,
     create_volcano_plot_matplotlib
 )
-from plot_exports import pca_plot_matplotlib, saint_scatter_matplotlib
+from plot_exports import pca_plot_matplotlib, prey_pca_matplotlib, saint_scatter_matplotlib
+import download_presets as dp
+from download_presets import DEFAULT_CUSTOM_COLUMNS
 import py4cytoscape as p4c
 import log_config
 import provenance
@@ -188,13 +190,54 @@ app_ui = ui.page_navbar(
                     ui.input_select("qc_dataset", "Select Dataset", choices=[]),
                     ui.output_ui("empty_state_thresholding"),
 
-                    # Row 1: PCA and Threshold controls (50% width each)
+                    # Preprocessing controls shared by both PCA plots below
+                    ui.card(
+                        ui.card_header("PCA Preprocessing"),
+                        ui.layout_columns(
+                            ui.input_select("pca_imputation", "Imputation",
+                                            choices={"row_min": "Row minimum",
+                                                     "zero": "Zero",
+                                                     "drop": "Drop incomplete preys"},
+                                            selected="row_min"),
+                            ui.input_select("pca_normalization", "Normalization",
+                                            choices={"zscore": "Z-score",
+                                                     "log2_zscore": "log2 + Z-score",
+                                                     "none": "None"},
+                                            selected="zscore"),
+                            ui.input_slider("pca_min_detection", "Min detection fraction",
+                                            min=0.0, max=1.0, value=0.5, step=0.05),
+                            col_widths=(4, 4, 4),
+                        ),
+                    ),
+
+                    # Row 1: experiment-level and prey-level PCA side by side
                     ui.layout_columns(
                         ui.card(
-                            ui.card_header("Raw Data PCA"),
+                            ui.card_header("Experiment PCA"),
                             output_widget("raw_pca_plot"),
                             ui.download_button("download_pca_plot", "Export PNG", class_="btn-sm"),
                         ),
+                        ui.card(
+                            ui.card_header("Prey PCA"),
+                            ui.layout_columns(
+                                ui.input_select("prey_pca_color", "Color by",
+                                                choices={"none": "None",
+                                                         "detection": "Detection count"},
+                                                selected="none"),
+                                ui.panel_conditional(
+                                    "input.prey_pca_color == 'saint'",
+                                    ui.input_select("prey_pca_bait", "Bait", choices=[]),
+                                ),
+                                col_widths=(6, 6),
+                            ),
+                            output_widget("prey_pca_plot"),
+                            ui.download_button("download_prey_pca_plot", "Export PNG", class_="btn-sm"),
+                        ),
+                        col_widths=(6, 6),
+                    ),
+
+                    # Row 2: threshold controls | SAINT scatter | metrics
+                    ui.layout_columns(
                         ui.card(
                             ui.card_header("Threshold Settings"),
                             ui.input_select("qc_bait", "Select Control Bait", choices=["All"]),
@@ -207,21 +250,18 @@ app_ui = ui.page_navbar(
                             ui.input_slider("threshold_wdfdr", "WDFDR Threshold",
                                           min=0.0, max=1.0, value=1.0, step=0.01),
                             ui.p("Presets:", style="margin-top: 15px; margin-bottom: 5px; font-weight: 500;"),
-                            ui.layout_columns(
+                            # d-flex, not layout_columns: layout_columns collapses to
+                            # stacked full-width rows inside a narrow card
+                            ui.div(
                                 ui.input_action_button("qc_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
                                 ui.input_action_button("qc_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
                                 ui.input_action_button("qc_preset_relaxed", "Relaxed", class_="btn-sm btn-outline-secondary"),
-                                col_widths=(4, 4, 4)
+                                class_="d-flex gap-2 mb-3",
                             ),
                             # ui.p("Note: Thresholds are shown as reference lines on plots. Data is not filtered.",
                             #      style="font-style: italic; color: #666; margin-top: 10px;"),
                             ui.output_ui("wdfdr_warning"),
                         ),
-                        col_widths=(6, 6),
-                    ),
-
-                    # Row 2: SAINT scatter plot and metrics side-by-side
-                    ui.layout_columns(
                         ui.card(
                             ui.card_header("SAINT Score vs Fold Change"),
                             output_widget("saint_scatter_plot"),
@@ -233,7 +273,7 @@ app_ui = ui.page_navbar(
                             ui.output_ui("metric_enrichment"),
                             ui.output_ui("metric_degree"),
                         ),
-                        col_widths=(6, 6),
+                        col_widths=(4, 5, 3),
                     ),
 
                     # Keep these plots in code but hide them (for potential future use)
@@ -432,20 +472,36 @@ app_ui = ui.page_navbar(
                             ui.input_action_button("dl_preset_none", "No Filter", class_="btn-sm btn-outline-secondary"),
                             col_widths=(3, 3, 3, 3)
                         ),
-                        ui.p("Set all thresholds to their default values (0.0/1.0) to download unfiltered data.",
+                    ui.p("Thresholds apply only to score-based presets (Annotated Scores, "
+                             "Cytoscape, Gene List, ProHits-viz, Custom). Set all thresholds to "
+                             "their default values (0.0/1.0) to download unfiltered data.",
                              style="font-style: italic; color: #666;"),
                     ),
                     ui.layout_columns(
                         ui.card(
-                            ui.card_header("Create a Custom Dataset"),
-                            "Select Columns for the Custom Dataset",
-                            ui.input_selectize("custom_columns", "Select Columns", choices=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"], multiple=True, selected=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"]),
+                            ui.card_header("Download Builder"),
+                            ui.input_radio_buttons("dl_preset", "Preset",
+                                choices={key: preset.label for key, preset in dp.PRESETS.items()}),
+                            ui.input_checkbox_group("dl_groups", "Include", choices=[]),
+                            ui.panel_conditional("input.dl_preset === 'custom'",
+                                ui.input_selectize("custom_columns", "Select Columns",
+                                    choices=DEFAULT_CUSTOM_COLUMNS, multiple=True,
+                                    selected=DEFAULT_CUSTOM_COLUMNS),
+                            ),
+                            ui.panel_conditional("input.dl_preset === 'genelist'",
+                                ui.input_radio_buttons("dl_genelist_mode", "Gene list mode",
+                                    choices={"pooled": "Pooled unique genes", "per_bait": "Per bait"}),
+                            ),
+                            ui.panel_conditional("input.dl_preset === 'prohits'",
+                                ui.input_select("dl_prohits_abundance", "Abundance column",
+                                    choices=["AvePSM", "AvgIntensity"]),
+                            ),
                         ),
                         ui.card(
-                            ui.card_header("Custom Dataset"),
+                            ui.card_header("Preview"),
                             ui.output_text("download_row_count"),
-                            ui.output_data_frame("custom_table"),
-                            ui.download_button("download_custom_dataset", "Download Custom Dataset"),
+                            ui.output_data_frame("dl_preview_table"),
+                            ui.download_button("download_preset", "Download"),
                         ),
                         col_widths=(4,8)
                     ),
@@ -1235,28 +1291,92 @@ def server(input: Inputs, output: Outputs, session: Session):
             )
 
     # Quality controls tab
+    @reactive.Calc
+    def pca_matrix_cached():
+        # Shared by the experiment and prey PCA plots and their PNG exports, so
+        # the preprocessing runs once per settings change and all four agree.
+        dataset_name = input.qc_dataset()
+        if not dataset_name:
+            return None
+        interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
+        if not os.path.exists(interaction_path):
+            return None
+        return prepare_pca_matrix(
+            interaction_path,
+            min_detection_frac=input.pca_min_detection(),
+            imputation=input.pca_imputation(),
+            normalization=input.pca_normalization(),
+        )
+
+    def _prey_pca_color_data(dataset_name, mode, bait, prey_index):
+        """Color data for the prey PCA: (values, label, mode, threshold) as
+        prey_pca_plot expects. Annotation-based modes fall back to uncolored
+        when the dataset has no annotated_scores.csv yet. SaintScore coloring
+        greys out preys below 0.1 so the color scale is spent on candidate
+        interactors."""
+        if mode == "detection":
+            interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
+            counts = detection_counts(interaction_path).reindex(prey_index)
+            return counts, "Detections", "continuous", None
+        if mode in ("saint", "hpa", "scl"):
+            scores_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+            if not os.path.exists(scores_path):
+                return None, None, "none", None
+            scores = pd.read_csv(scores_path)
+            if mode == "saint":
+                if not bait:
+                    return None, None, "none", None
+                s = (scores[scores['Experiment.ID'] == bait]
+                     .set_index('Prey.ID')['SaintScore'])
+                # A prey never scored for this bait is a non-interactor: score 0
+                return s.reindex(prey_index).fillna(0.0), f"SaintScore ({bait})", "continuous", 0.1
+            column = "Main location" if mode == "hpa" else "first_SCL"
+            if column not in scores.columns:
+                return None, None, "none", None
+            s = (scores.drop_duplicates('Prey.ID')
+                 .set_index('Prey.ID')[column])
+            label = "HPA Main location" if mode == "hpa" else "UniProt localization"
+            return reduce_categorical(s.reindex(prey_index)), label, "categorical", None
+        return None, None, "none", None
+
     @render_plotly
     def raw_pca_plot():
         with ui.Progress(min=0, max=100) as progress:
             progress.set(message="Generating Plots...", value=25)
-            # Get the selected dataset
             dataset_name = input.qc_dataset.get()
             if not dataset_name:
                 return None
-            
-            # Build the file paths
+
             interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
             ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
-
-            # Check if the files exist
             if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
                 return None
-            
-            # Generate the PCA plot
-            fig = pca_plot(interaction_path, ed_path)
+
+            matrix = pca_matrix_cached()
+            if matrix is None:
+                return None
+            fig = pca_plot(interaction_path, ed_path, matrix=matrix)
 
             return fig
-    
+
+    @render_plotly
+    def prey_pca_plot():
+        with ui.Progress(min=0, max=100) as progress:
+            progress.set(message="Generating Plots...", value=25)
+            dataset_name = input.qc_dataset.get()
+            if not dataset_name:
+                return None
+            matrix = pca_matrix_cached()
+            if matrix is None:
+                return None
+            values, label, mode, threshold = _prey_pca_color_data(
+                dataset_name, input.prey_pca_color(), input.prey_pca_bait(),
+                matrix.index)
+            return plot_prey_pca(matrix, color_values=values,
+                                 color_label=label, color_mode=mode,
+                                 color_threshold=threshold)
+
+
     @render_widget
     def known_retention_plot():
         # Get the selected dataset
@@ -1591,8 +1711,28 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
             notify("Required files not found.", type="error")
             return None
-        fig = pca_plot_matplotlib(interaction_path, ed_path)
+        fig = pca_plot_matplotlib(interaction_path, ed_path, matrix=pca_matrix_cached())
         filepath = os.path.join(out_dir, "pca_plot.png")
+        fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+        return filepath
+
+    @render.download_button(filename="prey_pca_plot.png")
+    def download_prey_pca_plot():
+        dataset_name = input.qc_dataset.get()
+        if not dataset_name:
+            notify("No dataset selected.", type="error")
+            return None
+        matrix = pca_matrix_cached()
+        if matrix is None:
+            notify("Required files not found.", type="error")
+            return None
+        values, label, mode, threshold = _prey_pca_color_data(
+            dataset_name, input.prey_pca_color(), input.prey_pca_bait(),
+            matrix.index)
+        fig = prey_pca_matplotlib(matrix, color_values=values,
+                                  color_label=label, color_mode=mode,
+                                  color_threshold=threshold)
+        filepath = os.path.join(out_dir, "prey_pca_plot.png")
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
@@ -1916,6 +2056,45 @@ def server(input: Inputs, output: Outputs, session: Session):
         else:
             ui.update_select("qc_bait", choices=["All"])  # Reset to default if no dataset is selected
 
+    @reactive.effect
+    @reactive.event(input.qc_dataset, datasets)
+    def update_prey_pca_color_choices():
+        # Annotation-based color options exist only once the dataset is scored;
+        # HPA localization only when the organism has HPA data (human).
+        choices = {"none": "None", "detection": "Detection count"}
+        dataset_name = input.qc_dataset()
+        baits = []
+        if dataset_name:
+            scores_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+            if os.path.exists(scores_path):
+                try:
+                    cols = pd.read_csv(scores_path, nrows=0).columns
+                    choices["saint"] = "SaintScore (per bait)"
+                    if "Main location" in cols:
+                        choices["hpa"] = "HPA Main location"
+                    if "first_SCL" in cols:
+                        choices["scl"] = "UniProt localization"
+                    baits = pd.read_csv(scores_path, usecols=['Experiment.ID'])['Experiment.ID'].unique().tolist()
+                except Exception:
+                    logger.exception("Could not read %s for prey PCA color options", scores_path)
+        ui.update_select("prey_pca_color", choices=choices)
+        ui.update_select("prey_pca_bait", choices=baits)
+
+    @reactive.effect
+    @reactive.event(input.qc_dataset, datasets)
+    def update_pca_normalization_default():
+        # Intensity-scale data defaults to log2; spectral counts stay linear.
+        # Fires only on dataset change, so a manual override sticks after it.
+        dataset_name = input.qc_dataset()
+        if not dataset_name:
+            return
+        df = datasets.get()
+        quant = df.loc[df['Dataset Name'] == dataset_name, 'Quant Type']
+        if quant.empty:
+            return
+        default = "log2_zscore" if quant.values[0] in ("Intensity", "LFQ") else "zscore"
+        ui.update_select("pca_normalization", selected=default)
+
     # Network Comparison Tab - Reactive Effects and Renderers
 
     # Cached data loaders for Network Comparison
@@ -2216,21 +2395,60 @@ def server(input: Inputs, output: Outputs, session: Session):
         return f"Both networks ({len(genes_sorted)} genes):\n\n" + "\n".join(genes_sorted)
 
     @reactive.Effect
-    def update_selectize_custom_columns():
-        # Update the custom columns selectize input based on the available datasets
+    @reactive.event(input.download_dataset, datasets)
+    def update_dl_presets():
+        """Offer only the presets whose required files exist for this dataset."""
         dataset_name = input.download_dataset.get()
-        if dataset_name:
-            # Read the dataset to get the columns
-            dataset_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
-            if os.path.exists(dataset_path):
-                df = pd.read_csv(dataset_path)
-                available_columns = df.columns.tolist()
-                # Sort the columns alphabetically
-                available_columns.sort()
-                ui.update_selectize("custom_columns", choices=available_columns, selected=["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"], server=True)
+        avail = (dp.available_presets(os.path.join(out_dir, dataset_name))
+                 if dataset_name else [])
+        # A radio group cannot render zero choices (Shiny force-selects the
+        # first), so with no dataset or no usable preset fall back to the full
+        # registry; previews stay empty until a dataset provides the files.
+        choices = ({key: dp.PRESETS[key].label for key in avail}
+                   or {key: preset.label for key, preset in dp.PRESETS.items()})
+        selected = input.dl_preset.get()
+        if selected not in choices:
+            selected = next(iter(choices))
+        ui.update_radio_buttons("dl_preset", choices=choices, selected=selected)
 
-    custom_dataset = reactive.Value(pd.DataFrame())
-    custom_dataset_total = reactive.Value(0)
+    @reactive.Effect
+    @reactive.event(input.dl_preset, input.download_dataset)
+    def update_dl_groups():
+        """Populate the Include checkboxes with the preset's column groups or
+        file choices, preserving still-valid picks across switches."""
+        preset = dp.PRESETS.get(input.dl_preset.get())
+        items = () if preset is None else (
+            preset.files if preset.kind == "files" else preset.groups)
+        if not items:
+            ui.update_checkbox_group("dl_groups", choices=[], selected=[])
+            return
+        choices = {item.key: item.label for item in items}
+        current = [k for k in input.dl_groups.get() if k in choices]
+        selected = current or [item.key for item in items if item.default]
+        ui.update_checkbox_group("dl_groups", choices=choices, selected=selected)
+
+    @reactive.Effect
+    @reactive.event(input.download_dataset, datasets)
+    def update_selectize_custom_columns():
+        """Offer the selected dataset's full column list in the Custom preset,
+        keeping the user's still-valid picks. Client-side options only: the
+        column list is small and server-side selectize never delivers options
+        to the browser in this app."""
+        dataset_name = input.download_dataset.get()
+        scores_path = (os.path.join(out_dir, dataset_name, "annotated_scores.csv")
+                       if dataset_name else "")
+        if not scores_path or not os.path.exists(scores_path):
+            ui.update_selectize("custom_columns", choices=DEFAULT_CUSTOM_COLUMNS,
+                                selected=DEFAULT_CUSTOM_COLUMNS)
+            return
+        cols = sorted(pd.read_csv(scores_path, nrows=0).columns.tolist())
+        keep = ([c for c in input.custom_columns.get() if c in cols]
+                or DEFAULT_CUSTOM_COLUMNS)
+        ui.update_selectize("custom_columns", choices=cols, selected=keep)
+
+    dl_result = reactive.Value(pd.DataFrame())
+    dl_result_total = reactive.Value(0)
+    dl_result_files = reactive.Value([])
 
     @reactive.Calc
     def cached_download_data():
@@ -2244,63 +2462,136 @@ def server(input: Inputs, output: Outputs, session: Session):
             return pd.DataFrame()
         return pd.read_csv(dataset_path)
 
-    @render.data_frame
-    def custom_table():
-        # Use cached data instead of re-reading file on every slider change
-        df = cached_download_data()
-        if df.empty:
-            custom_dataset_total.set(0)
+    @reactive.Calc
+    def cached_enrichment_data():
+        """Cache Feature_enrichment.csv for the selected dataset; empty frame
+        when the Feature Analysis tab has not produced one."""
+        dataset = input.download_dataset.get()
+        if not dataset:
             return pd.DataFrame()
+        path = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
+        if not os.path.exists(path):
+            return pd.DataFrame()
+        return pd.read_csv(path)
 
-        # Custom cols will come from a user input
-        custom_cols = list(input.custom_columns.get())
-        if not custom_cols:
-            # Default columns if none are selected
-            custom_cols = ["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"]
-
-        # Store total row count before filtering
-        custom_dataset_total.set(len(df))
-
-        # Apply threshold filtering using centralized function
-        thresholds = {
+    def _dl_thresholds():
+        return {
             'SaintScore': input.dl_threshold_saintscore(),
             'BFDR': input.dl_threshold_bfdr(),
             'WD': input.dl_threshold_wd(),
             'WDFDR': input.dl_threshold_wdfdr()
         }
-        df = apply_score_thresholds(df, thresholds)
 
-        custom_df = df[custom_cols]
-        custom_dataset.set(custom_df)
-
-        return custom_dataset.get()
+    @render.data_frame
+    def dl_preview_table():
+        """Build the selected preset's export and preview it. The result is
+        stored in dl_result / dl_result_files so the download handler writes
+        exactly what is previewed."""
+        dataset = input.download_dataset.get()
+        preset_key = input.dl_preset.get()
+        preset = dp.PRESETS.get(preset_key)
+        dl_result.set(pd.DataFrame())
+        dl_result_total.set(0)
+        dl_result_files.set([])
+        if not dataset or preset is None:
+            return pd.DataFrame()
+        dataset_dir = os.path.join(out_dir, dataset)
+        # Checkbox state can still belong to the previously shown preset while
+        # the update_dl_groups round-trip is in flight; sanitize it.
+        groups = dp.effective_selection(preset, input.dl_groups.get())
+        try:
+            if preset_key == 'ed':
+                ed_path = os.path.join(dataset_dir, "ED.csv")
+                if not os.path.exists(ed_path):
+                    return pd.DataFrame()
+                result = pd.read_csv(ed_path)
+                dl_result_total.set(len(result))
+            elif preset_key == 'saint_inputs':
+                paths, missing = dp.saint_input_files(dataset_dir, groups)
+                if missing:
+                    notify("Not produced by this run: " + ", ".join(missing),
+                           type="warning")
+                dl_result_files.set(paths)
+                dl_result_total.set(len(paths))
+                return pd.DataFrame({
+                    'File': [os.path.basename(p) for p in paths],
+                    'Size (KB)': [round(os.path.getsize(p) / 1024, 1)
+                                  for p in paths],
+                })
+            elif preset_key == 'enrichment':
+                df = cached_enrichment_data()
+                if df.empty:
+                    return pd.DataFrame()
+                result = dp.build_enrichment_table(df, groups)
+                dl_result_total.set(len(df))
+            else:
+                df = cached_download_data()
+                if df.empty:
+                    return pd.DataFrame()
+                dl_result_total.set(len(df))
+                thresholds = _dl_thresholds()
+                if preset_key == 'annotated':
+                    result = dp.build_annotated_table(df, groups, thresholds)
+                elif preset_key == 'cytoscape':
+                    result = dp.build_cytoscape_edges(df, thresholds)
+                elif preset_key == 'genelist':
+                    result = dp.build_gene_list(df, thresholds,
+                                                mode=input.dl_genelist_mode())
+                elif preset_key == 'prohits':
+                    result = dp.build_prohits_table(
+                        df, thresholds,
+                        abundance_col=input.dl_prohits_abundance())
+                else:  # custom
+                    result, missing = dp.build_custom_table(
+                        df, list(input.custom_columns.get()), thresholds)
+                    if missing:
+                        notify("Columns not in this dataset: " + ", ".join(missing),
+                               type="warning")
+        except ValueError as err:
+            notify(str(err), type="error")
+            return pd.DataFrame()
+        dl_result.set(result)
+        return result
 
     @render.text
     def download_row_count():
-        """Display the filtered row count."""
-        df = custom_dataset.get()
-        total = custom_dataset_total.get()
-
-        if df.empty and total == 0:
+        """Preset-aware summary line above the preview."""
+        preset = dp.PRESETS.get(input.dl_preset.get())
+        total = dl_result_total.get()
+        if preset is None or total == 0:
             return ""
+        if preset.kind == 'files':
+            return f"{total} files selected"
+        if preset.kind == 'genelist':
+            return f"{len(dl_result.get())} genes from {total} interactions"
+        if preset.uses_thresholds:
+            return f"Showing {len(dl_result.get())} of {total} interactions"
+        return f"{len(dl_result.get())} rows"
 
-        return f"Showing {len(df)} of {total} interactions"
-    
-    # Add a download button for the custom dataset
     @render.download_button()
-    def download_custom_dataset():
-        if custom_dataset.get().empty:
-            notify(
-                "No custom dataset to download. Please select columns first.",
-                type="error",
-            )
+    def download_preset():
+        dataset = input.download_dataset.get()
+        preset = dp.PRESETS.get(input.dl_preset.get())
+        if not dataset or preset is None:
+            notify("No dataset selected.", type="error")
+            return None
+        if preset.kind == 'files':
+            if not dl_result_files.get():
+                notify("No files selected to download.", type="error")
+                return None
+        elif dl_result.get().empty:
+            notify("Nothing to download with the current selection.", type="error")
             return None
         notify("Preparing download...", type="message", duration=2)
-        # Create a temporary file to save the custom dataset
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"custom_dataset_{timestamp}.csv"
-        savepath = os.path.join(out_dir, filename)
-        custom_dataset.get().to_csv(savepath, index=False)
+        savepath = os.path.join(
+            out_dir, f"{dataset}_{preset.key}_{timestamp}{preset.extension}")
+        if preset.extension == '.zip':
+            dp.zip_files(dl_result_files.get(), savepath)
+        elif preset.extension == '.txt':
+            dp.write_gene_list(dl_result.get(), savepath)
+        else:
+            dl_result.get().to_csv(savepath, index=False)
         return savepath
 
     @render.download_button()

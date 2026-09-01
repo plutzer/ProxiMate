@@ -76,59 +76,111 @@ def _load_biogrid_cached(biogrid_path):
         return None
 
 
-def pca_plot(interaction, experimentalDesign):
+def prepare_pca_matrix(interaction, min_detection_frac=0.5,
+                       imputation="row_min", normalization="zscore"):
+    """Load a SAINT interaction file and return the prey x experiment matrix
+    both PCA plots run on.
 
-    int = pd.read_csv(interaction, sep="\t", header=0)
-    int.columns = ['Experiment', 'BaitName', 'Prey', 'Intensity']
-    ed = pd.read_csv(experimentalDesign, sep=",")
+    Zeros are treated as non-detections. Preys detected in fewer than
+    ``min_detection_frac`` of experiments are removed before imputation.
 
-    # ed['shared_id'] = ed['Experiment Name'] + '_' + ed['Replicate'].astype(str)
+    imputation: 'row_min' (fill with the prey's minimum observed value),
+    'zero' (fill with 0), or 'drop' (keep only fully detected preys).
 
-    # Make the int table wide
-    data = int.pivot(index='Prey', columns='Experiment', values='Intensity')
+    normalization: 'zscore' (per-prey), 'log2_zscore' (log2(x + 1) then
+    per-prey z-score; the pseudocount keeps zero-imputed values finite),
+    or 'none'. Preys with zero variance are dropped by the z-score options.
+    """
+    df = pd.read_csv(interaction, sep="\t", header=0)
+    df.columns = ['Experiment', 'BaitName', 'Prey', 'Intensity']
+    data = df.pivot(index='Prey', columns='Experiment', values='Intensity')
 
-    metadata = int[['Experiment', 'BaitName']].drop_duplicates()
+    if len(data.columns) < 2:
+        raise ValueError(
+            f"Only {len(data.columns)} experiments in the interaction data; "
+            "PCA needs at least 2.")
 
-    metadata = metadata.merge(ed[['Experiment Name', 'Type']], left_on='Experiment', right_on='Experiment Name', how='left')
-
-    ### Now make the PCA plot....
-
-    # Clean up the data
-
-    # Convert all 0 values to NaN
     data = data.replace(0, np.nan)
+    data = data.dropna(thresh=len(data.columns) * min_detection_frac)
 
-    # Remove rows with more than 75% NaN values
-    data = data.dropna(thresh=len(data.columns) * 0.5)
+    if imputation == "row_min":
+        data = data.apply(lambda row: row.fillna(row.min()), axis=1)
+    elif imputation == "zero":
+        data = data.fillna(0)
+    elif imputation == "drop":
+        data = data.dropna()
+    else:
+        raise ValueError(f"Unknown imputation option: {imputation!r}")
 
-    # Replace NaN values with the minimum of the row
-    data = data.apply(lambda row: row.fillna(row.min()), axis=1)    
-    
-    # Now z-score normalize the data by row
-    data = data.apply(lambda row: (row - row.mean()) / row.std(), axis=1)
+    if normalization == "log2_zscore":
+        data = np.log2(data + 1)
+    if normalization in ("zscore", "log2_zscore"):
+        data = data.apply(lambda row: (row - row.mean()) / row.std(), axis=1)
+        data = data.dropna(how='any')
+    elif normalization != "none":
+        raise ValueError(f"Unknown normalization option: {normalization!r}")
 
-    # Now make a PCA plot
+    if len(data) < 3:
+        raise ValueError(
+            f"Only {len(data)} preys remain after filtering "
+            f"(min_detection_frac={min_detection_frac}, imputation={imputation!r}); "
+            "PCA needs at least 3. Relax the detection or imputation settings.")
+    return data
+
+
+def detection_counts(interaction):
+    """Per-prey count of experiments with a nonzero, non-missing intensity."""
+    df = pd.read_csv(interaction, sep="\t", header=0)
+    df.columns = ['Experiment', 'BaitName', 'Prey', 'Intensity']
+    data = df.pivot(index='Prey', columns='Experiment', values='Intensity')
+    return data.replace(0, np.nan).notna().sum(axis=1)
+
+
+def reduce_categorical(series, top_n=12, missing_label="Unknown"):
+    """Reduce a possibly multi-valued annotation column to plottable categories.
+
+    Multi-valued entries (semicolon-joined, e.g. HPA 'Main location') are
+    reduced to their first value; the top_n most frequent labels are kept and
+    the rest collapsed to 'Other'; missing values become ``missing_label``.
+    """
+    s = series.astype("string").str.split(";").str[0].str.strip()
+    top = s.value_counts().head(top_n).index
+    s = s.where(s.isin(top) | s.isna(), other="Other")
+    return s.fillna(missing_label).astype(str)
+
+
+def load_pca_metadata(interaction, experimentalDesign):
+    """Experiment-level metadata (BaitName from the interaction file, Type from
+    the ED file) for labeling PCA points."""
+    df = pd.read_csv(interaction, sep="\t", header=0)
+    df.columns = ['Experiment', 'BaitName', 'Prey', 'Intensity']
+    ed = pd.read_csv(experimentalDesign, sep=",")
+    metadata = df[['Experiment', 'BaitName']].drop_duplicates()
+    return metadata.merge(ed[['Experiment Name', 'Type']],
+                          left_on='Experiment', right_on='Experiment Name',
+                          how='left')
+
+
+def pca_plot(interaction, experimentalDesign, matrix=None):
+    """Experiment-level PCA (one point per experiment).
+
+    matrix, if given, is a prepare_pca_matrix result; otherwise it is computed
+    with default settings.
+    """
+    if matrix is None:
+        matrix = prepare_pca_matrix(interaction)
+    metadata = load_pca_metadata(interaction, experimentalDesign)
+
     pca = PCA(n_components=2)
-    pca_result = pca.fit_transform(data.T)
+    pca_result = pca.fit_transform(matrix.T)
 
     pca_df = pd.DataFrame(data=pca_result, columns=['PC1', 'PC2'])
+    pca_df['Experiment'] = matrix.columns
+    pca_df = pca_df.merge(metadata, left_on='Experiment', right_on='Experiment',
+                          how='left')
 
-    # Add the original column names to the PCA dataframe
-    pca_df['Experiment'] = data.columns
-
-    # Merge with the metadata to get the BaitName and Type
-    pca_df = pca_df.merge(metadata, left_on='Experiment', right_on='Experiment', how='left')
-
-    # pca_df['PC1'] = pd.to_numeric(pca_df['PC1'], errors='coerce')
-    # pca_df['PC2'] = pd.to_numeric(pca_df['PC2'], errors='coerce')
-
-    # Calculate the explained variance for each component
     explained_variance = pca.explained_variance_ratio_
-    
 
-    # Make a plotly scatterplot of the PCA results
-    pc1_var = round(explained_variance[0] * 100, 2)
-    pc2_var = round(explained_variance[1] * 100, 2)
     fig = px.scatter(
         pca_df,
         x='PC1',
@@ -154,10 +206,75 @@ def pca_plot(interaction, experimentalDesign):
         )
     )
 
-    # fig_widget = go.FigureWidget(fig)
-
     return fig
 
+
+def prey_pca_plot(matrix, color_values=None, color_label=None,
+                  color_mode="none", color_threshold=None):
+    """Prey-level PCA: preys as samples, experiments as features — an
+    independent embedding, not the loadings of the experiment PCA.
+
+    color_values: pd.Series indexed by prey (numeric for 'continuous',
+    labels for 'categorical'), or None with color_mode 'none'.
+
+    color_threshold: for 'continuous' only — preys with a value below it are
+    drawn grey so the color scale is spent on the informative range.
+    """
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(matrix)
+    explained_variance = pca.explained_variance_ratio_
+
+    prey_df = pd.DataFrame(data=pca_result, columns=['PC1', 'PC2'])
+    prey_df['Prey'] = matrix.index
+
+    labels = {
+        'PC1': f'PC1 ({explained_variance[0]*100:.2f}% variance)',
+        'PC2': f'PC2 ({explained_variance[1]*100:.2f}% variance)'
+    }
+    kwargs = dict(x='PC1', y='PC2', hover_name='Prey',
+                  title="Prey PCA", labels=labels)
+
+    if color_mode == "continuous":
+        prey_df[color_label] = prey_df['Prey'].map(color_values)
+        if color_threshold is not None:
+            below = prey_df[prey_df[color_label] < color_threshold]
+            above = prey_df[~(prey_df[color_label] < color_threshold)]
+            fig = px.scatter(above, color=color_label,
+                             color_continuous_scale='Viridis', **kwargs)
+            fig.add_trace(go.Scatter(
+                x=below['PC1'], y=below['PC2'], mode='markers',
+                name=f"{color_label} < {color_threshold:g}",
+                marker=dict(color='lightgrey'),
+                text=below['Prey'],
+                hovertemplate="<b>%{text}</b><br>PC1=%{x}<br>PC2=%{y}<extra></extra>",
+            ))
+            # grey first so scoring preys draw on top of it
+            fig.data = fig.data[-1:] + fig.data[:-1]
+            fig.update_layout(showlegend=True)
+        else:
+            fig = px.scatter(prey_df, color=color_label,
+                             color_continuous_scale='Viridis', **kwargs)
+    elif color_mode == "categorical":
+        prey_df[color_label] = prey_df['Prey'].map(color_values)
+        categories = [c for c in prey_df[color_label].dropna().unique()
+                      if c not in ("Other", "Unknown")]
+        categories = sorted(categories) + ["Other", "Unknown"]
+        fig = px.scatter(prey_df, color=color_label,
+                         category_orders={color_label: categories}, **kwargs)
+    else:
+        fig = px.scatter(prey_df, **kwargs)
+
+    fig.update_traces(marker=dict(size=5, opacity=0.7))
+    fig.update_layout(
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.4,
+            xanchor="center",
+            x=0.5
+        )
+    )
+    return fig
 def saint_known_retention(results_path, ctrl_experiments=None):
 
     results = pd.read_csv(results_path, sep=",")
