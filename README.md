@@ -132,19 +132,10 @@ docker build --build-arg PROXIMATE_VERSION=$(git rev-parse --short HEAD) \
 ```
 
 ## Annotations and Databases:
-I will periodically push newer versions of the tool with updated databases. 
-
-Current versions of the databases:
-
-BioGRID: March 21, 2026
-
-UniProt: March 21, 2026
-
-Human Protein Atlas: March 21, 2026
-
-CORUM: March 21, 2026
-
-
+Every release ships the BioGRID, UniProt and Human Protein Atlas snapshot downloaded
+on the day it was built; CORUM is tracked in the repository. The download dates are
+in `/Datasets/build_info.txt` inside the image, in each release's notes on GitHub, and
+in every `run.json`.
 
 ### Excluding Human Cell Map evidence
 
@@ -176,6 +167,33 @@ Alternatively, you can manually assemble the following files in a `/Datasets` su
 
 
 
+
+## Releases
+
+Images are published for `linux/amd64` and `linux/arm64` (Apple Silicon runs it
+natively) to two registries; either name pulls the same image:
+
+```
+docker pull plutzer/proximate:v0.2.0          # Docker Hub
+docker pull ghcr.io/plutzer/proximate:v0.2.0  # GitHub Container Registry
+```
+
+`latest` follows the newest release. Versions are `vMAJOR.MINOR.PATCH`; what changed
+in each is in `CHANGELOG.md` and on the
+[Releases page](https://github.com/plutzer/ProxiMate/releases), where the notes
+also list the image digest and the annotation database dates. Cite a version with
+the DOI Zenodo mints for each release, or with `CITATION.cff`.
+
+Publishing a release on GitHub runs `.github/workflows/release.yml`: it downloads
+the databases once, builds both architectures natively, joins them under the
+release tag on both registries, and appends the digest and `build_info.txt` to the
+release notes. `release.sh` performs the same build from a local checkout of the
+tag when GitHub Actions is not an option:
+
+```
+./release.sh v0.2.0                  # both architectures, pushed to Docker Hub
+./release.sh v0.2.0 --no-push        # amd64 only, loaded into local Docker
+```
 
 ## Common Errors
 

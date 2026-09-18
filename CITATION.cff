@@ -1,0 +1,34 @@
+# Citation metadata read by GitHub's "Cite this repository" button and by Zenodo.
+# Update version and date-released with each release; add the paper under
+# preferred-citation once it is published.
+cff-version: 1.2.0
+message: "If you use ProxiMate, please cite it as below."
+type: software
+title: "ProxiMate"
+abstract: "All-in-one GUI and scripts for analyzing proximity labeling proteomics data."
+authors:
+  - family-names: Plutzer
+    given-names: "FILL IN"   # given name(s)
+    email: plutzer@wustl.edu
+    affiliation: "Washington University in St. Louis"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"   # fill in
+repository-code: "https://github.com/plutzer/ProxiMate"
+license: MIT
+version: 0.2.0
+date-released: "2026-09-18"
+keywords:
+  - proteomics
+  - proximity labeling
+  - BioID
+  - SAINT
+  - CompPASS
+# Uncomment and complete once the paper is out:
+# preferred-citation:
+#   type: article
+#   title: "..."
+#   authors:
+#     - family-names: Plutzer
+#       given-names: "FILL IN"
+#   journal: "..."
+#   year: 2026
+#   doi: "10.xxxx/xxxxx"

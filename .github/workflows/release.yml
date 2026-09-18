@@ -1,0 +1,198 @@
+# Builds and publishes the container for a GitHub Release.
+#
+# Publishing a release in the GitHub web UI creates the tag and starts this
+# workflow.  The tag is the version stamped into the image as PROXIMATE_VERSION.
+# Nothing runs on a bare tag push, so a stray tag never publishes an image.
+#
+# The annotation databases are downloaded once and handed to both architecture
+# builds, so the amd64 and arm64 images of one release carry the same BioGRID,
+# UniProt and HPA snapshot.  setup_datasets.py leaves files that already exist
+# untouched, which is what makes the copied directory take precedence inside
+# the Dockerfile.
+#
+# Secrets: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN.  GHCR uses GITHUB_TOKEN.
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to rebuild, e.g. v0.2.0"
+        required: true
+
+env:
+  HUB_IMAGE: plutzer/proximate
+  GHCR_IMAGE: ghcr.io/plutzer/proximate
+
+jobs:
+  datasets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Download annotation databases
+        run: python3 Scripts/setup_datasets.py --output-dir Datasets --skip corum
+
+      - name: Refuse a release with a failed download
+        run: |
+          cat Datasets/build_info.txt
+          if grep -q FAILED Datasets/build_info.txt; then
+            echo "::error::a database download failed; not releasing"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: datasets
+          path: Datasets
+          retention-days: 7
+          compression-level: 1
+
+  build:
+    needs: datasets
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the release tag
+        id: tag
+        run: echo "tag=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: datasets
+          path: Datasets
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pushed by digest only; the manifest job attaches the tags once both
+      # architectures exist.
+      - name: Build and push ${{ matrix.arch }}
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          build-args: PROXIMATE_VERSION=${{ steps.tag.outputs.tag }}
+          outputs: type=image,name=${{ env.HUB_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+
+      - name: Record the digest
+        run: |
+          mkdir -p digests
+          touch "digests/${{ steps.build.outputs.digest }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Resolve the release tag
+        id: tag
+        run: echo "tag=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: datasets
+          path: Datasets
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the multi-arch tags on both registries
+        id: publish
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          DIGESTS=()
+          for d in digests/*; do DIGESTS+=("$HUB_IMAGE@$(basename "$d")"); done
+          docker buildx imagetools create \
+            -t "$HUB_IMAGE:$TAG" -t "$HUB_IMAGE:latest" \
+            -t "$GHCR_IMAGE:$TAG" -t "$GHCR_IMAGE:latest" \
+            "${DIGESTS[@]}"
+          docker buildx imagetools inspect "$HUB_IMAGE:$TAG"
+          MANIFEST=$(docker buildx imagetools inspect "$HUB_IMAGE:$TAG" --format '{{ .Manifest.Digest }}')
+          echo "digest=$MANIFEST" >> "$GITHUB_OUTPUT"
+
+      - name: Append image details to the release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          MANIFEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          {
+            gh release view "$TAG" --json body --jq .body
+            echo
+            echo "## Container image"
+            echo
+            echo '```'
+            echo "docker pull $HUB_IMAGE:$TAG"
+            echo "docker pull $GHCR_IMAGE:$TAG"
+            echo '```'
+            echo
+            echo "Platforms: linux/amd64, linux/arm64"
+            echo "Manifest digest: \`$MANIFEST\`"
+            echo
+            echo "## Annotation databases"
+            echo
+            echo '```'
+            cat Datasets/build_info.txt
+            echo '```'
+          } > notes.md
+          gh release edit "$TAG" --notes-file notes.md

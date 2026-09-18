@@ -14,6 +14,8 @@ Thumbs.db
 **/PaxHeader/*
 SAINTexpress-custom/va/
 SAINTexpress-custom/Precompiled_binaries/
+SAINTexpress-custom/bin/
+*.o
 DIANN_example/
 Example_datasets/
 .venv/
@@ -24,3 +26,5 @@ CLAUDE.md
 
 # Other
 Screenshots/
+# Annotation databases downloaded for a local release build
+Datasets/build_info.txt

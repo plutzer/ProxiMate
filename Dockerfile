@@ -20,8 +20,6 @@ RUN apt-get update && apt-get install -y \
 
 # RUN apt-get update && apt-get install -y perl
 
-ADD ./SAINTexpress-custom/bin/SAINTexpress-int /bin/SAINTexpress-int_oldimp
-
 COPY SAINTexpress-custom /SAINTexpress-custom
 
 COPY SAINTexpress_v3.6.3__2018-03-09 /SAINTexpress_v3.6.3__2018-03-09
@@ -69,7 +67,9 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt ../requirements.txt
 RUN pip3 install -r ../requirements.txt
 
-# Copy CORUM dataset (can't be downloaded programmatically) and download the rest
+# CORUM is tracked in git; the other databases are downloaded here unless the
+# build context already holds them.  setup_datasets.py keeps existing files, which
+# is how the Release workflow gives the amd64 and arm64 builds one snapshot.
 COPY Datasets /Datasets
 COPY Scripts/preprocess_biogrid.py /Scripts/preprocess_biogrid.py
 COPY Scripts/setup_datasets.py /Scripts/setup_datasets.py
@@ -89,6 +89,8 @@ ENV PATH="/Scripts/GOGO:${PATH}"
 #   docker build --build-arg PROXIMATE_VERSION=$(git rev-parse --short HEAD) ...
 ARG PROXIMATE_VERSION=unknown
 ENV PROXIMATE_VERSION=${PROXIMATE_VERSION}
+LABEL org.opencontainers.image.source="https://github.com/plutzer/ProxiMate"
+LABEL org.opencontainers.image.version="${PROXIMATE_VERSION}"
 
 # Logging defaults, overridable with `docker run -e`.
 ENV LOG_LEVEL=INFO
