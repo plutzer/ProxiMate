@@ -28,6 +28,7 @@ from network_comparison import (
 from plot_exports import pca_plot_matplotlib, prey_pca_matplotlib, saint_scatter_matplotlib
 import download_presets as dp
 from download_presets import DEFAULT_CUSTOM_COLUMNS
+from help_text import tip, TOOLTIPS
 import py4cytoscape as p4c
 import log_config
 import provenance
@@ -45,9 +46,9 @@ app_ui = ui.page_navbar(
                         ui.card_header("Data Parsing"),
                         ui.layout_columns(
                             ui.input_text("dataset_name",
-                                        "Dataset Name",
+                                        tip("Dataset Name", "dataset_name"),
                                         placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
-                            ui.input_select("input_format", "Input Format",
+                            ui.input_select("input_format", tip("Input Format", "input_format"),
                                            choices=["MaxQuant", "DIA-NN", "FragPipe", "MSstats", "SAINT"],
                                            selected="MaxQuant"),
                             col_widths=[4, 8]
@@ -56,12 +57,9 @@ app_ui = ui.page_navbar(
                             "input.input_format === 'MaxQuant'",
                             ui.layout_columns(
                                 ui.div(
-                                    ui.input_file("pg_file", "MaxQuant proteinGroups.txt file"),
-                                    ui.tooltip(
-                                        ui.input_file("ed_file", "Experimental Design File"),
-                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID. Group (optional, for paired controls): test rows specify one positive integer (e.g. 1); controls can list multiple (1,2) or use * for universal."
-                                    ),
-                                    ui.input_select("quant_type", "Quantification Type",
+                                    ui.input_file("pg_file", tip("MaxQuant proteinGroups.txt file", "pg_file")),
+                                    ui.input_file("ed_file", tip("Experimental Design File", "ed_file")),
+                                    ui.input_select("quant_type", tip("Quantification Type", "quant_type"),
                                                   choices=["Intensity", "LFQ", "Spectral Counts"],
                                                   selected="Intensity")
                                 ),
@@ -73,11 +71,8 @@ app_ui = ui.page_navbar(
                             "input.input_format === 'DIA-NN'",
                             ui.layout_columns(
                                 ui.div(
-                                    ui.input_file("diann_matrix_file", "DIA-NN report.pg_matrix.tsv file"),
-                                    ui.tooltip(
-                                        ui.input_file("ed_file", "Experimental Design File"),
-                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID. Group (optional, for paired controls): test rows specify one positive integer (e.g. 1); controls can list multiple (1,2) or use * for universal."
-                                    )
+                                    ui.input_file("diann_matrix_file", tip("DIA-NN report.pg_matrix.tsv file", "diann_matrix_file")),
+                                    ui.input_file("ed_file", tip("Experimental Design File", "ed_file"))
                                 ),
                                 ui.output_data_frame("ed_table_diann"),
                                 col_widths=[4, 8]
@@ -87,12 +82,9 @@ app_ui = ui.page_navbar(
                             "input.input_format === 'FragPipe'",
                             ui.layout_columns(
                                 ui.div(
-                                    ui.input_file("fragpipe_file", "FragPipe combined_protein.tsv file"),
-                                    ui.tooltip(
-                                        ui.input_file("ed_file", "Experimental Design File"),
-                                        "ED Format: Experiment Name, Type, Bait, Replicate, Bait ID. Group (optional, for paired controls): test rows specify one positive integer (e.g. 1); controls can list multiple (1,2) or use * for universal."
-                                    ),
-                                    ui.input_select("quant_type", "Quantification Type",
+                                    ui.input_file("fragpipe_file", tip("FragPipe combined_protein.tsv file", "fragpipe_file")),
+                                    ui.input_file("ed_file", tip("Experimental Design File", "ed_file")),
+                                    ui.input_select("quant_type", tip("Quantification Type", "quant_type"),
                                                   choices=["Intensity", "LFQ", "Spectral Counts"],
                                                   selected="Intensity")
                                 ),
@@ -104,14 +96,11 @@ app_ui = ui.page_navbar(
                             "input.input_format === 'MSstats'",
                             ui.layout_columns(
                                 ui.div(
-                                    ui.input_file("msstats_file", "MSstats ProteinLevelData.csv file"),
-                                    ui.tooltip(
-                                        ui.input_file("ed_file", "Experimental Design File"),
-                                        "ED Experiment Name must match originalRUN values in ProteinLevelData. ED Format: Experiment Name, Type, Bait, Replicate, Bait ID."
-                                    ),
+                                    ui.input_file("msstats_file", tip("MSstats ProteinLevelData.csv file", "msstats_file")),
+                                    ui.input_file("ed_file", tip("Experimental Design File", "ed_file_msstats")),
                                     ui.tags.small(
                                         "Note: MSstats data is already log2-transformed, normalized, and imputed. Set Imputation Method to 'Default' (0).",
-                                        style="color: #888; display: block; margin-top: 8px;"
+                                        class_="text-muted small d-block mt-2"
                                     )
                                 ),
                                 ui.output_data_frame("ed_table_msstats"),
@@ -122,10 +111,10 @@ app_ui = ui.page_navbar(
                             "input.input_format === 'SAINT'",
                             ui.layout_columns(
                                 ui.div(
-                                    ui.input_file("bait", "SAINT bait.txt file"),
-                                    ui.input_file("prey", "SAINT prey.txt file"),
-                                    ui.input_file("interaction", "SAINT interaction.txt file"),
-                                    ui.input_select("quant_type", "Quantification Type",
+                                    ui.input_file("bait", tip("SAINT bait.txt file", "saint_bait")),
+                                    ui.input_file("prey", tip("SAINT prey.txt file", "saint_prey")),
+                                    ui.input_file("interaction", tip("SAINT interaction.txt file", "saint_interaction")),
+                                    ui.input_select("quant_type", tip("Quantification Type", "quant_type"),
                                                   choices=["Intensity", "LFQ", "Spectral Counts"],
                                                   selected="Intensity")
                                 ),
@@ -141,12 +130,12 @@ app_ui = ui.page_navbar(
                         # Organism selection for annotation databases.
                         # To add a new organism, add a choice here and sync with
                         # ORGANISMS config in Scripts/annotator.py and setup_datasets.py
-                        ui.input_select("organism", "Organism",
+                        ui.input_select("organism", tip("Organism", "organism"),
                             choices={"human": "Human (H. sapiens)",
                                      "mouse": "Mouse (M. musculus)",
                                      "yeast": "Yeast (S. cerevisiae)"},
                             selected="human"),
-                        ui.input_radio_buttons("imputation_method", "Imputation Method",
+                        ui.input_radio_buttons("imputation_method", tip("Imputation Method", "imputation_method"),
                                               choices={0: "Default", 
                                                     #    1: "Prey-specific",
                                                        2: "Two-component AFT",
@@ -154,15 +143,15 @@ app_ui = ui.page_navbar(
                         ui.panel_conditional(
                             "String(input.imputation_method) === '2'",
                             ui.input_radio_buttons(
-                                "pi_method", "π Estimation Method",
+                                "pi_method", tip("π Estimation Method", "pi_method"),
                                 choices={"weighted_average": "Weighted avg of controls (≥3 replicates)",
                                          "single_bait": "Single control bait"},
                                 selected="weighted_average"),
                             ui.panel_conditional(
                                 "input.pi_method === 'single_bait'",
-                                ui.input_select("pi_bait", "Control Bait for π Fit", choices=[])),
+                                ui.input_select("pi_bait", tip("Control Bait for π Fit", "pi_bait"), choices=[])),
                         ),
-                        ui.input_numeric("wdfdr_iterations", "WDFDR Iterations", value=1000),
+                        ui.input_numeric("wdfdr_iterations", tip("WDFDR Iterations", "wdfdr_iterations"), value=1000),
                         ui.input_action_button("score_data", "Score Data")
                     ),
                     col_widths=[8,4]
@@ -173,11 +162,13 @@ app_ui = ui.page_navbar(
                         ui.h1('Datasets in this Session'),
                         ui.layout_columns(
                             ui.card(
-                                ui.input_action_button("clear_datasets", "Clear All Datasets"),
-                                ui.download_button("download_session", "Download Session Zip"),
+                                ui.tooltip(ui.input_action_button("clear_datasets", "Clear All Datasets"),
+                                           TOOLTIPS["clear_datasets"]),
+                                ui.tooltip(ui.download_button("download_session", "Download Session Zip"),
+                                           TOOLTIPS["download_session"]),
                             ),
                             ui.card(
-                                ui.input_file("session_file", "Upload Session Zip"),
+                                ui.input_file("session_file", tip("Upload Session Zip", "session_file")),
                                 ui.input_action_button("upload_session", "Load Session"),
                             ),
                         )
@@ -194,17 +185,17 @@ app_ui = ui.page_navbar(
                     ui.card(
                         ui.card_header("PCA Preprocessing"),
                         ui.layout_columns(
-                            ui.input_select("pca_imputation", "Imputation",
+                            ui.input_select("pca_imputation", tip("Imputation", "pca_imputation"),
                                             choices={"row_min": "Row minimum",
                                                      "zero": "Zero",
                                                      "drop": "Drop incomplete preys"},
                                             selected="row_min"),
-                            ui.input_select("pca_normalization", "Normalization",
+                            ui.input_select("pca_normalization", tip("Normalization", "pca_normalization"),
                                             choices={"zscore": "Z-score",
                                                      "log2_zscore": "log2 + Z-score",
                                                      "none": "None"},
                                             selected="zscore"),
-                            ui.input_slider("pca_min_detection", "Min detection fraction",
+                            ui.input_slider("pca_min_detection", tip("Min detection fraction", "pca_min_detection"),
                                             min=0.0, max=1.0, value=0.5, step=0.05),
                             col_widths=(4, 4, 4),
                         ),
@@ -213,14 +204,14 @@ app_ui = ui.page_navbar(
                     # Row 1: experiment-level and prey-level PCA side by side
                     ui.layout_columns(
                         ui.card(
-                            ui.card_header("Experiment PCA"),
+                            ui.card_header(tip("Experiment PCA", "experiment_pca")),
                             output_widget("raw_pca_plot"),
                             ui.download_button("download_pca_plot", "Export PNG", class_="btn-sm"),
                         ),
                         ui.card(
-                            ui.card_header("Prey PCA"),
+                            ui.card_header(tip("Prey PCA", "prey_pca")),
                             ui.layout_columns(
-                                ui.input_select("prey_pca_color", "Color by",
+                                ui.input_select("prey_pca_color", tip("Color by", "prey_pca_color"),
                                                 choices={"none": "None",
                                                          "detection": "Detection count"},
                                                 selected="none"),
@@ -240,22 +231,25 @@ app_ui = ui.page_navbar(
                     ui.layout_columns(
                         ui.card(
                             ui.card_header("Threshold Settings"),
-                            ui.input_select("qc_bait", "Select Control Bait", choices=["All"]),
-                            ui.input_slider("threshold_saintscore", "SAINT Score Threshold",
+                            ui.input_select("qc_bait", tip("Select Control Bait", "qc_bait"), choices=["All"]),
+                            ui.input_slider("threshold_saintscore", tip("SAINT Score Threshold", "saintscore"),
                                           min=0.0, max=1.0, value=0.7, step=0.01),
-                            ui.input_slider("threshold_bfdr", "BFDR Threshold",
+                            ui.input_slider("threshold_bfdr", tip("BFDR Threshold", "bfdr"),
                                           min=0.0, max=1.0, value=0.05, step=0.01),
-                            ui.input_slider("threshold_wd", "WD Score Threshold",
+                            ui.input_slider("threshold_wd", tip("WD Score Threshold", "wd"),
                                           min=0.0, max=10.0, value=0.0, step=0.1),
-                            ui.input_slider("threshold_wdfdr", "WDFDR Threshold",
+                            ui.input_slider("threshold_wdfdr", tip("WDFDR Threshold", "wdfdr"),
                                           min=0.0, max=1.0, value=1.0, step=0.01),
                             ui.p("Presets:", style="margin-top: 15px; margin-bottom: 5px; font-weight: 500;"),
                             # d-flex, not layout_columns: layout_columns collapses to
                             # stacked full-width rows inside a narrow card
                             ui.div(
-                                ui.input_action_button("qc_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
-                                ui.input_action_button("qc_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
-                                ui.input_action_button("qc_preset_relaxed", "Relaxed", class_="btn-sm btn-outline-secondary"),
+                                ui.tooltip(ui.input_action_button("qc_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
+                                           TOOLTIPS["preset_stringent"]),
+                                ui.tooltip(ui.input_action_button("qc_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
+                                           TOOLTIPS["preset_moderate"]),
+                                ui.tooltip(ui.input_action_button("qc_preset_relaxed", "Relaxed", class_="btn-sm btn-outline-secondary"),
+                                           TOOLTIPS["preset_relaxed"]),
                                 class_="d-flex gap-2 mb-3",
                             ),
                             # ui.p("Note: Thresholds are shown as reference lines on plots. Data is not filtered.",
@@ -300,47 +294,51 @@ app_ui = ui.page_navbar(
                         ui.input_select("feature_dataset", "Select Dataset", choices=[]), # Need this to be dynamic
                         ui.p("Preys passing all four scores form the foreground tested for enrichment.",
                              class_="text-muted small"),
-                        ui.input_slider("fa_threshold_saintscore", "SAINT Score (≥)",
+                        ui.input_slider("fa_threshold_saintscore", tip("SAINT Score (≥)", "saintscore"),
                                       min=0.0, max=1.0, value=0.9, step=0.01),
-                        ui.input_slider("fa_threshold_bfdr", "BFDR (≤)",
+                        ui.input_slider("fa_threshold_bfdr", tip("BFDR (≤)", "bfdr"),
                                       min=0.0, max=1.0, value=1.0, step=0.01),
-                        ui.input_slider("fa_threshold_wd", "WD Score (≥)",
+                        ui.input_slider("fa_threshold_wd", tip("WD Score (≥)", "wd"),
                                       min=0.0, max=10.0, value=0.0, step=0.1),
-                        ui.input_slider("fa_threshold_wdfdr", "WDFDR (≤)",
+                        ui.input_slider("fa_threshold_wdfdr", tip("WDFDR (≤)", "wdfdr"),
                                       min=0.0, max=1.0, value=1.0, step=0.01),
                         ui.p("Presets:", style="margin-top: 15px; margin-bottom: 5px; font-weight: 500;"),
                         # Flex row rather than layout_columns, whose columns collapse to
                         # full-width stacked rows at this card's width.
                         ui.div(
-                            ui.input_action_button("fa_preset_stringent", "Stringent",
-                                                   class_="btn-sm btn-outline-primary flex-fill"),
-                            ui.input_action_button("fa_preset_moderate", "Moderate",
-                                                   class_="btn-sm btn-outline-secondary flex-fill"),
-                            ui.input_action_button("fa_preset_relaxed", "Relaxed",
-                                                   class_="btn-sm btn-outline-secondary flex-fill"),
+                            ui.tooltip(ui.input_action_button("fa_preset_stringent", "Stringent",
+                                                              class_="btn-sm btn-outline-primary flex-fill"),
+                                       TOOLTIPS["preset_stringent"]),
+                            ui.tooltip(ui.input_action_button("fa_preset_moderate", "Moderate",
+                                                              class_="btn-sm btn-outline-secondary flex-fill"),
+                                       TOOLTIPS["preset_moderate"]),
+                            ui.tooltip(ui.input_action_button("fa_preset_relaxed", "Relaxed",
+                                                              class_="btn-sm btn-outline-secondary flex-fill"),
+                                       TOOLTIPS["preset_relaxed"]),
                             class_="d-flex gap-2 mb-3",
                         ),
-                        ui.input_action_button("feature_analysis", "Run Feature Analysis"),
+                        ui.tooltip(ui.input_action_button("feature_analysis", "Run Feature Analysis"),
+                                   TOOLTIPS["feature_analysis"]),
                     ),
                     ui.card(
                         ui.card_header("Feature Enrichment Analysis"),
-                        ui.input_select("feature_type", "Select Feature Type", choices=["GO_CC", "GO_BP", "GO_MF", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
-                        ui.input_numeric("num_features", "Number of Features to Display", value=30, min=1, max=100),
+                        ui.input_select("feature_type", tip("Select Feature Type", "feature_type"), choices=["GO_CC", "GO_BP", "GO_MF", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
+                        ui.input_numeric("num_features", tip("Number of Features to Display", "num_features"), value=30, min=1, max=100),
                         # Thirty feature rows need the height to stay readable.
                         ui.output_plot("feature_enrichment_plot", height="650px"),
                         ui.download_button("download_heatmap", "Export Heatmap PNG", class_="btn-sm"),
                         ui.hr(),
                         ui.h5("Download Enrichment Results"),
                         ui.layout_columns(
-                            ui.input_select("download_feature_type", "Feature Type",
+                            ui.input_select("download_feature_type", tip("Feature Type", "feature_type"),
                                           choices=["All", "GO_CC", "GO_BP", "GO_MF", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
                             ui.input_select("download_bait_filter", "Bait", choices=["All"]),
                             col_widths=(6, 6)
                         ),
                         ui.layout_columns(
-                            ui.input_slider("download_pvalue_threshold", "Max Adjusted p-value",
+                            ui.input_slider("download_pvalue_threshold", tip("Max Adjusted p-value", "download_pvalue_threshold"),
                                           min=0.0, max=1.0, value=0.05, step=0.01),
-                            ui.input_slider("download_enrichment_threshold", "Min Enrichment",
+                            ui.input_slider("download_enrichment_threshold", tip("Min Enrichment", "download_enrichment_threshold"),
                                           min=0.0, max=10.0, value=2.0, step=0.1),
                             col_widths=(6, 6)
                         ),
@@ -356,31 +354,31 @@ app_ui = ui.page_navbar(
             ui.card(
                 ui.card_header("Network A"),
                 ui.input_select("comp_dataset_a", "Dataset A", choices=[]),
-                ui.input_select("comp_bait_a", "Bait A", choices=[]),
-                ui.input_slider("comp_saintscore_a", "SAINT Score (≥)",
+                ui.input_select("comp_bait_a", tip("Bait A", "comp_bait"), choices=[]),
+                ui.input_slider("comp_saintscore_a", tip("SAINT Score (≥)", "saintscore"),
                               min=0.0, max=1.0, value=0.7, step=0.01),
-                ui.input_slider("comp_bfdr_a", "BFDR (≤)",
+                ui.input_slider("comp_bfdr_a", tip("BFDR (≤)", "bfdr"),
                               min=0.0, max=1.0, value=0.05, step=0.01),
-                ui.input_slider("comp_wd_a", "WD Score (≥)",
+                ui.input_slider("comp_wd_a", tip("WD Score (≥)", "wd"),
                               min=0.0, max=10.0, value=0.0, step=0.1),
                 # WDFDR compares a prey's WD across experiments, so among replicate
                 # baits each prey passes in only its max-WD experiment; filtering on
                 # it by default would empty the venn overlap.  Default = no filter.
-                ui.input_slider("comp_wdfdr_a", "WDFDR (≤)",
+                ui.input_slider("comp_wdfdr_a", tip("WDFDR (≤)", "wdfdr"),
                               min=0.0, max=1.0, value=1.0, step=0.01),
             ),
             # Bait B selector card
             ui.card(
                 ui.card_header("Network B"),
                 ui.input_select("comp_dataset_b", "Dataset B", choices=[]),
-                ui.input_select("comp_bait_b", "Bait B", choices=[]),
-                ui.input_slider("comp_saintscore_b", "SAINT Score (≥)",
+                ui.input_select("comp_bait_b", tip("Bait B", "comp_bait"), choices=[]),
+                ui.input_slider("comp_saintscore_b", tip("SAINT Score (≥)", "saintscore"),
                               min=0.0, max=1.0, value=0.7, step=0.01),
-                ui.input_slider("comp_bfdr_b", "BFDR (≤)",
+                ui.input_slider("comp_bfdr_b", tip("BFDR (≤)", "bfdr"),
                               min=0.0, max=1.0, value=0.05, step=0.01),
-                ui.input_slider("comp_wd_b", "WD Score (≥)",
+                ui.input_slider("comp_wd_b", tip("WD Score (≥)", "wd"),
                               min=0.0, max=10.0, value=0.0, step=0.1),
-                ui.input_slider("comp_wdfdr_b", "WDFDR (≤)",
+                ui.input_slider("comp_wdfdr_b", tip("WDFDR (≤)", "wdfdr"),
                               min=0.0, max=1.0, value=1.0, step=0.01),
             ),
             col_widths=(6, 6),
@@ -394,25 +392,25 @@ app_ui = ui.page_navbar(
 
         # Middle section: Volcano plot
         ui.card(
-            ui.card_header("Differential Abundance Volcano Plot"),
+            ui.card_header(tip("Differential Abundance Volcano Plot", "volcano_plot")),
             output_widget("volcano_plot"),
             ui.download_button("download_volcano_plot", "Export PNG", class_="btn-sm"),
             ui.p("Volcano plot only shown when baits are from the same dataset. "
                  "Flanking strips hold preys detected under only one bait "
                  "(y = -log10 BFDR); the central panel holds shared preys "
                  "(y = -log10 BH-adjusted p).",
-                 style="font-style: italic; color: #666; margin-top: 10px;"),
+                 class_="text-muted small mt-2"),
         ),
 
         # Bottom section: Venn diagram and gene lists
         ui.layout_columns(
             ui.card(
-                ui.card_header("Network Overlap"),
+                ui.card_header(tip("Network Overlap", "venn")),
                 ui.output_plot("venn_diagram"),
                 ui.download_button("download_venn_diagram", "Export PNG", class_="btn-sm"),
             ),
             ui.card(
-                ui.card_header("Gene Lists"),
+                ui.card_header(tip("Gene Lists", "gene_lists")),
                 ui.navset_tab(
                     ui.nav_panel("Network A Only",
                         ui.output_text_verbatim("genes_a_only"),
@@ -453,47 +451,51 @@ app_ui = ui.page_navbar(
                     ui.input_select("download_dataset", "Select Dataset", choices=[]),
                     ui.output_ui("empty_state_downloads"),
                     ui.card(
-                        ui.card_header("Filter Data Before Download"),
+                        ui.card_header(tip("Filter Data Before Download", "dl_filter_card")),
                         ui.layout_columns(
-                            ui.input_slider("dl_threshold_saintscore", "SAINT Score (≥)",
+                            ui.input_slider("dl_threshold_saintscore", tip("SAINT Score (≥)", "saintscore"),
                                           min=0.0, max=1.0, value=0.0, step=0.01),
-                            ui.input_slider("dl_threshold_bfdr", "BFDR (≤)",
+                            ui.input_slider("dl_threshold_bfdr", tip("BFDR (≤)", "bfdr"),
                                           min=0.0, max=1.0, value=1.0, step=0.01),
-                            ui.input_slider("dl_threshold_wd", "WD Score (≥)",
+                            ui.input_slider("dl_threshold_wd", tip("WD Score (≥)", "wd"),
                                           min=0.0, max=10.0, value=0.0, step=0.1),
-                            ui.input_slider("dl_threshold_wdfdr", "WDFDR (≤)",
+                            ui.input_slider("dl_threshold_wdfdr", tip("WDFDR (≤)", "wdfdr"),
                                           min=0.0, max=1.0, value=1.0, step=0.01),
                             col_widths=(3, 3, 3, 3)
                         ),
                         ui.layout_columns(
-                            ui.input_action_button("dl_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
-                            ui.input_action_button("dl_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
-                            ui.input_action_button("dl_preset_relaxed", "Relaxed", class_="btn-sm btn-outline-secondary"),
-                            ui.input_action_button("dl_preset_none", "No Filter", class_="btn-sm btn-outline-secondary"),
+                            ui.tooltip(ui.input_action_button("dl_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
+                                       TOOLTIPS["preset_stringent"]),
+                            ui.tooltip(ui.input_action_button("dl_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["preset_moderate"]),
+                            ui.tooltip(ui.input_action_button("dl_preset_relaxed", "Relaxed", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["preset_relaxed"]),
+                            ui.tooltip(ui.input_action_button("dl_preset_none", "No Filter", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["preset_none"]),
                             col_widths=(3, 3, 3, 3)
                         ),
                     ui.p("Thresholds apply only to score-based presets (Annotated Scores, "
                              "Cytoscape, Gene List, ProHits-viz, Custom). Set all thresholds to "
                              "their default values (0.0/1.0) to download unfiltered data.",
-                             style="font-style: italic; color: #666;"),
+                             class_="text-muted small"),
                     ),
                     ui.layout_columns(
                         ui.card(
                             ui.card_header("Download Builder"),
-                            ui.input_radio_buttons("dl_preset", "Preset",
+                            ui.input_radio_buttons("dl_preset", tip("Preset", "dl_preset"),
                                 choices={key: preset.label for key, preset in dp.PRESETS.items()}),
-                            ui.input_checkbox_group("dl_groups", "Include", choices=[]),
+                            ui.input_checkbox_group("dl_groups", tip("Include", "dl_groups"), choices=[]),
                             ui.panel_conditional("input.dl_preset === 'custom'",
-                                ui.input_selectize("custom_columns", "Select Columns",
+                                ui.input_selectize("custom_columns", tip("Select Columns", "custom_columns"),
                                     choices=DEFAULT_CUSTOM_COLUMNS, multiple=True,
                                     selected=DEFAULT_CUSTOM_COLUMNS),
                             ),
                             ui.panel_conditional("input.dl_preset === 'genelist'",
-                                ui.input_radio_buttons("dl_genelist_mode", "Gene list mode",
+                                ui.input_radio_buttons("dl_genelist_mode", tip("Gene list mode", "dl_genelist_mode"),
                                     choices={"pooled": "Pooled unique genes", "per_bait": "Per bait"}),
                             ),
                             ui.panel_conditional("input.dl_preset === 'prohits'",
-                                ui.input_select("dl_prohits_abundance", "Abundance column",
+                                ui.input_select("dl_prohits_abundance", tip("Abundance column", "dl_prohits_abundance"),
                                     choices=["AvePSM", "AvgIntensity"]),
                             ),
                         ),
@@ -506,7 +508,7 @@ app_ui = ui.page_navbar(
                         col_widths=(4,8)
                     ),
                     ui.card(
-                        ui.card_header("Batch Export"),
+                        ui.card_header(tip("Batch Export", "batch_export")),
                         ui.p("Download all results for a dataset as a ZIP file. Includes merged.csv, annotated_scores.csv, Feature_enrichment.csv (if available), and SAINT input files."),
                         ui.download_button("download_batch", "Download All Results (ZIP)"),
                     )
@@ -1435,12 +1437,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Get the selected dataset
         dataset_name = input.qc_dataset.get()
         if not dataset_name:
-            return ui.value_box("Median Network Size", "No data", showcase=None)
+            return ui.value_box(tip("Median Network Size", "metric_network_size"), "No data", showcase=None)
 
         results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
 
         if not os.path.exists(results_path):
-            return ui.value_box("Median Network Size", "No data", showcase=None)
+            return ui.value_box(tip("Median Network Size", "metric_network_size"), "No data", showcase=None)
 
         # Get threshold values
         thresholds = {
@@ -1470,12 +1472,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Get the selected dataset
         dataset_name = input.qc_dataset.get()
         if not dataset_name:
-            return ui.value_box("Known Enrichment", "No data", showcase=None)
+            return ui.value_box(tip("Known Enrichment", "metric_enrichment"), "No data", showcase=None)
 
         results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
 
         if not os.path.exists(results_path):
-            return ui.value_box("Known Enrichment", "No data", showcase=None)
+            return ui.value_box(tip("Known Enrichment", "metric_enrichment"), "No data", showcase=None)
 
         # Get threshold values
         thresholds = {
@@ -1505,12 +1507,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Get the selected dataset
         dataset_name = input.qc_dataset.get()
         if not dataset_name:
-            return ui.value_box("Mean Prey-Prey Degree", "No data", showcase=None)
+            return ui.value_box(tip("Mean Prey-Prey Degree", "metric_degree"), "No data", showcase=None)
 
         results_path = os.path.join(out_dir, dataset_name, "annotated_scores.csv")
 
         if not os.path.exists(results_path):
-            return ui.value_box("Mean Prey-Prey Degree", "No data", showcase=None)
+            return ui.value_box(tip("Mean Prey-Prey Degree", "metric_degree"), "No data", showcase=None)
 
         # Get threshold values
         thresholds = {
