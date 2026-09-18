@@ -110,6 +110,27 @@ def selected_nodes(network):
     return [str(n) for n in (p4c.get_selected_nodes(node_suids=False, network=network) or [])]
 
 
+def select_nodes(network, names, add=False):
+    """Make ``names`` the selection; ``add`` keeps what is already selected."""
+    if not add:
+        p4c.clear_selection(network=network)
+    p4c.select_nodes(list(names), by_col='name', preserve_current_selection=add, network=network)
+    return len(names)
+
+
+def set_positions(network, positions):
+    """Write ``{name: (x, y)}`` onto the view as plain values, so every node stays
+    draggable.  A position bypass would pin the node against the mouse."""
+    suids = node_suids(network)
+    payload = [{'SUID': suids[name], 'view': [{'visualProperty': 'NODE_X_LOCATION', 'value': float(x)},
+                                              {'visualProperty': 'NODE_Y_LOCATION', 'value': float(y)}]}
+               for name, (x, y) in positions.items()]
+    r = requests.put(f'{BASE_URL}/networks/{network}/views/{view_suid(network)}/nodes',
+                     json=payload, timeout=CY_TIMEOUT)
+    r.raise_for_status()
+    return len(payload)
+
+
 def edge_name(source, interaction, target):
     """The name Cytoscape gives an edge created from a data frame."""
     return f'{source} ({interaction}) {target}'

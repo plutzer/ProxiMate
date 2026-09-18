@@ -82,6 +82,32 @@ def test_edge_names_follow_cytoscapes_convention():
     assert cy.edge_name('PA', 'proximity', 'P1') == 'PA (proximity) P1'
 
 
+def test_selecting_clears_first_unless_adding(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cy.p4c, 'clear_selection', lambda **k: calls.append('clear'))
+    monkeypatch.setattr(cy.p4c, 'select_nodes', lambda names, **k: calls.append(('select', names, k['preserve_current_selection'])))
+
+    cy.select_nodes(2, ['a', 'b'])
+    cy.select_nodes(2, ['c'], add=True)
+
+    assert calls == ['clear', ('select', ['a', 'b'], False), ('select', ['c'], True)]
+
+
+def test_positions_are_written_as_plain_view_values(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cy, 'node_suids', lambda net: {'a': 11, 'b': 12})
+    monkeypatch.setattr(cy, 'view_suid', lambda net: 7)
+    monkeypatch.setattr(cy.requests, 'put', lambda url, **k: seen.update(url=url, **k) or _Response())
+
+    n = cy.set_positions(3, {'a': (1.5, 2), 'b': (-3, 4)})
+
+    assert n == 2
+    assert seen['url'].endswith('/networks/3/views/7/nodes')
+    assert seen['json'][0] == {'SUID': 11, 'view': [{'visualProperty': 'NODE_X_LOCATION', 'value': 1.5},
+                                                     {'visualProperty': 'NODE_Y_LOCATION', 'value': 2.0}]}
+    assert 'bypass' not in seen['url']
+
+
 def test_edge_columns_are_pushed_keyed_on_name(monkeypatch):
     import pandas as pd
     seen = {}

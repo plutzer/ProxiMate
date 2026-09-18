@@ -15,6 +15,7 @@ import datetime
 import os
 import threading
 
+import numpy as np
 import pandas as pd
 
 import cytoscape_net as net
@@ -38,6 +39,7 @@ STATE = {
     'nodes': None,        # DataFrame as drawn
     'edges': None,        # DataFrame as drawn, 'visible' kept current
     'thresholds': None,   # the thresholds the edges were drawn at
+    'style': None,        # {'width_source', 'literature_weighted', 'biogrid_scope'} as drawn
     'busy': '',
 }
 
@@ -96,6 +98,7 @@ def snapshot():
             'n_edges': 0 if edges is None else len(edges),
             'n_hidden': 0 if edges is None else int((~edges['visible'].astype(bool)).sum()),
             'thresholds': dict(STATE['thresholds']) if STATE['thresholds'] else None,
+            'style': dict(STATE['style']) if STATE['style'] else None,
             'log': list(STATE['log'])[-20:],
         }
 
@@ -113,11 +116,20 @@ def layout_names():
 # --- operations ------------------------------------------------------------------------
 
 def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_path=None,
-         label_policy='all', layout='force-directed'):
+         label_policy='all', layout='force-directed', width_source='abundance',
+         literature_weighted=False, biogrid_scope='all', corum_path=None,
+         corum_min_members=3, corum_min_fraction=0.5):
     """Build the thresholded network and draw it, replacing the previous one."""
     df = pd.read_csv(scores_path)
     nodes, edges = net.build(df, thresholds, baits=baits, prey_prey=prey_prey,
-                             biogrid_path=biogrid_path, label_policy=label_policy)
+                             biogrid_path=biogrid_path, label_policy=label_policy,
+                             width_source=width_source, literature_weighted=literature_weighted,
+                             corum_path=corum_path, corum_min_members=corum_min_members,
+                             corum_min_fraction=corum_min_fraction)
+    edges['visible'] = net.edge_visibility(edges, thresholds, biogrid_scope).to_numpy()
+    nodes['node_alpha'] = net.node_alpha(nodes, edges).to_numpy()
+    style = {'width_source': width_source, 'literature_weighted': bool(literature_weighted),
+             'biogrid_scope': biogrid_scope}
     title = f'ProxiMate: {dataset}'
     with _busy(f'drawing {title}'), STATE['cy_lock']:
         if title in p4c.get_network_list():
@@ -130,8 +142,26 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
         p4c.fit_content(network=suid)
     with _mutate('draw', f'{title}: {len(nodes)} nodes, {len(edges)} edges, layout {layout}'):
         STATE.update(dataset=dataset, title=title, net_suid=suid, nodes=nodes, edges=edges,
-                     thresholds=dict(thresholds))
+                     thresholds=dict(thresholds), style=style)
     return snapshot()
+
+
+def restyle_edges(width_source, literature_weighted, biogrid_scope):
+    """Recompute edge widths and the BioGRID scope on the drawn network, in place."""
+    suid = _net()
+    edges = STATE['edges']
+    width = net.edge_widths(edges, width_source, literature_weighted)
+    want = net.edge_visibility(edges, STATE['thresholds'], biogrid_scope)
+    changed = edges.index[(want != edges['visible'].astype(bool)) | (width != edges['width'])]
+    with STATE['lock']:
+        edges['width'] = width.to_numpy()
+    _push_visibility(suid, want, changed, extra_columns=['width'])
+    with _mutate('restyle_edges', f'width by {width_source}, literature '
+                 f'{"weighted" if literature_weighted else "unweighted"}, BioGRID {biogrid_scope}: '
+                 f'{len(changed)} edge(s) changed'):
+        STATE['style'] = {'width_source': width_source, 'literature_weighted': bool(literature_weighted),
+                          'biogrid_scope': biogrid_scope}
+    return len(changed)
 
 
 def read_selection():
@@ -188,7 +218,7 @@ def apply_thresholds(thresholds):
         raise ValueError("these thresholds are looser than the drawn network's; "
                          "send the network again to add interactions")
     edges = STATE['edges']
-    want = net.edge_visibility(edges, thresholds)
+    want = net.edge_visibility(edges, thresholds, STATE['style']['biogrid_scope'])
     changed = edges.index[want != edges['visible'].astype(bool)]
     _push_visibility(suid, want, changed)
     with _mutate('apply_thresholds', f'{int(want.sum())} of {len(edges)} edges visible'):
@@ -196,10 +226,14 @@ def apply_thresholds(thresholds):
     return int((~want).sum())
 
 
-def _push_visibility(suid, want, changed):
+def _push_visibility(suid, want, changed, extra_columns=()):
+    """Set ``visible`` to ``want`` on the ``changed`` edges, plus any ``extra_columns``
+    already updated in the state, and refade the nodes."""
     edges = STATE['edges']
     frame = pd.DataFrame({'name': edges.loc[changed, 'name'].to_numpy(),
                           'visible': want[changed].astype(bool).to_numpy()})
+    for column in extra_columns:
+        frame[column] = edges.loc[changed, column].to_numpy()
     with STATE['lock']:
         edges['visible'] = want.astype(bool).to_numpy()
         alpha = net.node_alpha(STATE['nodes'], edges)
@@ -220,6 +254,108 @@ def sync_positions():
         nodes['x'] = nodes['id'].map(lambda i: positions.get(i, (None, None))[0])
         nodes['y'] = nodes['id'].map(lambda i: positions.get(i, (None, None))[1])
     return len(positions)
+
+
+# --- selection tools ---------------------------------------------------------------------
+
+def _selected_bait():
+    """The one bait in the Cytoscape selection; refuses none or several."""
+    with STATE['cy_lock']:
+        selected = cy.selected_nodes(_net())
+    nodes = STATE['nodes']
+    chosen = nodes[nodes['id'].isin(selected)]
+    baits = chosen.loc[chosen['role'] == 'bait', 'id'].tolist()
+    if len(baits) != 1:
+        named = ', '.join(chosen.loc[chosen['role'] == 'bait', 'symbol']) or 'no bait'
+        raise ValueError(f"select exactly one bait in Cytoscape (selected: {named})")
+    return baits[0]
+
+
+def _select(op, ids, detail, add=False):
+    with STATE['cy_lock']:
+        cy.select_nodes(_net(), ids, add=add)
+    with _mutate(op, detail):
+        pass
+    return ids
+
+
+def select_loners():
+    """Select the one selected bait together with its loners, so they move as one."""
+    bait = _selected_bait()
+    found = net.loners(STATE['nodes'], STATE['edges'], bait)
+    symbol = _symbols()[bait]
+    if not found:
+        raise ValueError(f"{symbol} has no loners")
+    return _select('select_loners', [bait] + found, f'{symbol}: {len(found)} loner(s)')
+
+
+def select_satellites():
+    """Select the one selected bait with its satellites: the preys whose only bait it
+    is, and the two-bait preys that currently sit nearer to it than to the other."""
+    bait = _selected_bait()
+    with STATE['cy_lock']:
+        positions = cy.current_positions(_net())
+    only, nearer = net.satellites(STATE['nodes'], STATE['edges'], bait, positions)
+    symbol = _symbols()[bait]
+    if not only and not nearer:
+        raise ValueError(f"{symbol} has no satellites")
+    return _select('select_satellites', [bait] + only + nearer,
+                   f'{symbol}: {len(only)} only-bait prey(s), {len(nearer)} nearer of two')
+
+
+def select_related(seed, relation, add=False, **cuts):
+    """Select what ``relation`` names for ``seed`` (``net.related``); ``add`` keeps the
+    current selection."""
+    _net()
+    ids = net.related(STATE['nodes'], STATE['edges'], seed, relation, **cuts)
+    if not ids:
+        raise ValueError(f"no {relation} for {seed} under these cuts")
+    cut = ', '.join(f'{k} {v}' for k, v in cuts.items() if v is not None) or 'no cuts'
+    return _select('select_related', ids, f'{relation} of {seed} ({cut}): {len(ids)}'
+                   + (' added' if add else ''), add=add)
+
+
+def _symbols():
+    return dict(zip(STATE['nodes']['id'], STATE['nodes']['symbol']))
+
+
+def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0):
+    """Leiden over the selected nodes, then re-pack them by community inside the box
+    they occupy.  Only the selected nodes move; they recolour by community and carry
+    it in the node table."""
+    suid = _net()
+    with STATE['cy_lock']:
+        selected = cy.selected_nodes(suid)
+        positions = cy.current_positions(suid)
+    if not selected:
+        raise ValueError("nothing is selected in Cytoscape")
+    with _busy(f'clustering {len(selected)} selected nodes'):
+        membership = net.cluster(STATE['edges'], selected, resolution, seed, literature_weight)
+        placed = net.pack_communities(membership, positions)
+    nodes = STATE['nodes']
+    # Numbers continue above any community already assigned, so two clustered regions
+    # never share one.
+    if 'community' in nodes.columns:
+        membership = membership + int(nodes['community'].fillna(-1).max()) + 1
+    fill = net.community_fill(membership)
+    with STATE['lock']:
+        if 'community' not in nodes.columns:
+            nodes['community'] = np.nan
+        chosen = nodes['id'].isin(membership.index)
+        nodes.loc[chosen, 'community'] = nodes.loc[chosen, 'id'].map(membership).to_numpy()
+        nodes.loc[chosen, 'fill'] = nodes.loc[chosen, 'id'].map(fill).to_numpy()
+        nodes.loc[chosen, 'x'] = nodes.loc[chosen, 'id'].map(lambda i: placed[i][0]).to_numpy()
+        nodes.loc[chosen, 'y'] = nodes.loc[chosen, 'id'].map(lambda i: placed[i][1]).to_numpy()
+    with STATE['cy_lock']:
+        cy.update_node_columns(suid, pd.DataFrame({'name': membership.index,
+                                                   'community': membership.astype(int).to_numpy(),
+                                                   'fill': fill.to_numpy()}))
+        cy.set_positions(suid, placed)
+    sizes = membership.value_counts().sort_index().tolist()
+    with _mutate('cluster_selection', f'{len(membership)} nodes -> {len(sizes)} communities '
+                 f'{sizes} (resolution {resolution}, seed {seed})'):
+        pass
+    return {'n': len(membership), 'n_communities': len(sizes), 'sizes': sizes}
 
 
 def export_image(out_dir, height=2000):

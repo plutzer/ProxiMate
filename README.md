@@ -101,6 +101,28 @@ to `docker run`, or run with `--network host` and set `PROXIMATE_CYTOSCAPE_URL` 
 `http://127.0.0.1:1234/v1`. py4cytoscape's own request log lands in
 `$PROXIMATE_LOG_DIR/py4cytoscape/`.
 
+**Edge style.** Bait–prey edge width encodes abundance by default (log-banded
+intensity or spectral counts); the *Edge width* select swaps in SAINT score, WD score,
+fold change, or a uniform width. Prey–prey BioGRID edges can be limited to pairs BioGRID
+marks multivalidated, and thickened by the number of publications behind them. *Apply
+Edge Style* pushes these onto the drawn network as a style update, so a hand layout
+survives.
+
+**Complexes.** For human datasets, *CORUM complex edges* draws black edges between drawn
+proteins that are subunits of one curated complex the screen recovered: at least *Min
+subunits drawn* of its members are in the network and one bait, counted with its preys,
+covers at least *Min share by one bait* of the full membership. The criteria apply when
+the network is sent.
+
+**Selection tools.** With one bait selected in Cytoscape, *Select Loners* picks it with
+the preys whose only visible neighbor it is and *Select Satellites* adds the two-bait
+preys that currently sit nearer to it. *Select by relation* names a seed and selects its
+interactors (with SAINT, BFDR and abundance cuts), singletons, BioGRID or complex
+partners, or CORUM co-complex members, replacing or adding to the selection. *Cluster
+and Repack* runs Leiden over the selected nodes, colors them by community and re-packs
+each community on its own circle inside the box the selection occupies; only the
+selected nodes move, and the community number lands in the node table.
+
 **Building with a version stamp.** The image contains no git repository, so the
 version recorded in `run.json` comes from a build argument:
 

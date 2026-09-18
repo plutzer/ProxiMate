@@ -468,18 +468,38 @@ app_ui = ui.page_navbar(
                                TOOLTIPS["preset_relaxed"]),
                     class_="d-flex gap-2 mb-3",
                 ),
-                ui.input_checkbox("cy_prey_prey", tip("Prey-prey BioGRID edges", "cy_prey_prey"), value=True),
                 ui.input_select("cy_labels", tip("Labels", "cy_labels"),
                                 choices={"all": "All nodes", "baits": "Baits only", "none": "None"}),
                 ui.input_select("cy_layout", tip("Layout", "cy_layout"),
                                 choices=["force-directed", "kamada-kawai", "circular", "grid",
                                          "hierarchical", "degree-circle"]),
+                ui.p("Edge style", style="font-weight: 500; margin-bottom: 5px;"),
+                ui.input_select("cy_edge_width", tip("Edge width", "cy_edge_width"),
+                                choices={"abundance": "Abundance (intensity / spectral counts)",
+                                         "SaintScore": "SAINT score", "WD": "WD score",
+                                         "FoldChange": "Fold change", "uniform": "Uniform"}),
+                ui.input_checkbox("cy_prey_prey", tip("Prey-prey BioGRID edges", "cy_prey_prey"), value=True),
+                ui.input_select("cy_biogrid_scope", tip("BioGRID edges", "cy_biogrid_scope"),
+                                choices={"all": "All pairs", "multivalidated": "Multivalidated only"}),
+                ui.input_checkbox("cy_lit_weighted", tip("Weight BioGRID edges by publications", "cy_lit_weighted"),
+                                  value=False),
+                ui.p("Complexes", style="font-weight: 500; margin-bottom: 5px;"),
+                ui.input_checkbox("cy_corum", tip("CORUM complex edges", "cy_corum"), value=False),
+                ui.layout_columns(
+                    ui.input_numeric("cy_corum_min_members", tip("Min subunits drawn", "cy_corum_min_members"),
+                                     value=3, min=2, step=1),
+                    ui.input_numeric("cy_corum_min_fraction", tip("Min share by one bait", "cy_corum_min_fraction"),
+                                     value=0.5, min=0.0, max=1.0, step=0.05),
+                    col_widths=(6, 6),
+                ),
                 ui.div(
                     ui.tooltip(ui.input_action_button("cy_send", "Send to Cytoscape", class_="btn-primary"),
                                TOOLTIPS["cy_send"]),
                     ui.tooltip(ui.input_action_button("cy_rethreshold", "Re-apply Thresholds", class_="btn-outline-secondary"),
                                TOOLTIPS["cy_rethreshold"]),
-                    class_="d-flex gap-2 mt-2",
+                    ui.tooltip(ui.input_action_button("cy_restyle", "Apply Edge Style", class_="btn-outline-secondary"),
+                               TOOLTIPS["cy_restyle"]),
+                    class_="d-flex flex-wrap gap-2 mt-2",
                 ),
             ),
             ui.card(
@@ -499,6 +519,46 @@ app_ui = ui.page_navbar(
                                TOOLTIPS["cy_hide_unselected"]),
                     ui.tooltip(ui.input_action_button("cy_show_all", "Show All", class_="btn-sm btn-outline-secondary"),
                                TOOLTIPS["cy_show_all"]),
+                    ui.tooltip(ui.input_action_button("cy_select_loners", "Select Loners", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_select_loners"]),
+                    ui.tooltip(ui.input_action_button("cy_select_satellites", "Select Satellites", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_select_satellites"]),
+                    class_="d-flex flex-wrap gap-2 mb-3",
+                ),
+                ui.p("Select by relation", style="font-weight: 500; margin-bottom: 5px;"),
+                ui.layout_columns(
+                    ui.input_text("cy_rel_seed", tip("Seed", "cy_rel_seed"), placeholder="bait or protein"),
+                    ui.input_select("cy_rel_kind", tip("Relation", "cy_rel_kind"),
+                                    choices={"interactors": "Interactors of a bait",
+                                             "singletons": "Singletons of a bait (its only preys)",
+                                             "partners": "BioGRID or complex partners",
+                                             "cocomplex": "CORUM co-complex members"}),
+                    col_widths=(5, 7),
+                ),
+                ui.layout_columns(
+                    ui.input_numeric("cy_rel_saint", tip("Min SAINT", "cy_rel_cuts"), value=None, min=0, max=1, step=0.05),
+                    ui.input_numeric("cy_rel_bfdr", "Max BFDR", value=None, min=0, max=1, step=0.01),
+                    ui.input_numeric("cy_rel_abundance", "Min abundance", value=None, min=0),
+                    ui.input_numeric("cy_rel_pubs", "Min publications", value=None, min=0, step=1),
+                    col_widths=(3, 3, 3, 3),
+                ),
+                ui.div(
+                    ui.tooltip(ui.input_action_button("cy_rel_replace", "Replace Selection", class_="btn-sm btn-outline-primary"),
+                               TOOLTIPS["cy_rel_replace"]),
+                    ui.tooltip(ui.input_action_button("cy_rel_add", "Add to Selection", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_rel_add"]),
+                    class_="d-flex flex-wrap gap-2 mb-3",
+                ),
+                ui.p("Cluster the selection", style="font-weight: 500; margin-bottom: 5px;"),
+                ui.layout_columns(
+                    ui.input_numeric("cy_cl_resolution", tip("Resolution", "cy_cl_resolution"), value=1.0, min=0.1, max=5, step=0.1),
+                    ui.input_numeric("cy_cl_seed", tip("Seed", "cy_cl_seed"), value=17, min=0, step=1),
+                    ui.input_numeric("cy_cl_lit_weight", tip("Reference weight", "cy_cl_lit_weight"), value=1.0, min=0, step=0.25),
+                    col_widths=(4, 4, 4),
+                ),
+                ui.div(
+                    ui.tooltip(ui.input_action_button("cy_cluster", "Cluster and Repack", class_="btn-sm btn-outline-primary"),
+                               TOOLTIPS["cy_cluster"]),
                     class_="d-flex flex-wrap gap-2 mb-3",
                 ),
                 ui.p("Network", style="font-weight: 500; margin-bottom: 5px;"),
@@ -2838,14 +2898,27 @@ def server(input: Inputs, output: Outputs, session: Session):
             notify("Select a scored dataset first.", type="error")
             return
         dataset_path = os.path.join(out_dir, dataset_name)
+        organism = provenance.dataset_organism(dataset_path)
         biogrid_path = provenance.biogrid_summary_path(
-            provenance.dataset_organism(dataset_path),
-            exclude_hcm=provenance.dataset_excludes_hcm(dataset_path))
+            organism, exclude_hcm=provenance.dataset_excludes_hcm(dataset_path))
+        corum_path = None
+        if input.cy_corum.get():
+            from setup_datasets import CORUM_FILENAME, ORGANISMS
+            if ORGANISMS[organism]["has_corum"]:
+                corum_path = os.path.join(provenance.DEFAULT_DATASETS_DIR, CORUM_FILENAME)
+            else:
+                notify(f"CORUM covers human complexes only; drawing the {organism} network without them.",
+                       type="warning")
         snap = cy_call("send the network to Cytoscape", cytoscape_ctl.draw,
                        dataset_name, os.path.join(dataset_path, "annotated_scores.csv"),
                        cy_thresholds(), baits=list(input.cy_baits.get() or []),
                        prey_prey=input.cy_prey_prey.get(), biogrid_path=biogrid_path,
-                       label_policy=input.cy_labels.get(), layout=input.cy_layout.get())
+                       label_policy=input.cy_labels.get(), layout=input.cy_layout.get(),
+                       width_source=input.cy_edge_width.get(),
+                       literature_weighted=input.cy_lit_weighted.get(),
+                       biogrid_scope=input.cy_biogrid_scope.get(), corum_path=corum_path,
+                       corum_min_members=int(input.cy_corum_min_members.get() or 3),
+                       corum_min_fraction=float(input.cy_corum_min_fraction.get() or 0.0))
         if snap:
             notify(f"Drew {snap['n_nodes']} nodes and {snap['n_edges']} edges in Cytoscape.")
 
@@ -2855,6 +2928,74 @@ def server(input: Inputs, output: Outputs, session: Session):
         hidden = cy_call("re-apply the thresholds", cytoscape_ctl.apply_thresholds, cy_thresholds())
         if hidden is not None:
             notify(f"Thresholds applied: {hidden} edge(s) hidden.")
+
+    @reactive.effect
+    @reactive.event(input.cy_restyle)
+    def cy_restyle():
+        changed = cy_call("apply the edge style", cytoscape_ctl.restyle_edges,
+                          input.cy_edge_width.get(), input.cy_lit_weighted.get(),
+                          input.cy_biogrid_scope.get())
+        if changed is not None:
+            notify(f"Edge style applied: {changed} edge(s) changed.")
+
+    def cy_show_chosen(ids):
+        """Put a fresh selection in the table so the tab shows what Cytoscape now has."""
+        nodes = cytoscape_ctl.STATE['nodes']
+        cy_selection.set(nodes[nodes['id'].isin(ids)][['id', 'symbol', 'role']].reset_index(drop=True))
+
+    @reactive.effect
+    @reactive.event(input.cy_select_loners)
+    def cy_select_loners():
+        chosen = cy_call("select the loners", cytoscape_ctl.select_loners)
+        if chosen:
+            cy_show_chosen(chosen)
+            notify(f"Selected the bait and its {len(chosen) - 1} loner(s).")
+
+    @reactive.effect
+    @reactive.event(input.cy_select_satellites)
+    def cy_select_satellites():
+        chosen = cy_call("select the satellites", cytoscape_ctl.select_satellites)
+        if chosen:
+            cy_show_chosen(chosen)
+            notify(f"Selected the bait and its {len(chosen) - 1} satellite(s).")
+
+    def cy_select_related(add):
+        seed = (input.cy_rel_seed.get() or "").strip()
+        if not seed:
+            notify("Name a seed bait or protein first.", type="error")
+            return
+        cuts = {'min_saint': input.cy_rel_saint.get(), 'max_bfdr': input.cy_rel_bfdr.get(),
+                'min_abundance': input.cy_rel_abundance.get(), 'min_publications': input.cy_rel_pubs.get()}
+        chosen = cy_call("select by relation", cytoscape_ctl.select_related, seed,
+                         input.cy_rel_kind.get(), add=add, **cuts)
+        if chosen:
+            cy_show_chosen(chosen)
+            notify(f"Selected {len(chosen)} {input.cy_rel_kind.get()} of {seed}"
+                   + (" (added to the selection)." if add else "."))
+
+    @reactive.effect
+    @reactive.event(input.cy_rel_replace)
+    def cy_rel_replace():
+        cy_select_related(add=False)
+
+    @reactive.effect
+    @reactive.event(input.cy_rel_add)
+    def cy_rel_add():
+        cy_select_related(add=True)
+
+    @reactive.effect
+    @reactive.event(input.cy_cluster)
+    def cy_cluster():
+        resolution, seed, weight = (input.cy_cl_resolution.get(), input.cy_cl_seed.get(),
+                                    input.cy_cl_lit_weight.get())
+        if resolution is None or seed is None or weight is None:
+            notify("Fill in resolution, seed and reference weight first.", type="error")
+            return
+        result = cy_call("cluster the selection", cytoscape_ctl.cluster_selection,
+                         resolution=float(resolution), seed=int(seed), literature_weight=float(weight))
+        if result:
+            notify(f"{result['n']} nodes clustered into {result['n_communities']} communities "
+                   f"(sizes {result['sizes']}).")
 
     @reactive.effect
     @reactive.event(input.cy_read_selection)

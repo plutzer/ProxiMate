@@ -35,6 +35,15 @@ REQUIRED_KEYS = [
     "dl_preset", "dl_groups", "custom_columns",
     "dl_genelist_mode", "dl_prohits_abundance",
     "dl_filter_card", "batch_export",
+    # Cytoscape
+    "cy_baits", "cy_prey_prey", "cy_labels", "cy_layout", "cy_send", "cy_rethreshold",
+    "cy_read_selection", "cy_hide_selected", "cy_show_selected", "cy_hide_unselected",
+    "cy_show_all", "cy_sync", "cy_export", "cy_unlock",
+    "cy_edge_width", "cy_biogrid_scope", "cy_lit_weighted", "cy_corum",
+    "cy_corum_min_members", "cy_corum_min_fraction", "cy_restyle",
+    "cy_select_loners", "cy_select_satellites", "cy_rel_seed", "cy_rel_kind",
+    "cy_rel_cuts", "cy_rel_replace", "cy_rel_add",
+    "cy_cl_resolution", "cy_cl_seed", "cy_cl_lit_weight", "cy_cluster",
 ]
 
 

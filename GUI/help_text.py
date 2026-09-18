@@ -81,6 +81,24 @@ TOOLTIPS = {
     "cy_sync": "Record where you dragged the nodes, so the positions are kept with the network.",  # tooltip
     "cy_export": "Save the drawn network as a PNG in the dataset's cytoscape folder under the output directory.",  # tooltip
     "cy_unlock": "Release a view that no longer pans or zooms with the mouse.",  # tooltip
+    "cy_edge_width": "What a bait-prey edge's width encodes. Abundance, WD and fold change are banded on a log scale; SAINT is linear from 0 to 1; Uniform draws every edge alike.",  # tooltip
+    "cy_biogrid_scope": "Which BioGRID pairs count as prey-prey edges: every reported pair, or only those BioGRID marks multivalidated (seen in more than one study or system).",  # tooltip
+    "cy_lit_weighted": "Thicken a BioGRID edge with the number of publications behind it. Off, every BioGRID edge is thin. Most pairs have one paper, so only well-studied pairs stand out.",  # tooltip
+    "cy_corum": "Draw black edges between drawn proteins that are subunits of one CORUM complex the screen recovered. Human datasets only; the two criteria below decide which complexes count.",  # tooltip
+    "cy_corum_min_members": "A complex draws only when at least this many of its subunits are in the network.",  # tooltip
+    "cy_corum_min_fraction": "A complex draws only when one bait, counted with its preys, covers at least this share of the complex's full membership. 0.5 means half the subunits.",  # tooltip
+    "cy_restyle": "Apply the edge width, BioGRID scope and publication weighting to the drawn network as a style update. Nothing moves; complex criteria need a new send.",  # tooltip
+    "cy_select_loners": "With exactly one bait selected in Cytoscape, select it with the preys whose only visible neighbor of any kind it is, so the group drags as one.",  # tooltip
+    "cy_select_satellites": "With exactly one bait selected, select it with its own preys and the two-bait preys that currently sit nearer to it than to their other bait.",  # tooltip
+    "cy_rel_seed": "The bait or protein the relation starts from, by name or UniProt accession, as drawn in Cytoscape.",  # tooltip
+    "cy_rel_kind": "Interactors and singletons need a bait seed. Partners are BioGRID or complex neighbors of any node. Co-complex members need the CORUM layer drawn.",  # tooltip
+    "cy_rel_cuts": "Optional cuts on the relation: SAINT, BFDR and abundance apply to interactors, publications to BioGRID partners. Leave blank for no cut.",  # tooltip
+    "cy_rel_replace": "Make the related nodes the Cytoscape selection.",  # tooltip
+    "cy_rel_add": "Add the related nodes to whatever is already selected in Cytoscape.",  # tooltip
+    "cy_cl_resolution": "Leiden resolution. Above 1 splits the selection into more, smaller communities; below 1 merges them.",  # tooltip
+    "cy_cl_seed": "Random seed for the Leiden run, so the same selection clusters the same way again.",  # tooltip
+    "cy_cl_lit_weight": "How much a BioGRID or complex edge pulls relative to a bait-prey edge. 0 clusters on bait-prey edges alone.",  # tooltip
+    "cy_cluster": "Run Leiden over the selected nodes, color them by community, and re-pack each community on its own circle inside the box the selection occupies. Only selected nodes move.",  # tooltip
     # ---- Downloads tab ----
     "dl_filter_card": "These cutoffs filter the rows of score-based exports only. Experimental Design, SAINT Inputs, and Enriched Features always download unfiltered.",  # tooltip
     "dl_preset": "Ready-made export formats for common next steps. A preset appears only when the dataset has the files it needs.",  # tooltip
