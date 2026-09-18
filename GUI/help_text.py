@@ -27,6 +27,7 @@ TOOLTIPS = {
     "quant_type": "Which measurement to score. Intensity = summed raw signal; LFQ = label-free quantification, normalized across runs; Spectral Counts = number of spectra identifying each protein.",  # tooltip
     "pg_file": "The proteinGroups.txt table from MaxQuant's combined/txt output folder.",  # tooltip
     "diann_matrix_file": "The report.pg_matrix.tsv protein-group matrix written by DIA-NN.",  # tooltip
+    "pioneer_matrix_file": "The protein_groups_wide.tsv table written by Pioneer's SearchDIA. Run columns are the MS file names without extension.",  # tooltip
     "fragpipe_file": "The combined_protein.tsv table from a FragPipe output folder.",  # tooltip
     "msstats_file": "The ProteinLevelData.csv table exported by MSstats after summarization.",  # tooltip
     "ed_file": "CSV describing your experiments. Columns: Experiment Name, Type (T = test, C = control), Bait, Replicate, Bait ID. Optional Group column pairs tests with controls; controls may list several groups or * for all.",  # tooltip
@@ -35,13 +36,14 @@ TOOLTIPS = {
     "saint_prey": "SAINT prey.txt: one row per protein - protein ID, sequence length, and gene name.",  # tooltip
     "saint_interaction": "SAINT interaction.txt: one row per protein per experiment - experiment name, bait, prey, and quantity.",  # tooltip
     "organism": "The species your samples came from. Chooses which annotation databases (BioGRID, UniProt, HPA, CORUM) are used for annotation and enrichment.",  # tooltip
+    "exclude_hcm": "Annotate against a BioGRID copy with all Human Cell Map (Go et al. 2021) evidence removed. HCM is itself a BioID screen, so it makes proximity-labeling hits look more 'known' than they are. Interactions with other evidence are kept.",  # tooltip
     "imputation_method": "How missing control values are filled in before SAINT scoring. Default = no fill-in; the AFT options model the chance a value is missing because it fell below detection. Use Default for MSstats input.",  # tooltip
     "pi_method": "π is the estimated share of missing values that are true absences rather than below-detection signals. Choose to estimate it from all control baits or fit it from a single one.",  # tooltip
     "pi_bait": "The control bait whose replicates are used to fit π. Pick one with several replicates.",  # tooltip
     "wdfdr_iterations": "Number of data shuffles used to estimate the WD score's false discovery rate (WDFDR). More iterations are slower but more stable; 0 skips WDFDR entirely.",  # tooltip
     "clear_datasets": "Removes every dataset in this session, including results stored on the server. Download a session zip first if you want to keep them.",  # tooltip
-    "download_session": "Saves all datasets and results in this session as one zip you can restore later with Upload Session Zip.",  # tooltip
-    "session_file": "A session zip downloaded earlier. Loading it restores all of its datasets and results.",  # tooltip
+    "download_session": "Saves every dataset in this session, with its results, as one zip you can restore later with Upload Session Zip.",  # tooltip
+    "session_file": "A session zip downloaded earlier. Loading it replaces the current session with all of its datasets and results.",  # tooltip
     # ---- Data Thresholding tab ----
     "pca_imputation": "How to handle proteins not detected in every experiment. Row minimum = fill with that protein's smallest observed value; Zero = fill with 0; Drop = keep only fully observed preys.",  # tooltip
     "pca_normalization": "Scaling applied before PCA. Z-score centers each protein; log2 + Z-score first compresses large intensity ranges (good for raw intensities); None uses values as-is.",  # tooltip
@@ -64,6 +66,21 @@ TOOLTIPS = {
     "volcano_plot": "Compares prey abundance between the two baits: x = fold change, y = statistical confidence. Points far up and to either side differ most reliably.",  # tooltip
     "venn": "Counts of preys passing thresholds in only network A, only network B, or both.",  # tooltip
     "gene_lists": "The gene names behind each region of the Venn diagram, ready to copy into other tools.",  # tooltip
+    # ---- Cytoscape tab ----
+    "cy_baits": "Baits whose networks to draw. Leave empty to draw every bait in the dataset.",  # tooltip
+    "cy_prey_prey": "Also draw grey edges between preys that BioGRID reports as interacting, so complexes show as clusters.",  # tooltip
+    "cy_labels": "Which node names to draw. Baits only keeps large networks readable; click a node in Cytoscape to see its name.",  # tooltip
+    "cy_layout": "The Cytoscape layout algorithm applied when the network is sent. You can re-layout in Cytoscape afterward.",  # tooltip
+    "cy_send": "Build the network passing the thresholds and draw it in Cytoscape, replacing the previous ProxiMate network.",  # tooltip
+    "cy_rethreshold": "Hide edges that fail the current thresholds without redrawing, so your hand layout survives. Loosening needs a new send.",  # tooltip
+    "cy_read_selection": "List the nodes selected in Cytoscape with the scores of their edges.",  # tooltip
+    "cy_hide_selected": "Hide every edge touching a node selected in Cytoscape.",  # tooltip
+    "cy_show_selected": "Show every edge touching a node selected in Cytoscape.",  # tooltip
+    "cy_hide_unselected": "Hide every edge that does not touch a selected node, leaving the selection's neighborhood.",  # tooltip
+    "cy_show_all": "Show every edge again.",  # tooltip
+    "cy_sync": "Record where you dragged the nodes, so the positions are kept with the network.",  # tooltip
+    "cy_export": "Save the drawn network as a PNG in the dataset's cytoscape folder under the output directory.",  # tooltip
+    "cy_unlock": "Release a view that no longer pans or zooms with the mouse.",  # tooltip
     # ---- Downloads tab ----
     "dl_filter_card": "These cutoffs filter the rows of score-based exports only. Experimental Design, SAINT Inputs, and Enriched Features always download unfiltered.",  # tooltip
     "dl_preset": "Ready-made export formats for common next steps. A preset appears only when the dataset has the files it needs.",  # tooltip

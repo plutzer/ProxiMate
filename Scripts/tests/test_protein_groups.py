@@ -454,3 +454,25 @@ def test_saint_output_does_not_require_a_bait_id(build, out_dir):
     build(STANDARD_ROWS, ed_rows=ed_without_bait_id).to_SAINT(str(out_dir))
 
     assert (out_dir / "interaction.txt").exists()
+
+
+# --- MaxQuant column aliases ----------------------------------------------------
+
+def test_a_decoy_column_is_read_as_reverse(tmp_path, build, monkeypatch):
+    """MaxQuant 2.4 and later write the decoy flag under "Decoy"."""
+    import protein_groups
+    original = pd.read_csv
+
+    def _read_with_decoy(path, **kwargs):
+        return original(path, **kwargs).rename(columns={"Reverse": "Decoy"})
+
+    monkeypatch.setattr(protein_groups.pd, "read_csv", _read_with_decoy)
+    rows = [
+        _protein("Pkeep", "G", {"t1_1": 5, "t1_2": 5, "c_1": 0}, reverse="-"),
+        _protein("Pdrop", "G", {"t1_1": 5, "t1_2": 5, "c_1": 0}, reverse="+"),
+    ]
+
+    pg = build(rows)
+
+    assert set(pg.data["Majority protein IDs"]) == {"Pkeep"}
+    assert "Reverse" in pg.data.columns and "Decoy" not in pg.data.columns

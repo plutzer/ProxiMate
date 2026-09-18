@@ -29,7 +29,8 @@ from plot_exports import pca_plot_matplotlib, prey_pca_matplotlib, saint_scatter
 import download_presets as dp
 from download_presets import DEFAULT_CUSTOM_COLUMNS
 from help_text import tip, TOOLTIPS
-import py4cytoscape as p4c
+import session_archive
+import cytoscape_ctl
 import log_config
 import provenance
 from log_config import get_logger
@@ -49,7 +50,7 @@ app_ui = ui.page_navbar(
                                         tip("Dataset Name", "dataset_name"),
                                         placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
                             ui.input_select("input_format", tip("Input Format", "input_format"),
-                                           choices=["MaxQuant", "DIA-NN", "FragPipe", "MSstats", "SAINT"],
+                                           choices=["MaxQuant", "DIA-NN", "Pioneer", "FragPipe", "MSstats", "SAINT"],
                                            selected="MaxQuant"),
                             col_widths=[4, 8]
                         ),
@@ -75,6 +76,17 @@ app_ui = ui.page_navbar(
                                     ui.input_file("ed_file", tip("Experimental Design File", "ed_file"))
                                 ),
                                 ui.output_data_frame("ed_table_diann"),
+                                col_widths=[4, 8]
+                            )
+                        ),
+                        ui.panel_conditional(
+                            "input.input_format === 'Pioneer'",
+                            ui.layout_columns(
+                                ui.div(
+                                    ui.input_file("pioneer_matrix_file", tip("Pioneer protein_groups_wide.tsv file", "pioneer_matrix_file")),
+                                    ui.input_file("ed_file", tip("Experimental Design File", "ed_file"))
+                                ),
+                                ui.output_data_frame("ed_table_pioneer"),
                                 col_widths=[4, 8]
                             )
                         ),
@@ -135,6 +147,12 @@ app_ui = ui.page_navbar(
                                      "mouse": "Mouse (M. musculus)",
                                      "yeast": "Yeast (S. cerevisiae)"},
                             selected="human"),
+                        ui.panel_conditional(
+                            "input.organism === 'human'",
+                            ui.input_checkbox("exclude_hcm",
+                                tip("Exclude Human Cell Map evidence", "exclude_hcm"),
+                                value=False),
+                        ),
                         ui.input_radio_buttons("imputation_method", tip("Imputation Method", "imputation_method"),
                                               choices={0: "Default", 
                                                     #    1: "Prey-specific",
@@ -231,7 +249,7 @@ app_ui = ui.page_navbar(
                     ui.layout_columns(
                         ui.card(
                             ui.card_header("Threshold Settings"),
-                            ui.input_select("qc_bait", tip("Select Control Bait", "qc_bait"), choices=["All"]),
+                            ui.input_select("qc_bait", tip("Select QC Bait", "qc_bait"), choices=["All"]),
                             ui.input_slider("threshold_saintscore", tip("SAINT Score Threshold", "saintscore"),
                                           min=0.0, max=1.0, value=0.7, step=0.01),
                             ui.input_slider("threshold_bfdr", tip("BFDR Threshold", "bfdr"),
@@ -427,24 +445,79 @@ app_ui = ui.page_navbar(
         ),
     ),
     ui.nav_panel("Cytoscape",
+        ui.output_ui("empty_state_cytoscape"),
         ui.layout_columns(
             ui.card(
-                ui.card_header("Cytoscape Connection Test"),
-                ui.p("This tab tests communication between ProxiMate and Cytoscape via py4cytoscape."),
-                ui.p("Requirements:", style="font-weight: bold; margin-top: 15px;"),
-                ui.tags.ul(
-                    ui.tags.li("Cytoscape must be running on your host machine"),
-                    ui.tags.li("Windows/Mac Docker Desktop: Use standard docker run -p 3838:3838"),
-                    ui.tags.li("Native Linux: Use docker run --network host"),
+                ui.card_header("Network"),
+                ui.input_select("cy_dataset", "Select Dataset", choices=[]),
+                ui.input_selectize("cy_baits", tip("Baits", "cy_baits"), choices=[], multiple=True),
+                ui.input_slider("cy_threshold_saintscore", tip("SAINT Score Threshold", "saintscore"),
+                                min=0.0, max=1.0, value=0.7, step=0.01),
+                ui.input_slider("cy_threshold_bfdr", tip("BFDR Threshold", "bfdr"),
+                                min=0.0, max=1.0, value=0.05, step=0.01),
+                ui.input_slider("cy_threshold_wd", tip("WD Score Threshold", "wd"),
+                                min=0.0, max=10.0, value=0.0, step=0.1),
+                ui.input_slider("cy_threshold_wdfdr", tip("WDFDR Threshold", "wdfdr"),
+                                min=0.0, max=1.0, value=1.0, step=0.01),
+                ui.div(
+                    ui.tooltip(ui.input_action_button("cy_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
+                               TOOLTIPS["preset_stringent"]),
+                    ui.tooltip(ui.input_action_button("cy_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["preset_moderate"]),
+                    ui.tooltip(ui.input_action_button("cy_preset_relaxed", "Relaxed", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["preset_relaxed"]),
+                    class_="d-flex gap-2 mb-3",
                 ),
-                ui.hr(),
-                ui.input_action_button("test_create_node", "Create Test Node", class_="btn-primary"),
-                ui.input_action_button("test_delete_node", "Delete Test Node", class_="btn-danger",
-                                      style="margin-left: 10px;"),
-                ui.hr(),
-                ui.output_text_verbatim("cytoscape_status"),
+                ui.input_checkbox("cy_prey_prey", tip("Prey-prey BioGRID edges", "cy_prey_prey"), value=True),
+                ui.input_select("cy_labels", tip("Labels", "cy_labels"),
+                                choices={"all": "All nodes", "baits": "Baits only", "none": "None"}),
+                ui.input_select("cy_layout", tip("Layout", "cy_layout"),
+                                choices=["force-directed", "kamada-kawai", "circular", "grid",
+                                         "hierarchical", "degree-circle"]),
+                ui.div(
+                    ui.tooltip(ui.input_action_button("cy_send", "Send to Cytoscape", class_="btn-primary"),
+                               TOOLTIPS["cy_send"]),
+                    ui.tooltip(ui.input_action_button("cy_rethreshold", "Re-apply Thresholds", class_="btn-outline-secondary"),
+                               TOOLTIPS["cy_rethreshold"]),
+                    class_="d-flex gap-2 mt-2",
+                ),
             ),
-            col_widths=(12,),
+            ui.card(
+                ui.card_header("Cytoscape"),
+                ui.output_ui("cy_status"),
+                ui.input_action_button("cy_probe", "Check Connection", class_="btn-sm btn-outline-secondary"),
+                ui.hr(),
+                ui.p("Selection", style="font-weight: 500; margin-bottom: 5px;"),
+                ui.div(
+                    ui.tooltip(ui.input_action_button("cy_read_selection", "Read Selection", class_="btn-sm btn-outline-primary"),
+                               TOOLTIPS["cy_read_selection"]),
+                    ui.tooltip(ui.input_action_button("cy_hide_selected", "Hide Edges", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_hide_selected"]),
+                    ui.tooltip(ui.input_action_button("cy_show_selected", "Show Edges", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_show_selected"]),
+                    ui.tooltip(ui.input_action_button("cy_hide_unselected", "Hide Others", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_hide_unselected"]),
+                    ui.tooltip(ui.input_action_button("cy_show_all", "Show All", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_show_all"]),
+                    class_="d-flex flex-wrap gap-2 mb-3",
+                ),
+                ui.p("Network", style="font-weight: 500; margin-bottom: 5px;"),
+                ui.div(
+                    ui.tooltip(ui.input_action_button("cy_sync", "Sync Positions", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_sync"]),
+                    ui.tooltip(ui.input_action_button("cy_export", "Export PNG", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_export"]),
+                    ui.tooltip(ui.input_action_button("cy_unlock", "Unlock View", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_unlock"]),
+                    class_="d-flex flex-wrap gap-2 mb-3",
+                ),
+                ui.output_data_frame("cy_selection_table"),
+            ),
+            ui.card(
+                ui.card_header("Activity"),
+                ui.output_text_verbatim("cy_activity"),
+            ),
+            col_widths=(4, 5, 3),
         ),
     ),
     ui.nav_panel("Downloads",
@@ -547,26 +620,6 @@ app_ui = ui.page_navbar(
     title="ProxiMate",
 )
 
-
-def get_cytoscape_base_url():
-    """
-    Get the Cytoscape base URL based on platform.
-
-    For Docker containers:
-    - Docker Desktop (Windows/Mac): host.docker.internal:1234
-    - Native Linux: Use --network host and localhost:1234
-    """
-    # Check if running in Docker by looking for /.dockerenv
-    in_docker = os.path.exists('/.dockerenv')
-
-    if in_docker:
-        # Running in Docker container
-        # Try host.docker.internal first (works on Docker Desktop for Windows/Mac)
-        # On native Linux, this won't resolve unless using --add-host or --network host
-        return "http://host.docker.internal:1234/v1"
-    else:
-        # Running natively (for local development)
-        return "http://127.0.0.1:1234/v1"
 
 
 def _edited_ed_file(grid, uploaded_path):
@@ -672,9 +725,13 @@ def format_error_notification(error):
 
 
 def server(input: Inputs, output: Outputs, session: Session):
-    datasets = reactive.Value(pd.DataFrame(
-        columns=['Dataset Name', 'Input Type', 'Quant Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']
-    ))
+    # The table is read back from disk so a session outlives the server process, and
+    # written back on every change so the copy on disk is never stale.
+    datasets = reactive.Value(session_archive.load_datasets_table(out_dir))
+
+    @reactive.effect
+    def persist_datasets():
+        session_archive.save_datasets_table(out_dir, datasets.get())
 
     # Function to render the datasets table
     @render.data_frame
@@ -702,6 +759,10 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.data_frame
     def ed_table_diann():
         # Return the ED table for DIA-NN input
+        return render.DataGrid(ed_dataframe.get(), editable=True)
+
+    @render.data_frame
+    def ed_table_pioneer():
         return render.DataGrid(ed_dataframe.get(), editable=True)
 
     @render.data_frame
@@ -789,7 +850,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.event(input.input_format)
     def clear_tables_on_format_change():
         # Clear tables when format changes to avoid showing stale data
-        if input.input_format.get() in ["MaxQuant", "DIA-NN", "FragPipe", "MSstats"]:
+        if input.input_format.get() in ["MaxQuant", "DIA-NN", "Pioneer", "FragPipe", "MSstats"]:
             # Clear SAINT bait table
             saint_baits.set(pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"]))
         elif input.input_format.get() == "SAINT":
@@ -801,7 +862,10 @@ def server(input: Inputs, output: Outputs, session: Session):
     def parse_data():
         # Check if the dataset name is valid
         dataset_name = input.dataset_name.get()
-        check_result = parse.validate_name(dataset_name, datasets.get()['Dataset Name'].tolist())
+        # A directory left by a failed run counts as taken, or its leftovers would be
+        # mixed into the new dataset's results.
+        taken = set(datasets.get()['Dataset Name'].tolist()) | set(session_archive.dataset_directories(out_dir))
+        check_result = parse.validate_name(dataset_name, taken)
         if check_result != 0:
             notify(
                     f"Parser: {check_result}",
@@ -895,6 +959,40 @@ def server(input: Inputs, output: Outputs, session: Session):
                     )
                     updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
                     datasets.set(updated_datasets)
+                    progress.set(1.0)
+
+                elif input_format == "Pioneer":
+                    progress.set(message="Parsing Pioneer inputs", value=0.25)
+
+                    if not input.pioneer_matrix_file.get() or not input.ed_file.get():
+                        notify(
+                            "Please upload both Pioneer protein_groups_wide.tsv and Experimental Design files",
+                            type="error"
+                        )
+                        return "Error: Missing files"
+
+                    progress.set(0.45)
+
+                    ed_path, ed_tmp = _edited_ed_file(
+                        ed_table_pioneer, input.ed_file.get()[0]['datapath'])
+                    try:
+                        n_exp, n_ctrl = parse.parse_pioneer(
+                            input.pioneer_matrix_file.get()[0]['datapath'],
+                            ed_path,
+                            "Intensity",
+                            output_path
+                        )
+                    finally:
+                        if ed_tmp:
+                            os.unlink(ed_tmp)
+
+                    progress.set(0.85)
+
+                    new_row = pd.DataFrame(
+                        [[dataset_name, 'Pioneer', 'Intensity', n_exp, n_ctrl, '', '', '']],
+                        columns=datasets.get().columns
+                    )
+                    datasets.set(pd.concat([datasets.get(), new_row], ignore_index=True))
                     progress.set(1.0)
 
                 elif input_format == "FragPipe":
@@ -1064,7 +1162,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
 
     def do_clear_datasets():
-        datasets.set(pd.DataFrame(columns=['Dataset Name', 'Input Type', 'Quant Type', 'Experiments', 'Controls', 'Scored', 'Imputation', 'WDFDR iterations']))
+        datasets.set(session_archive.empty_datasets_table())
         logger.info("Clearing all datasets under %s", out_dir)
 
         # The operational log lives here too and must outlive the datasets it
@@ -1094,52 +1192,48 @@ def server(input: Inputs, output: Outputs, session: Session):
     def clear_datasets():
         do_clear_datasets()
 
-    @render.download_button()
+    @render.download_button(
+        filename=lambda: f"ProxiMateSession_{datetime.datetime.now().strftime('%Y%m%d')}.zip")
     def download_session():
         try:
-            # Save the current state of the datasets dataframe to a CSV file
-            datasets.get().to_csv(out_dir + "/datasets.csv", index=False)
-
-            file_prefix = f"ProxiMateSession_{datetime.datetime.now().strftime('%Y%m%d')}"
-            tmp_zip = tempfile.NamedTemporaryFile(prefix=file_prefix, suffix=".zip", delete=False)
-            with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
-                for root, _, files in os.walk(out_dir):
-                    for file in files:
-                        abs_file = os.path.join(root, file)
-                        # Write the file using a relative path
-                        zipf.write(abs_file, arcname=os.path.relpath(abs_file, out_dir))
-            tmp_zip.close()
-            logger.info("Session archive written to %s", tmp_zip.name)
-            # Return the path of the zip file for download
-            return tmp_zip.name
+            # One fixed path, overwritten per download, so archives do not accumulate.
+            zip_path = os.path.join(tempfile.gettempdir(), "ProxiMateSession.zip")
+            session_archive.write_session_archive(
+                out_dir, datasets.get()['Dataset Name'].tolist(), zip_path)
+            logger.info("Session archive written to %s", zip_path)
+            return zip_path
         except Exception as e:
             notify(f"Could not build the session archive: {e}",
                    type="error", duration=None, exc_info=True)
             return None
-    
+
     @reactive.effect
     @reactive.event(input.upload_session)
     def upload_session():
-        # Start by clearing the current datasets
-        do_clear_datasets()
-
-        # Check if the upload has occurred
         uploaded = input.session_file.get()
-        if uploaded:
-            # uploaded is a list of dicts; use the first file
-            zip_path = uploaded[0]['datapath']
-            try:
-                logger.info("Restoring session from uploaded archive %s", zip_path)
-                with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                    zip_ref.extractall(out_dir)
+        if not uploaded:
+            notify("No session archive selected.", type="error")
+            return
+        zip_path = uploaded[0]['datapath']
 
-                # Load the datasets.csv file into the datasets reactive value
-                datasets.set(pd.read_csv(os.path.join(out_dir, "datasets.csv")))
-                logger.info("Session restored: %d datasets", len(datasets.get()))
-            except Exception as e:
-                logger.exception("Failed to restore session from %s", zip_path)
-                notify(f"Could not restore the session archive: {e}", type="error",
-                       duration=None)
+        # The archive is checked before the current session is cleared, so a wrong
+        # file leaves the session as it was.
+        try:
+            session_archive.inspect_session_archive(zip_path)
+        except session_archive.SessionArchiveError as e:
+            notify(str(e), type="error", duration=None)
+            return
+
+        do_clear_datasets()
+        try:
+            logger.info("Restoring session from uploaded archive %s", zip_path)
+            datasets.set(session_archive.extract_session_archive(zip_path, out_dir))
+            logger.info("Session restored: %d datasets", len(datasets.get()))
+            notify(f"Session restored: {len(datasets.get())} dataset(s).", type="message")
+        except Exception as e:
+            logger.exception("Failed to restore session from %s", zip_path)
+            notify(f"Could not restore the session archive: {e}", type="error",
+                   duration=None)
 
 
     @reactive.effect
@@ -1252,6 +1346,9 @@ def server(input: Inputs, output: Outputs, session: Session):
                     "--outputDir",
                     dataset_path,
                 ]
+                # The checkbox is hidden for other organisms but keeps its value.
+                if input.organism.get() == "human" and input.exclude_hcm.get():
+                    ann_cmd.append("--excludeHCM")
                 returncode, log_tail = _run_stage_subprocess(ann_cmd, dataset_path, run_id)
 
                 if returncode != 0:
@@ -1857,7 +1954,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     feature_enrichment = reactive.Value(pd.DataFrame())
 
-    _cytoscape_status_msg = reactive.Value("Click a button to test Cytoscape connection...")
 
     # Feature analysis tab
     @reactive.effect
@@ -2035,6 +2131,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_select("feature_dataset", choices=scored_choices)
         ui.update_select("comp_dataset_a", choices=scored_choices)
         ui.update_select("comp_dataset_b", choices=scored_choices)
+        ui.update_select("cy_dataset", choices=scored_choices)
 
     @reactive.effect
     @reactive.event(input.qc_dataset, datasets)
@@ -2646,72 +2743,188 @@ def server(input: Inputs, output: Outputs, session: Session):
         notify(f"ZIP created with {len(included_files)} files.", type="message", duration=3)
         return zip_path
 
-    # Cytoscape tab
-    @reactive.effect
-    @reactive.event(input.test_create_node)
-    def create_test_node():
-        """Create a test node in Cytoscape."""
+    # Cytoscape tab.  The controller's state is shared by every browser session, so
+    # the tab learns about changes by polling its version counter.
+    @reactive.poll(lambda: cytoscape_ctl.STATE['version'], 1.0)
+    def cy_version():
+        return cytoscape_ctl.STATE['version']
+
+    cy_health = reactive.Value(None)
+    cy_selection = reactive.Value(pd.DataFrame())
+
+    def cy_call(doing, fn, *args, **kwargs):
+        """Run a controller operation, turning its failure into a notification."""
         try:
-            base_url = get_cytoscape_base_url()
+            return fn(*args, **kwargs)
+        except Exception as e:
+            logger.exception("Cytoscape: could not %s", doing)
+            notify(f"Could not {doing}: {e}", type="error", duration=None)
+            return None
 
-            # Try to connect to Cytoscape
-            version = p4c.cytoscape_version_info(base_url=base_url)
+    def cy_thresholds():
+        return {'SaintScore': input.cy_threshold_saintscore.get(),
+                'BFDR': input.cy_threshold_bfdr.get(),
+                'WD': input.cy_threshold_wd.get(),
+                'WDFDR': input.cy_threshold_wdfdr.get()}
 
-            # Create a simple network if none exists
+    @render.ui
+    def empty_state_cytoscape():
+        if not scored_datasets():
+            return ui.div(
+                ui.h4("No Scored Datasets Available"),
+                ui.p("Score a dataset in the Network Scoring tab to send its network to Cytoscape."),
+                style="text-align: center; padding: 40px; color: #666; background-color: #f8f9fa; border-radius: 8px; margin-bottom: 20px;"
+            )
+        return None
+
+    @reactive.effect
+    @reactive.event(input.cy_dataset, datasets)
+    def update_cy_baits():
+        dataset_name = input.cy_dataset.get()
+        baits = []
+        if dataset_name:
             try:
-                current_network = p4c.get_network_name(base_url=base_url)
-            except Exception as e:
-                # No network exists, create one. Narrowed from a bare `except`,
-                # which also swallowed KeyboardInterrupt and SystemExit.
-                logger.debug("No current Cytoscape network (%s); creating one", e)
-                nodes_df = pd.DataFrame({'id': ['InitialNode']})
-                edges_df = pd.DataFrame({'source': [], 'target': []})
-                p4c.create_network_from_data_frames(
-                    nodes=nodes_df,
-                    edges=edges_df,
-                    title="ProxiMate Test Network",
-                    base_url=base_url
-                )
+                scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"),
+                                     usecols=['Experiment.ID'])
+                baits = sorted(scores['Experiment.ID'].astype(str).unique())
+            except Exception:
+                logger.exception("Could not list baits for %s", dataset_name)
+        ui.update_selectize("cy_baits", choices=baits, selected=[])
 
-            # Add a test node
-            p4c.add_cy_nodes(['TestNode_ProxiMate'], base_url=base_url)
-
-            # Update status
-            status_message = f"✓ Successfully created 'TestNode_ProxiMate' in Cytoscape\nCytoscape version: {version['cytoscapeVersion']}"
-            logger.info("Created test node in Cytoscape %s", version['cytoscapeVersion'])
-
-        except Exception as e:
-            logger.exception("Could not create a test node in Cytoscape")
-            status_message = f"✗ Error connecting to Cytoscape:\n{str(e)}\n\nMake sure Cytoscape is running on your host machine."
-
-        # Store status in reactive value for display
-        _cytoscape_status_msg.set(status_message)
+    for _key, _values in (("stringent", (0.9, 0.01, 2.0, 0.05)),
+                          ("moderate", (0.7, 0.05, 1.0, 0.1)),
+                          ("relaxed", (0.5, 0.1, 0.0, 1.0))):
+        def _make_preset(values, key):
+            @reactive.effect
+            @reactive.event(getattr(input, f"cy_preset_{key}"))
+            def _apply():
+                for name, value in zip(("saintscore", "bfdr", "wd", "wdfdr"), values):
+                    ui.update_slider(f"cy_threshold_{name}", value=value)
+        _make_preset(_values, _key)
 
     @reactive.effect
-    @reactive.event(input.test_delete_node)
-    def delete_test_node():
-        """Delete the test node from Cytoscape."""
-        try:
-            base_url = get_cytoscape_base_url()
+    @reactive.event(input.cy_probe)
+    def cy_probe():
+        cy_health.set(cytoscape_ctl.health())
 
-            # Select the test node
-            p4c.select_nodes(['TestNode_ProxiMate'], by_col='name', base_url=base_url)
+    @render.ui
+    def cy_status():
+        cy_version()
+        health = cy_health.get()
+        if health is None:
+            health = cytoscape_ctl.health()
+            cy_health.set(health)
+        snap = cytoscape_ctl.snapshot()
+        if health['ok']:
+            line = ui.p(ui.span("● ", style="color: green;"),
+                        f"Cytoscape {health['version']} at {health['url']}")
+        else:
+            line = ui.p(ui.span("● ", style="color: red;"),
+                        f"No Cytoscape at {health['url']}: {health['error']}",
+                        ui.br(), "Start Cytoscape on this machine, or set PROXIMATE_CYTOSCAPE_URL.",
+                        style="color: #a33;")
+        if snap['net_suid'] is None:
+            drawn = ui.p("No ProxiMate network drawn yet.", style="color: #666;")
+        else:
+            drawn = ui.p(f"{snap['title']}: {snap['n_nodes']} nodes, {snap['n_edges']} edges "
+                         f"({snap['n_hidden']} hidden)" + (f" — {snap['busy']}" if snap['busy'] else ""))
+        return ui.div(line, drawn)
 
-            # Delete selected nodes
-            p4c.delete_selected_nodes(base_url=base_url)
+    @reactive.effect
+    @reactive.event(input.cy_send)
+    def cy_send():
+        dataset_name = input.cy_dataset.get()
+        if not dataset_name:
+            notify("Select a scored dataset first.", type="error")
+            return
+        dataset_path = os.path.join(out_dir, dataset_name)
+        biogrid_path = provenance.biogrid_summary_path(
+            provenance.dataset_organism(dataset_path),
+            exclude_hcm=provenance.dataset_excludes_hcm(dataset_path))
+        snap = cy_call("send the network to Cytoscape", cytoscape_ctl.draw,
+                       dataset_name, os.path.join(dataset_path, "annotated_scores.csv"),
+                       cy_thresholds(), baits=list(input.cy_baits.get() or []),
+                       prey_prey=input.cy_prey_prey.get(), biogrid_path=biogrid_path,
+                       label_policy=input.cy_labels.get(), layout=input.cy_layout.get())
+        if snap:
+            notify(f"Drew {snap['n_nodes']} nodes and {snap['n_edges']} edges in Cytoscape.")
 
-            status_message = "✓ Successfully deleted 'TestNode_ProxiMate' from Cytoscape"
-            logger.info("Deleted test node from Cytoscape")
+    @reactive.effect
+    @reactive.event(input.cy_rethreshold)
+    def cy_rethreshold():
+        hidden = cy_call("re-apply the thresholds", cytoscape_ctl.apply_thresholds, cy_thresholds())
+        if hidden is not None:
+            notify(f"Thresholds applied: {hidden} edge(s) hidden.")
 
-        except Exception as e:
-            logger.exception("Could not delete the test node from Cytoscape")
-            status_message = f"✗ Error deleting node:\n{str(e)}\n\nMake sure the node exists and Cytoscape is running."
+    @reactive.effect
+    @reactive.event(input.cy_read_selection)
+    def cy_read_selection():
+        result = cy_call("read the selection", cytoscape_ctl.read_selection)
+        if result:
+            chosen, detail = result
+            cy_selection.set(detail if len(detail) else chosen)
+            notify(f"{len(chosen)} node(s) selected, touching {len(detail)} edge(s).")
 
-        _cytoscape_status_msg.set(status_message)
+    for _button, _action in (("cy_hide_selected", "hide_selected"),
+                             ("cy_show_selected", "show_selected"),
+                             ("cy_hide_unselected", "hide_unselected"),
+                             ("cy_show_all", "show_all")):
+        def _make_visibility(button, action):
+            @reactive.effect
+            @reactive.event(getattr(input, button))
+            def _apply():
+                changed = cy_call(f"{action.replace('_', ' ')} edges",
+                                  cytoscape_ctl.set_edge_visibility, action)
+                if changed is not None:
+                    notify(f"{changed} edge(s) changed.")
+        _make_visibility(_button, _action)
+
+    @reactive.effect
+    @reactive.event(input.cy_sync)
+    def cy_sync():
+        n = cy_call("read node positions", cytoscape_ctl.sync_positions)
+        if n is not None:
+            notify(f"Recorded positions of {n} node(s).")
+
+    @reactive.effect
+    @reactive.event(input.cy_export)
+    def cy_export():
+        snap = cytoscape_ctl.snapshot()
+        if snap['dataset'] is None:
+            notify("Send a network to Cytoscape first.", type="error")
+            return
+        dataset_path = os.path.join(out_dir, snap['dataset'])
+
+        def export_with_record():
+            with provenance.stage(dataset_path, "cytoscape",
+                                  entrypoint="cytoscape_ctl.export_image") as record:
+                path = cytoscape_ctl.export_image(dataset_path)
+                record.add_output(path, role="image")
+                record.extra(thresholds=snap['thresholds'])
+                return path
+
+        path = cy_call("export the image", export_with_record)
+        if path:
+            notify(f"Image written to {path}")
+
+    @reactive.effect
+    @reactive.event(input.cy_unlock)
+    def cy_unlock():
+        held = cy_call("unlock the view", cytoscape_ctl.unlock)
+        if held is not None:
+            notify("Released " + (", ".join(held) if held else "nothing; the view was not locked."))
+
+    @render.data_frame
+    def cy_selection_table():
+        return render.DataGrid(cy_selection.get(), height="250px")
 
     @render.text
-    def cytoscape_status():
-        return _cytoscape_status_msg.get()
+    def cy_activity():
+        cy_version()
+        entries = cytoscape_ctl.snapshot()['log']
+        if not entries:
+            return "No Cytoscape activity yet."
+        return "\n".join(f"{e['ts'][11:]}  {e['op']}: {e['detail']}" for e in reversed(entries))
 
 def log_startup():
     """Record the configuration the server came up with.

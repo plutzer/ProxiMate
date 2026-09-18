@@ -232,3 +232,68 @@ def test_the_summary_is_written_where_annotation_looks_for_it(tmp_path, build):
     build([_interaction("P1", "P2")])
 
     assert (tmp_path / "biogrid_summary.csv").exists()
+
+
+# --- excluding one publication's evidence ---------------------------------------
+
+HCM = "PUBMED:34079125"
+
+
+def _build_variant(tmp_path, all_rows, mv_rows=(), publication=HCM,
+                   output_filename="biogrid_summary_no_hcm.csv"):
+    """Run the summariser with one publication's evidence removed.
+
+    The multivalidated export is written with a Publication Source column here, since
+    the exclusion reads it from that file too.
+    """
+    all_path = tmp_path / "BIOGRID-ALL.tab3.txt"
+    mv_path = tmp_path / "BIOGRID-MV-Physical.tab3.txt"
+    pd.DataFrame(list(all_rows), columns=ALL_COLUMNS).to_csv(all_path, sep="\t", index=False)
+    pd.DataFrame(list(mv_rows), columns=[
+        "Organism ID Interactor A", "Organism ID Interactor B",
+        "SWISS-PROT Accessions Interactor A", "SWISS-PROT Accessions Interactor B",
+        "Publication Source"]).to_csv(mv_path, sep="\t", index=False)
+    preprocess_biogrid(str(all_path), str(mv_path), str(tmp_path), HUMAN,
+                       exclude_publication=publication, output_filename=output_filename)
+    return pd.read_csv(tmp_path / output_filename)
+
+
+def test_a_pair_reported_only_by_the_excluded_publication_is_dropped(tmp_path):
+    summary = _build_variant(tmp_path, [_interaction("P1", "P2", source=HCM)])
+
+    assert _pairs(summary) == set()
+
+
+def test_a_pair_with_other_evidence_keeps_only_that_evidence(tmp_path):
+    summary = _build_variant(tmp_path, [
+        _interaction("P1", "P2", source=HCM, author="Go CD (2021)",
+                     system="Proximity Label-MS"),
+        _interaction("P1", "P2", source="PUBMED:1", author="Smith A (2020)",
+                     system="Affinity Capture-MS"),
+    ])
+
+    assert _pairs(summary) == {("P1", "P2")}
+    assert summary.loc[0, "Publication Source"] == "PUBMED:1"
+    assert summary.loc[0, "Author"] == "Smith A (2020)"
+    assert summary.loc[0, "Experimental System"] == "Affinity Capture-MS"
+
+
+def test_multivalidation_reported_only_by_the_excluded_publication_is_dropped(tmp_path):
+    all_rows = [_interaction("P1", "P2", source="PUBMED:1")]
+    mv_rows = [dict(_multivalidated("P1", "P2"), **{"Publication Source": HCM})]
+
+    kept = _build_variant(tmp_path, all_rows, mv_rows, publication=None)
+    dropped = _build_variant(tmp_path, all_rows, mv_rows, publication=HCM)
+
+    assert bool(kept.loc[0, "Multivalidated"]) is True
+    assert bool(dropped.loc[0, "Multivalidated"]) is False
+
+
+def test_the_variant_is_written_under_its_own_name(tmp_path, build):
+    """Both summaries live in the same directory, so the variant must not overwrite
+    the full one."""
+    build([_interaction("P1", "P2", source=HCM)])
+    variant = _build_variant(tmp_path, [_interaction("P1", "P2", source=HCM)])
+
+    assert _pairs(variant) == set()
+    assert _pairs(pd.read_csv(tmp_path / "biogrid_summary.csv")) == {("P1", "P2")}

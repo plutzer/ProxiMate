@@ -412,3 +412,25 @@ def test_an_unreadable_manifest_falls_back_rather_than_raising(tmp_path):
     (tmp_path / provenance.RUN_JSON_FILENAME).write_text("{not json", encoding="utf-8")
 
     assert provenance.dataset_organism(tmp_path) == "human"
+
+
+def test_the_no_hcm_summary_is_looked_for_beside_the_full_one(tmp_path):
+    path = provenance.biogrid_summary_path("human", str(tmp_path), exclude_hcm=True)
+
+    assert path == os.path.join(str(tmp_path), "human",
+                                setup_datasets.BIOGRID_NO_HCM_SUMMARY_FILENAME)
+
+
+def test_whether_hcm_was_excluded_is_read_from_the_annotating_run(tmp_path, run_id):
+    with provenance.stage(tmp_path, "annotate") as record:
+        record.extra(organism="human", exclude_hcm=True)
+
+    assert provenance.dataset_excludes_hcm(tmp_path) is True
+
+
+def test_a_manifest_recording_nothing_about_hcm_means_the_full_summary(tmp_path, run_id):
+    """Every dataset annotated before the variant existed used the full summary."""
+    with provenance.stage(tmp_path, "annotate") as record:
+        record.extra(organism="human")
+
+    assert provenance.dataset_excludes_hcm(tmp_path) is False

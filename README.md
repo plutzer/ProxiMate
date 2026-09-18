@@ -54,7 +54,7 @@ docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/pr
 
 **Options:**
 - `--organism`: `human` (default), `mouse`, or `yeast` — add before `--format` if needed
-- `quant_type`: `Intensity`, `LFQ`, or `Spectral Counts` (DIA-NN always uses Intensity; FragPipe supports all three)
+- `quant_type`: `Intensity`, `LFQ`, or `Spectral Counts` (DIA-NN and Pioneer always use Intensity; FragPipe supports all three)
 - `imputation`: `0` (none), `1` (prey-specific AFT), `2` (refactored AFT), or `3` (one-component AFT)
 - `--seed`: CompPASS permutation seed, so WD p-values reproduce between runs
 
@@ -85,6 +85,21 @@ all four. Attach `run.json` to a bug report.
 | `PROXIMATE_OUTPUT_DIR` | `/Outputs` | where the GUI stores datasets |
 | `PROXIMATE_RUN_ID` | minted per run | set it to correlate an external job with a ProxiMate run |
 | `LOG_FILE` | unset | an additional rotating log at an explicit path |
+| `PROXIMATE_CYTOSCAPE_URL` | `http://host.docker.internal:1234/v1` in a container, `http://127.0.0.1:1234/v1` otherwise | where the Cytoscape tab reaches CyREST |
+| `PROXIMATE_CYTOSCAPE_TIMEOUT` | `120` | seconds any one CyREST request may take before the tab reports an error |
+
+## Cytoscape
+
+The Cytoscape tab sends the interactions passing a set of thresholds into a Cytoscape
+desktop running on the same machine and keeps a link to it: read the selection back
+with its scores, hide or show edges around it, tighten the thresholds without
+disturbing a hand layout, and save a PNG under `<output_dir>/<dataset>/cytoscape/`.
+Each send replaces the previous ProxiMate network. Cytoscape stays on the host; the
+container only talks to CyREST on port 1234, so on Docker Desktop no extra flag is
+needed. On a native Linux engine add `--add-host host.docker.internal:host-gateway`
+to `docker run`, or run with `--network host` and set `PROXIMATE_CYTOSCAPE_URL` to
+`http://127.0.0.1:1234/v1`. py4cytoscape's own request log lands in
+`$PROXIMATE_LOG_DIR/py4cytoscape/`.
 
 **Building with a version stamp.** The image contains no git repository, so the
 version recorded in `run.json` comes from a build argument:
@@ -108,6 +123,18 @@ Human Protein Atlas: March 21, 2026
 CORUM: March 21, 2026
 
 
+
+### Excluding Human Cell Map evidence
+
+The Human Cell Map (Go et al. 2021, PubMed 34079125) is a large BioID screen deposited in
+BioGRID. Scoring a proximity-labeling experiment against it counts hits as "known" on the
+strength of the same kind of assay, so the container also builds
+`/Datasets/human/biogrid_summary_no_hcm.csv`: the human summary with every evidence line
+from that paper removed. Interactions with other evidence are kept, with the HCM entries
+dropped from their evidence lists. Select it with the "Exclude Human Cell Map evidence"
+checkbox in the scoring panel (human only) or `--exclude-hcm` on `run_pipeline.sh`. The
+choice is recorded in `run.json`, and the QC tab's known-interaction and network-degree
+metrics use the same file the run was annotated against.
 
 ### Updating databases manually (experienced users):
 Databases can be downloaded automatically by running `python3 Scripts/setup_datasets.py --output-dir Datasets`. Use `--skip` to exclude specific databases (e.g., `--skip corum`). See `python3 Scripts/setup_datasets.py --help` for all options.

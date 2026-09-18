@@ -334,3 +334,77 @@ def test_nan_truth_values_count_as_not_known(tmp_path):
 
     # 4 positives and 6 negatives, the NaN row among the negatives.
     assert float(saint.name.split("= ")[1].rstrip(")")) == pytest.approx(1.0)
+
+
+def test_the_reference_set_follows_the_hcm_choice_the_dataset_was_annotated_with(
+        datasets_dir, scores_csv, monkeypatch):
+    """A run annotated without Human Cell Map evidence is measured against that same
+    reduced summary, not the full one beside it."""
+    monkeypatch.setenv("PROXIMATE_RUN_ID", "20260901T120000Z-0badcafe")
+    with provenance.stage(os.path.dirname(scores_csv), "annotate") as record:
+        record.extra(organism="human", exclude_hcm=True)
+    _biogrid_for(datasets_dir, "human", [("P1", "P2"), ("P1", "P3")])
+    _write_biogrid(datasets_dir / "human" / "biogrid_summary_no_hcm.csv", [("P8", "P9")])
+
+    metrics = calculate_threshold_metrics(scores_csv, PASSING)
+
+    assert metrics["mean_degree"] == 0
+
+
+# --- SAINT score vs fold change -------------------------------------------------
+
+SCATTER_COLUMNS = {
+    "Experiment.ID": "B1", "First_Prey_Gene": "GENE", "SaintScore": 0.9, "BFDR": 0.01,
+    "FoldChange": 3.0, "In.BioGRID": True, "Multivalidated": False,
+}
+
+
+def _scatter_scores(tmp_path, **quant_columns):
+    rows = [{**SCATTER_COLUMNS, **quant_columns},
+            {**SCATTER_COLUMNS, "In.BioGRID": False, **quant_columns},
+            {**SCATTER_COLUMNS, "Multivalidated": True, **quant_columns}]
+    path = tmp_path / "annotated_scores.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return str(path)
+
+
+def _hover_texts(fig):
+    return [t for trace in fig.data for t in trace.text]
+
+
+def test_the_scatter_reads_intensity_columns_from_an_intensity_run(tmp_path):
+    path = _scatter_scores(tmp_path, AvgIntensity=1.5e6, ctrlIntensity="1e5|.|2e5")
+
+    texts = _hover_texts(QC_plots.saint_scatter_plot(path, "B1", 0.7))
+
+    assert len(texts) == 3
+    assert all("Avg Intensity: 1.50e+06" in t for t in texts)
+    assert all("Avg Ctrl Intensity: 1.50e+05" in t for t in texts)
+
+
+def test_the_scatter_reads_spectral_count_columns_from_a_spc_run(tmp_path):
+    """SAINTexpress's spectral-count build names these columns AvgSpec and ctrlCounts."""
+    path = _scatter_scores(tmp_path, AvgSpec=12.5, ctrlCounts="2|.|4")
+
+    texts = _hover_texts(QC_plots.saint_scatter_plot(path, "B1", 0.7))
+
+    assert len(texts) == 3
+    assert all("Avg Spec: 12.5" in t for t in texts)
+    assert all("Avg Ctrl Spec: 3.0" in t for t in texts)
+
+
+def test_the_scatter_refuses_scores_with_neither_quantity_column(tmp_path):
+    path = _scatter_scores(tmp_path)
+
+    with pytest.raises(KeyError, match="AvgIntensity nor AvgSpec"):
+        QC_plots.saint_scatter_plot(path, "B1", 0.7)
+
+
+def test_baits_are_excluded_by_accession_when_the_column_is_present(tmp_path):
+    """Symbol-keyed inputs carry the supplied symbol in Bait.ID and the resolved
+    accession in Bait_Accession; BioGRID lists the accession."""
+    biogrid = _write_biogrid(tmp_path / "biogrid.csv", [("P1", "BACC"), ("P1", "P2")])
+    passing = pd.DataFrame({"First_ID": ["P1", "P2"], "Bait.ID": ["BSYM", "BSYM"],
+                            "Bait_Accession": ["BACC", "BACC"]})
+
+    assert sorted(calculate_network_degrees(passing, biogrid)) == [1, 1]

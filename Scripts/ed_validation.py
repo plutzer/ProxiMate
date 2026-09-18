@@ -28,6 +28,13 @@ from ed_exceptions import (
 
 
 GROUP_WILDCARD = "*"
+
+# Non-run columns of Pioneer's protein_groups_wide.tsv. Pioneer's output schema
+# policy may omit some of them; every other column is an MS run.
+PIONEER_METADATA_COLUMNS = frozenset({
+    "species", "gene_names", "protein_names", "protein", "target", "entrap_id",
+    "global_pg_score", "global_qval",
+})
 _GROUP_INT_PATTERN = re.compile(r"^[1-9][0-9]*$")
 
 
@@ -306,8 +313,10 @@ class PGValidator:
 
     @classmethod
     def validate_required_columns(cls, df):
-        """Check required columns are present"""
-        missing = [col for col in cls.REQUIRED_COLUMNS if col not in df.columns]
+        """Check required columns are present, under their canonical or alias names."""
+        from protein_groups import apply_column_aliases
+        columns = apply_column_aliases(df).columns
+        missing = [col for col in cls.REQUIRED_COLUMNS if col not in columns]
         if missing:
             raise PGMissingColumnError(missing)
 
@@ -447,6 +456,28 @@ class EDPGCrossValidator:
             logger.warning("%d experiment(s) in DIA-NN will be ignored (not in ED): %s", len(diann_only), diann_examples)
 
         # Error only if ED experiments are missing from data file
+        if ed_only:
+            raise EDPGMismatchError(ed_only, [])
+
+    @staticmethod
+    def validate_pioneer_match(ed_df, pioneer_df):
+        """
+        Validate that experiments in ED match run columns in Pioneer's protein_groups_wide.tsv.
+
+        Run columns are the MS file names without extension.
+        """
+        ed_experiments = set(ed_df['Experiment Name'].unique())
+        pioneer_experiments = set(pioneer_df.columns) - PIONEER_METADATA_COLUMNS
+
+        ed_only = sorted(ed_experiments - pioneer_experiments)
+        pioneer_only = sorted(pioneer_experiments - ed_experiments)
+
+        if pioneer_only:
+            examples = ", ".join(pioneer_only[:5])
+            if len(pioneer_only) > 5:
+                examples += f" (and {len(pioneer_only) - 5} more)"
+            logger.warning("%d run(s) in Pioneer will be ignored (not in ED): %s", len(pioneer_only), examples)
+
         if ed_only:
             raise EDPGMismatchError(ed_only, [])
 
@@ -605,6 +636,51 @@ def validate_diann_inputs(ed_file, diann_file):
     EDPGCrossValidator.validate_diann_match(ed_df, diann_df)
 
     return ed_df, diann_df
+
+
+def validate_pioneer_inputs(ed_file, pioneer_file):
+    """
+    Validate Pioneer inputs (ED + protein_groups_wide.tsv).
+    Returns (ed_df, pioneer_df_headers) if successful.
+
+    Raises:
+        EDFileError: If ED file has validation issues
+        PGFileError: If the Pioneer table is unreadable, empty, or lacks a 'protein' column
+        EDPGMismatchError: If experiment names don't match
+    """
+    ed_df = EDValidator.validate_ed_file(ed_file)
+
+    try:
+        pioneer_df = pd.read_csv(pioneer_file, sep="\t", nrows=10)
+        if pioneer_df.empty:
+            raise PGFileError(
+                message="Pioneer table is empty",
+                user_message="The Pioneer protein_groups_wide.tsv file is empty",
+                suggestions=["Ensure the file contains data"]
+            )
+    except PGFileError:
+        raise
+    except Exception as e:
+        raise PGFileError(
+            message=f"Error reading Pioneer table: {str(e)}",
+            user_message="Unable to read Pioneer protein_groups_wide.tsv file",
+            suggestions=[
+                "Ensure this is the protein_groups_wide.tsv written by Pioneer's SearchDIA",
+                "File should be tab-separated",
+                f"Technical details: {str(e)}"
+            ]
+        )
+
+    if "protein" not in pioneer_df.columns:
+        raise PGFileError(
+            message="Pioneer table lacks a 'protein' column",
+            user_message="The Pioneer file has no 'protein' column",
+            suggestions=["Upload protein_groups_wide.tsv, not the precursor or long-format table"]
+        )
+
+    EDPGCrossValidator.validate_pioneer_match(ed_df, pioneer_df)
+
+    return ed_df, pioneer_df
 
 
 def validate_msstats_inputs(ed_file, msstats_file):

@@ -197,37 +197,52 @@ def read_build_info(datasets_dir=DEFAULT_DATASETS_DIR):
         return None
 
 
-def biogrid_summary_path(organism, datasets_dir=None):
+def biogrid_summary_path(organism, datasets_dir=None, exclude_hcm=False):
     """Where ``setup_datasets`` writes the BioGRID summary for one organism.
 
     The summary is filtered by taxonomy id, so each organism gets its own; there is no
-    copy at the top of the datasets directory.  The filename comes from
-    ``setup_datasets`` so the two stay in step.
+    copy at the top of the datasets directory.  ``exclude_hcm`` selects the variant with
+    Human Cell Map evidence removed.  The filenames come from ``setup_datasets`` so the
+    two stay in step.
     """
-    from setup_datasets import BIOGRID_SUMMARY_FILENAME
+    from setup_datasets import BIOGRID_NO_HCM_SUMMARY_FILENAME, BIOGRID_SUMMARY_FILENAME
 
     if datasets_dir is None:
         datasets_dir = DEFAULT_DATASETS_DIR
-    return os.path.join(datasets_dir, organism, BIOGRID_SUMMARY_FILENAME)
+    filename = BIOGRID_NO_HCM_SUMMARY_FILENAME if exclude_hcm else BIOGRID_SUMMARY_FILENAME
+    return os.path.join(datasets_dir, organism, filename)
 
 
 def dataset_organism(output_dir, default="human"):
     """The organism a dataset's results were annotated against.
 
     Falls back to ``default`` for a dataset whose manifest records none, which covers
-    every run scored before the organism became a parameter.  A manifest that cannot be
-    read is treated the same way: callers resolve this to draw a plot, and an unreadable
-    manifest is not a reason to fail one.
+    every run scored before the organism became a parameter.
+    """
+    return _annotation_setting(output_dir, "organism", default)
+
+
+def dataset_excludes_hcm(output_dir):
+    """Whether a dataset was annotated against the BioGRID summary without Human Cell
+    Map evidence.  A manifest that records nothing means the full summary was used."""
+    return _annotation_setting(output_dir, "exclude_hcm", False)
+
+
+def _annotation_setting(output_dir, key, default):
+    """The last value of ``key`` recorded in any stage's ``extra`` of the manifest.
+
+    A manifest that cannot be read yields ``default``: callers resolve these to draw a
+    plot, and an unreadable manifest is not a reason to fail one.
     """
     document = _load(os.path.join(str(output_dir), RUN_JSON_FILENAME))
 
-    organism = default
+    value = default
     for run in document["runs"].values():
         for entry in run.get("stages", []):
-            recorded = entry.get("extra", {}).get("organism")
-            if recorded:
-                organism = recorded
-    return organism
+            extra = entry.get("extra", {})
+            if key in extra:
+                value = extra[key]
+    return value
 
 
 def _load(manifest_path):

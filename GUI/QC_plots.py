@@ -90,6 +90,9 @@ def prepare_pca_matrix(interaction, min_detection_frac=0.5,
     normalization: 'zscore' (per-prey), 'log2_zscore' (log2(x + 1) then
     per-prey z-score; the pseudocount keeps zero-imputed values finite),
     or 'none'. Preys with zero variance are dropped by the z-score options.
+
+    A prey still missing a value after imputation (one never detected, which 'row_min'
+    has nothing to fill from) is dropped whatever the normalization: PCA cannot take NaN.
     """
     df = pd.read_csv(interaction, sep="\t", header=0)
     df.columns = ['Experiment', 'BaitName', 'Prey', 'Intensity']
@@ -111,6 +114,7 @@ def prepare_pca_matrix(interaction, min_detection_frac=0.5,
         data = data.dropna()
     else:
         raise ValueError(f"Unknown imputation option: {imputation!r}")
+    data = data.dropna(how='any')
 
     if normalization == "log2_zscore":
         data = np.log2(data + 1)
@@ -439,7 +443,10 @@ def calculate_network_degrees(passing_interactions, biogrid_path):
     # Use set for O(1) lookup performance in filtering
     prey_ids = set(str(pid) for pid in passing_interactions['First_ID'].unique()
                    if pd.notna(pid) and str(pid) != 'nan')
-    bait_ids = set(str(bid) for bid in passing_interactions['Bait.ID'].unique()
+    # Baits are excluded by accession, the form BioGRID uses; results annotated before
+    # symbols were resolved carry only the supplied Bait.ID.
+    bait_col = 'Bait_Accession' if 'Bait_Accession' in passing_interactions.columns else 'Bait.ID'
+    bait_ids = set(str(bid) for bid in passing_interactions[bait_col].unique()
                    if pd.notna(bid) and str(bid) != 'nan')
 
     if len(prey_ids) == 0:
@@ -545,8 +552,10 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None,
     # Calculate mean prey-prey network degree from BioGRID
     if total_after > 0:
         if biogrid_path is None:
-            organism = provenance.dataset_organism(os.path.dirname(results_path))
-            biogrid_path = provenance.biogrid_summary_path(organism)
+            dataset_dir = os.path.dirname(results_path)
+            biogrid_path = provenance.biogrid_summary_path(
+                provenance.dataset_organism(dataset_dir),
+                exclude_hcm=provenance.dataset_excludes_hcm(dataset_dir))
         degrees = calculate_network_degrees(passing_all, biogrid_path)
         if degrees is None:
             mean_degree = None
@@ -602,27 +611,41 @@ def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
         )
         return fig
 
-    # Helper function to calculate average control intensity
-    def calculate_avg_ctrl_intensity(ctrl_intensity_str):
-        """
-        Parse control intensity string, filter out missing values ('.'),
-        and calculate average.
-        """
-        if pd.isnull(ctrl_intensity_str):
+    # SAINTexpress names the quantity columns by input type: its intensity build writes
+    # AvgIntensity/ctrlIntensity, its spectral-count build AvgSpec/ctrlCounts.
+    if 'AvgIntensity' in bait_data.columns:
+        avg_col, ctrl_col, label, fmt = 'AvgIntensity', 'ctrlIntensity', 'Intensity', '.2e'
+    elif 'AvgSpec' in bait_data.columns:
+        avg_col, ctrl_col, label, fmt = 'AvgSpec', 'ctrlCounts', 'Spec', '.1f'
+    else:
+        raise KeyError("annotated scores carry neither AvgIntensity nor AvgSpec")
+
+    def calculate_avg_ctrl(ctrl_str):
+        """Mean of SAINT's '|'-separated control values, ignoring '.' placeholders."""
+        if pd.isnull(ctrl_str):
             return np.nan
-
-        # Split by '|' and filter out '.' values
-        values = [v.strip() for v in str(ctrl_intensity_str).split('|') if v.strip() != '.']
-
+        values = [v.strip() for v in str(ctrl_str).split('|') if v.strip() != '.']
         if len(values) == 0:
             return np.nan
-
         try:
-            # Convert to float and calculate mean
-            numeric_values = [float(v) for v in values]
-            return np.mean(numeric_values)
+            return np.mean([float(v) for v in values])
         except (ValueError, TypeError):
             return np.nan
+
+    def hover_text(frame):
+        texts = []
+        for _, row in frame.iterrows():
+            avg_ctrl = calculate_avg_ctrl(row[ctrl_col])
+            ctrl_text = "NaN" if np.isnan(avg_ctrl) else f"{avg_ctrl:{fmt}}"
+            texts.append(
+                f"<b>{row['First_Prey_Gene']}</b><br>"
+                f"SAINT Score: {row['SaintScore']:.3f}<br>"
+                f"BFDR: {row['BFDR']:.3f}<br>"
+                f"Fold Change: {row['FoldChange']:.3f}<br>"
+                f"Avg {label}: {row[avg_col]:{fmt}}<br>"
+                f"Avg Ctrl {label}: {ctrl_text}"
+            )
+        return texts
 
     # Separate data by BioGRID status
     # Handle missing columns gracefully
@@ -647,24 +670,6 @@ def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
 
     # Add not in BioGRID (blue) - plot first so it's in the background
     if len(not_in_biogrid) > 0:
-        hover_text = []
-        for idx, row in not_in_biogrid.iterrows():
-            avg_ctrl = calculate_avg_ctrl_intensity(row['ctrlIntensity'])
-            if np.isnan(avg_ctrl):
-                ctrl_text = "NaN"
-            else:
-                ctrl_text = f"{avg_ctrl:.2e}"
-
-            text = (
-                f"<b>{row['First_Prey_Gene']}</b><br>"
-                f"SAINT Score: {row['SaintScore']:.3f}<br>"
-                f"BFDR: {row['BFDR']:.3f}<br>"
-                f"Fold Change: {row['FoldChange']:.3f}<br>"
-                f"Avg Intensity: {row['AvgIntensity']:.2e}<br>"
-                f"Avg Ctrl Intensity: {ctrl_text}"
-            )
-            hover_text.append(text)
-
         fig.add_trace(go.Scatter(
             x=not_in_biogrid['FoldChange'],
             y=not_in_biogrid['SaintScore'],
@@ -674,31 +679,13 @@ def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
                 color='#1f77b4',  # Blue
                 line=dict(width=0.5, color='white')
             ),
-            text=hover_text,
+            text=hover_text(not_in_biogrid),
             hovertemplate='%{text}<extra></extra>',
             name='Not in BioGRID'
         ))
 
     # Add in BioGRID (orange)
     if len(in_biogrid) > 0:
-        hover_text = []
-        for idx, row in in_biogrid.iterrows():
-            avg_ctrl = calculate_avg_ctrl_intensity(row['ctrlIntensity'])
-            if np.isnan(avg_ctrl):
-                ctrl_text = "NaN"
-            else:
-                ctrl_text = f"{avg_ctrl:.2e}"
-
-            text = (
-                f"<b>{row['First_Prey_Gene']}</b><br>"
-                f"SAINT Score: {row['SaintScore']:.3f}<br>"
-                f"BFDR: {row['BFDR']:.3f}<br>"
-                f"Fold Change: {row['FoldChange']:.3f}<br>"
-                f"Avg Intensity: {row['AvgIntensity']:.2e}<br>"
-                f"Avg Ctrl Intensity: {ctrl_text}"
-            )
-            hover_text.append(text)
-
         fig.add_trace(go.Scatter(
             x=in_biogrid['FoldChange'],
             y=in_biogrid['SaintScore'],
@@ -708,31 +695,13 @@ def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
                 color='#ff7f0e',  # Orange
                 line=dict(width=0.5, color='white')
             ),
-            text=hover_text,
+            text=hover_text(in_biogrid),
             hovertemplate='%{text}<extra></extra>',
             name='In BioGRID'
         ))
 
     # Add multivalidated (red) - plot last so it's on top
     if len(multivalidated) > 0:
-        hover_text = []
-        for idx, row in multivalidated.iterrows():
-            avg_ctrl = calculate_avg_ctrl_intensity(row['ctrlIntensity'])
-            if np.isnan(avg_ctrl):
-                ctrl_text = "NaN"
-            else:
-                ctrl_text = f"{avg_ctrl:.2e}"
-
-            text = (
-                f"<b>{row['First_Prey_Gene']}</b><br>"
-                f"SAINT Score: {row['SaintScore']:.3f}<br>"
-                f"BFDR: {row['BFDR']:.3f}<br>"
-                f"Fold Change: {row['FoldChange']:.3f}<br>"
-                f"Avg Intensity: {row['AvgIntensity']:.2e}<br>"
-                f"Avg Ctrl Intensity: {ctrl_text}"
-            )
-            hover_text.append(text)
-
         fig.add_trace(go.Scatter(
             x=multivalidated['FoldChange'],
             y=multivalidated['SaintScore'],
@@ -742,7 +711,7 @@ def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
                 color='#d62728',  # Red
                 line=dict(width=0.5, color='white')
             ),
-            text=hover_text,
+            text=hover_text(multivalidated),
             hovertemplate='%{text}<extra></extra>',
             name='Multivalidated'
         ))

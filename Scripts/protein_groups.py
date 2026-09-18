@@ -6,6 +6,18 @@ from log_config import get_logger
 
 logger = get_logger(__name__)
 
+# MaxQuant 2.4 and later name the decoy flag column "Decoy"; earlier versions "Reverse".
+# The table is renamed to the older name on load so the rest of the pipeline sees one.
+MAXQUANT_COLUMN_ALIASES = {"Decoy": "Reverse"}
+
+
+def apply_column_aliases(df):
+    """Rename alias columns to their canonical names where the canonical one is absent."""
+    renames = {alias: name for alias, name in MAXQUANT_COLUMN_ALIASES.items()
+               if alias in df.columns and name not in df.columns}
+    return df.rename(columns=renames)
+
+
 def get_quant_col_prefix(quantification):
     if quantification == "LFQ":
         return "LFQ intensity "
@@ -21,7 +33,8 @@ class ProteinGroups:
         self.experimental_design = experimental_design
         self.quantification_saint = quantification_saint
         self.quantification_comppass = quantification_comppass
-        self.data = pd.read_csv(file_path, sep="\t", quotechar="'", low_memory=False)
+        self.data = apply_column_aliases(
+            pd.read_csv(file_path, sep="\t", quotechar="'", low_memory=False))
 
         self.quant_col_prefix_saint = get_quant_col_prefix(quantification_saint)
         self.quant_col_prefix_comppass = get_quant_col_prefix(quantification_comppass)

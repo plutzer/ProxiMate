@@ -294,3 +294,73 @@ def test_only_human_has_the_human_specific_databases():
         expected = organism == "human"
         assert config["has_hpa"] is expected
         assert config["has_corum"] is expected
+
+
+# --- the Human Cell Map variant ------------------------------------------------
+
+def test_excluding_hcm_for_an_organism_without_the_variant_raises():
+    """No reduced summary is built for mouse or yeast; falling back to the full one
+    would silently annotate against evidence the user asked to leave out."""
+    import argparse
+    args = argparse.Namespace(organism="mouse", excludeHCM=True, uniprotFile=None,
+                              biogridFile=None, locationFile=None, complexFile=None)
+
+    with pytest.raises(ValueError, match="Human Cell Map"):
+        annotator._annotate(args, record=None)
+
+
+# --- gene symbol resolution ----------------------------------------------------
+
+def _uniprot(rows):
+    return pd.DataFrame(rows, columns=["Entry", "Gene Names"])
+
+
+@pytest.mark.parametrize("value", ["P12345", "A0A087X1C5", "Q9Y6K9-2"])
+def test_accessions_are_recognized(value):
+    assert annotator.ACCESSION_RE.match(value)
+
+
+@pytest.mark.parametrize("value", ["RUVBL1", "12345", "P1234", "contam_P12345"])
+def test_other_identifiers_are_not_accessions(value):
+    assert not annotator.ACCESSION_RE.match(value)
+
+
+def test_primary_and_synonym_symbols_map_to_the_entry():
+    mapping = annotator.symbol_accession_map(_uniprot([("Q9Y265", "RUVBL1 INO80H NMP238")]))
+
+    assert mapping == {"RUVBL1": "Q9Y265", "INO80H": "Q9Y265", "NMP238": "Q9Y265"}
+
+
+def test_a_symbol_shared_by_two_entries_is_left_out():
+    """Choosing either would annotate the wrong protein with no sign of it."""
+    mapping = annotator.symbol_accession_map(_uniprot([("P1", "SHARED A"), ("P2", "SHARED B")]))
+
+    assert mapping == {"A": "P1", "B": "P2"}
+
+
+def test_an_entry_without_gene_names_is_skipped():
+    assert annotator.symbol_accession_map(_uniprot([("P1", None), ("P2", "G")])) == {"G": "P2"}
+
+
+def test_an_accession_passes_through_untouched():
+    assert annotator.resolve_accessions("Q9Y6K9-2", {"Q9Y6K9-2": "WRONG"}) == "Q9Y6K9-2"
+
+
+def test_a_symbol_is_replaced_by_its_accession():
+    assert annotator.resolve_accessions("RUVBL1", {"RUVBL1": "Q9Y265"}) == "Q9Y265"
+
+
+def test_an_unknown_identifier_is_kept_as_written():
+    assert annotator.resolve_accessions("MYSTERY", {}) == "MYSTERY"
+
+
+def test_a_protein_group_resolves_element_wise_in_order():
+    resolved = annotator.resolve_accessions("RUVBL1;P12345; RUVBL2", {"RUVBL1": "Q9Y265", "RUVBL2": "Q9Y230"})
+
+    assert resolved == "Q9Y265;P12345;Q9Y230"
+
+
+def test_unresolved_ids_lists_what_is_still_not_an_accession():
+    column = pd.Series(["Q9Y265;MYSTERY", "P12345", "OTHER"])
+
+    assert annotator.unresolved_ids(column) == ["MYSTERY", "OTHER"]

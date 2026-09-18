@@ -12,6 +12,7 @@ usage() {
     echo "Usage:"
     echo "  $0 [OPTIONS] --format maxquant  ED_file PG_file quant_type output_dir n_iterations imputation"
     echo "  $0 [OPTIONS] --format diann     ED_file matrix_file output_dir n_iterations imputation"
+    echo "  $0 [OPTIONS] --format pioneer   ED_file protein_groups_wide.tsv output_dir n_iterations imputation"
     echo "  $0 [OPTIONS] --format fragpipe  ED_file FP_file quant_type output_dir n_iterations imputation"
     echo "  $0 [OPTIONS] --format msstats   ED_file ProteinLevelData.csv output_dir n_iterations imputation"
     echo "  $0 [OPTIONS] --format saint     bait_file prey_file interaction_file quant_type output_dir n_iterations imputation"
@@ -19,12 +20,14 @@ usage() {
     echo "Formats:"
     echo "  maxquant  - MaxQuant proteinGroups.txt + experimental design CSV"
     echo "  diann     - DIA-NN report.pg_matrix.tsv + experimental design CSV"
+    echo "  pioneer   - Pioneer protein_groups_wide.tsv + experimental design CSV"
     echo "  fragpipe  - FragPipe combined_protein.tsv + experimental design CSV"
     echo "  msstats   - MSstats ProteinLevelData.csv (already log2/normalized/imputed) + experimental design CSV"
     echo "  saint     - SAINT bait.txt, prey.txt, interaction.txt"
     echo ""
     echo "Options:"
     echo "  --organism    - human (default), mouse, or yeast"
+    echo "  --exclude-hcm - annotate against BioGRID with Human Cell Map (Go et al. 2021) evidence removed; human only"
     echo "  --pi-method   - weighted_average (default) or single_bait; applies when imputation=2"
     echo "  --pi-bait     - required when --pi-method=single_bait: control Bait name"
     echo "  --seed        - CompPASS permutation seed, so WD p-values reproduce"
@@ -48,12 +51,14 @@ organism="human"
 pi_method="weighted_average"
 pi_bait=""
 seed=""
+hcm_args=()
 while true; do
     case "$1" in
         --organism)   organism="$2"; shift 2 ;;
         --pi-method)  pi_method="$2"; shift 2 ;;
         --pi-bait)    pi_bait="$2"; shift 2 ;;
         --seed)       seed="$2"; shift 2 ;;
+        --exclude-hcm) hcm_args=(--excludeHCM); shift ;;
         *) break ;;
     esac
 done
@@ -105,6 +110,14 @@ case "$format" in
         score_ed="$ed_file"
         ;;
 
+    pioneer)
+        [ "$#" -ne 5 ] && { echo "Error: pioneer format requires 5 arguments"; usage; }
+        ed_file=$1; matrix_file=$2; output_dir=$3; niters=$4; imp=$5; quant="Intensity"
+        stage_label="Pioneer"
+        parse_args=(--experimentalDesign "$ed_file" --pioneerMatrix "$matrix_file" --quantType "$quant")
+        score_ed="$ed_file"
+        ;;
+
     msstats)
         [ "$#" -ne 5 ] && { echo "Error: msstats format requires 5 arguments"; usage; }
         ed_file=$1; msstats_file=$2; output_dir=$3; niters=$4; imp=$5; quant="Intensity"
@@ -125,7 +138,7 @@ case "$format" in
         ;;
 
     *)
-        echo "Error: Unknown format '$format'. Must be maxquant, diann, fragpipe, msstats, or saint."
+        echo "Error: Unknown format '$format'. Must be maxquant, diann, pioneer, fragpipe, msstats, or saint."
         usage
         ;;
 esac
@@ -179,6 +192,6 @@ run_stage "Annotating" \
     python3 /Scripts/annotator.py \
         --organism "$organism" \
         --scoreFile "$output_dir/merged.csv" \
-        --outputDir "$output_dir"
+        --outputDir "$output_dir" "${hcm_args[@]}"
 
 echo "=== Done (run $PROXIMATE_RUN_ID) ===" | tee -a "$log_file"

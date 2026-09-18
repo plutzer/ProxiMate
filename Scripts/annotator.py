@@ -21,9 +21,9 @@ logger = get_logger(__name__)
 #   4. If the organism has a species-specific database (like HPA for human),
 #      add a download function in setup_datasets.py and conditional logic below
 ORGANISMS = {
-    "human": {"organism_id": 9606, "has_hpa": True, "has_corum": True},
-    "mouse": {"organism_id": 10090, "has_hpa": False, "has_corum": False},
-    "yeast": {"organism_id": 559292, "has_hpa": False, "has_corum": False},
+    "human": {"organism_id": 9606, "has_hpa": True, "has_corum": True, "has_hcm": True},
+    "mouse": {"organism_id": 10090, "has_hpa": False, "has_corum": False, "has_hcm": False},
+    "yeast": {"organism_id": 559292, "has_hpa": False, "has_corum": False, "has_hcm": False},
 }
 
 def get_first_SCL(item):
@@ -128,6 +128,48 @@ def complex_id(prey_id, complex_dict):
                 return key
     return None
 
+# A UniProt accession, with an optional isoform suffix.
+ACCESSION_RE = re.compile(
+    r"^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})(?:-\d+)?$")
+
+
+def symbol_accession_map(uniprot):
+    """Gene symbol -> accession, from the space-separated 'Gene Names' column.
+
+    A symbol listed under more than one entry is left out: picking one would annotate
+    the wrong protein without any sign of it.
+    """
+    seen = {}
+    for accession, names in zip(uniprot['Entry'], uniprot['Gene Names']):
+        if pd.isnull(names):
+            continue
+        for symbol in str(names).split():
+            seen.setdefault(symbol, set()).add(accession)
+    return {symbol: next(iter(accs)) for symbol, accs in seen.items() if len(accs) == 1}
+
+
+def resolve_accessions(ids, symbol_map):
+    """Resolve one ';'-joined identifier string to accessions.
+
+    Accessions pass through, a known symbol becomes its accession, and anything else is
+    kept as written so the caller can count what did not resolve.
+    """
+    resolved = []
+    for item in str(ids).split(';'):
+        item = item.strip()
+        if ACCESSION_RE.match(item):
+            resolved.append(item)
+        else:
+            resolved.append(symbol_map.get(item, item))
+    return ';'.join(resolved)
+
+
+def unresolved_ids(resolved_series):
+    """The distinct identifiers in a resolved column that are still not accessions."""
+    return sorted({item for ids in resolved_series for item in str(ids).split(';')
+                   if not ACCESSION_RE.match(item)})
+
+
 def check_annotation_coverage(matched, total, source):
     """Report an annotation source that matched nothing at all.
 
@@ -196,6 +238,10 @@ def main():
     parser.add_argument("--biogridFile", default=None,
                         help="path to biogrid annotation file (default: /Datasets/{organism}/biogrid_summary.csv)")
 
+    parser.add_argument("--excludeHCM", action="store_true",
+                        help="annotate against the BioGRID summary with Human Cell Map "
+                             "(Go et al. 2021) evidence removed; human only")
+
     parser.add_argument("--locationFile", default=None,
                         help="path to subcellular locations file (HPA, human only)")
 
@@ -239,10 +285,14 @@ def _annotate(args, record):
     organism_dir = f"{datasets_dir}/{args.organism}"
     org_config = ORGANISMS[args.organism]
 
+    if args.excludeHCM and not org_config["has_hcm"]:
+        raise ValueError(f"--excludeHCM: no Human Cell Map variant exists for {args.organism}")
+
     if args.uniprotFile is None:
         args.uniprotFile = f"{organism_dir}/uniprot_anns.tsv"
     if args.biogridFile is None:
-        args.biogridFile = f"{organism_dir}/biogrid_summary.csv"
+        args.biogridFile = provenance.biogrid_summary_path(
+            args.organism, datasets_dir, exclude_hcm=args.excludeHCM)
     if args.locationFile is None and org_config["has_hpa"]:
         args.locationFile = f"{organism_dir}/subcellular_location.tsv"
     if args.complexFile is None and org_config["has_corum"]:
@@ -252,7 +302,7 @@ def _annotate(args, record):
     bait_col = args.baitColumn
     gene_col = args.preyGeneColumn
 
-    record.extra(organism=args.organism, prey_column=prey_col,
+    record.extra(organism=args.organism, exclude_hcm=args.excludeHCM, prey_column=prey_col,
                  bait_column=bait_col, gene_column=gene_col)
     for role in ("scoreFile", "uniprotFile", "biogridFile", "locationFile", "complexFile"):
         path = getattr(args, role)
@@ -299,8 +349,31 @@ def _annotate(args, record):
         logger.exception("Failed to load score file")
         sys.exit(1)
 
-    raw_scores['First_ID'] = raw_scores[prey_col].apply(lambda x: x.split(';')[0])
+    # Every lookup below is keyed on accessions.  Inputs that carry gene symbols instead
+    # are resolved here, once; the supplied Prey.ID and Bait.ID columns stay as given
+    # because the GUI keys on them.
+    symbol_map = symbol_accession_map(uniprot)
+    raw_scores['Prey_Accessions'] = raw_scores[prey_col].apply(
+        resolve_accessions, symbol_map=symbol_map)
+    raw_scores['First_ID'] = raw_scores['Prey_Accessions'].str.split(';').str[0]
+    # SAINT bait files carry no protein ID; the bait name is then tried as a symbol.
+    bait_source = raw_scores[bait_col].where(raw_scores[bait_col].notna(), raw_scores['Experiment.ID'])
+    raw_scores['Bait_Accession'] = bait_source.astype(str).apply(
+        resolve_accessions, symbol_map=symbol_map)
     first_prey_col = 'First_ID'
+
+    n_symbols = int((raw_scores['First_ID'] != raw_scores[prey_col].str.split(';').str[0]).sum())
+    record.metric("prey_symbols_resolved", n_symbols)
+    if n_symbols:
+        logger.info("Resolved gene symbols to accessions for %d prey rows", n_symbols)
+    for label, column in (("prey", 'First_ID'), ("bait", 'Bait_Accession')):
+        unresolved = unresolved_ids(raw_scores[column])
+        record.metric(f"{label}_ids_unresolved", len(unresolved))
+        if unresolved:
+            logger.warning(
+                "%d distinct %s identifier(s) are neither UniProt accessions nor known "
+                "gene symbols and will not be annotated, e.g. %s",
+                len(unresolved), label, ", ".join(unresolved[:5]))
 
     # Merge the raw scores with the uniprot annotations
     annotated_scores = raw_scores.merge(uniprot, left_on=first_prey_col, right_on='Entry', how='left')
@@ -333,7 +406,7 @@ def _annotate(args, record):
             human_complex = pd.read_table(args.complexFile, encoding='latin-1')
             complex_cols = human_complex[['complex_name','subunits_uniprot_id']]
             complex_dict = complex_cols.set_index('complex_name').to_dict()['subunits_uniprot_id']
-            annotated_scores['Human_Complex'] = annotated_scores[prey_col].apply(complex_id, complex_dict=complex_dict)
+            annotated_scores['Human_Complex'] = annotated_scores['Prey_Accessions'].apply(complex_id, complex_dict=complex_dict)
         except Exception:
             logger.exception("CORUM annotation failed (non-fatal, continuing)")
 
@@ -344,11 +417,10 @@ def _annotate(args, record):
 
         # Convert the integer column to string in both dataframes before merging
         annotated_scores[first_prey_col] = annotated_scores[first_prey_col].astype(str)
-        annotated_scores[bait_col] = annotated_scores[bait_col].astype(str)
         biogrid['SWISS-PROT Accessions Interactor A'] = biogrid['SWISS-PROT Accessions Interactor A'].astype(str)
         biogrid['SWISS-PROT Accessions Interactor B'] = biogrid['SWISS-PROT Accessions Interactor B'].astype(str)
         # Merge the annotated scores with the BioGrid annotations
-        annotated_scores = annotated_scores.merge(biogrid, left_on=[first_prey_col, bait_col], right_on=['SWISS-PROT Accessions Interactor A', 'SWISS-PROT Accessions Interactor B'], how='left')
+        annotated_scores = annotated_scores.merge(biogrid, left_on=[first_prey_col, 'Bait_Accession'], right_on=['SWISS-PROT Accessions Interactor A', 'SWISS-PROT Accessions Interactor B'], how='left')
 
         # Fill in the In.BioGRID column with False for rows that have nan
         annotated_scores['In.BioGRID'] = annotated_scores['In.BioGRID'].fillna(False)
@@ -366,7 +438,7 @@ def _annotate(args, record):
     bait_anns = {}
     with open(gogo_input_path, "w") as f:
         for index, row in annotated_scores.iterrows():
-            bait_id = row[bait_col]
+            bait_id = row['Bait_Accession']
             prey_id = row[first_prey_col]
             go_anns_raw = row['Gene Ontology (cellular component)'] # Go anns are in this format: cytosolic small ribosomal subunit [GO:0022627]; nucleus [GO:0005634]; plasma membrane [GO:0005886]
             if pd.isnull(go_anns_raw):
@@ -454,7 +526,7 @@ def _annotate(args, record):
         sys.exit(1)
 
     # Now I can add the CCO scores to the annotated scores
-    annotated_scores['CCO'] = annotated_scores.apply(lambda x: get_cco_score(x[bait_col], x[first_prey_col], cc_dict), axis=1)
+    annotated_scores['CCO'] = annotated_scores.apply(lambda x: get_cco_score(x['Bait_Accession'], x[first_prey_col], cc_dict), axis=1)
 
     # Save the annotated scores
     output_path = f"{args.outputDir}/annotated_scores.csv"

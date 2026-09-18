@@ -116,6 +116,22 @@ These are intended, and visible:
 - **Log lines gained a run ID and PID**, and logger names are prefixed
   `proximate.` — anything that greps the logs needs updating.
 
+### Cytoscape tab
+
+These need a Cytoscape desktop on the host and a person at both windows; nothing in
+the suite can exercise CyREST.
+
+| # | Step | Expected |
+| --- | --- | --- |
+| C1 | Open the tab with Cytoscape closed | Red status line naming the CyREST address within `PROXIMATE_CYTOSCAPE_TIMEOUT`; no traceback in `docker logs` |
+| C2 | Start Cytoscape, click Check Connection | Green line with the Cytoscape version |
+| C3 | Send a scored dataset at the Moderate preset | A network titled `ProxiMate: <dataset>` appears; the node and edge counts in the status line match the Data Thresholding tab's network size at the same thresholds |
+| C4 | Drag a few nodes, select two preys, click Read Selection | The table lists those preys with their edge scores; a `read_selection` line appears in Activity within a second |
+| C5 | Click Hide Others, then Show All | Only edges touching the selection stay; every node stays where it was dragged; Show All restores the rest |
+| C6 | Raise the SAINT slider and click Re-apply Thresholds | Failing edges vanish and their preys fade; positions unchanged. Lower the slider and click again: an error says to send again |
+| C7 | Click Export PNG, open the file it names | The drawn network is in the image; `run.json` gained a `cytoscape` stage with the PNG as an output |
+| C8 | In Cytoscape, lock the zoom (View › Bypass on NETWORK_SCALE_FACTOR), click Unlock View | Notification names the released property; the mouse wheel zooms again |
+
 ## Out of scope
 
 - `Scripts/setup_datasets.py` keeps its own `log()`. It runs at image build time

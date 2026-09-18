@@ -1,11 +1,11 @@
-"""Tests for the DIA-NN and FragPipe to-MaxQuant converters.
+"""Tests for the DIA-NN, Pioneer and FragPipe to-MaxQuant converters.
 
 Neither converter raises when it fails to recognize a sample: an unmatched column is
 dropped and the run continues with one fewer experiment, which reaches SAINT as an
 absence rather than as an error.  These tests pin what each one matches, what it renames,
 and what it silently discards.
 
-Both functions read only ``experimental_design.name2experiment``, so the design here is a
+All three read only ``experimental_design.name2experiment``, so the design here is a
 stub rather than a parsed file.
 """
 
@@ -336,3 +336,113 @@ def test_the_protein_group_column_is_required(tmp_path):
 
     with pytest.raises(KeyError):
         parse.convert_diann_to_maxquant_format(diann, _design("run_a"))
+
+
+# --- Pioneer -------------------------------------------------------------------
+
+def _pioneer_frame(run_columns, proteins=("P1", "P2")):
+    frame = pd.DataFrame({
+        "species": ["HUMAN"] * len(proteins),
+        "gene_names": ["G_{}".format(p) for p in proteins],
+        "protein_names": ["{} protein".format(p) for p in proteins],
+        "protein": list(proteins),
+        "target": [True] * len(proteins),
+        "entrap_id": [0] * len(proteins),
+        "global_pg_score": [0.9] * len(proteins),
+        "global_qval": [0.001] * len(proteins),
+    })
+    for name, values in run_columns.items():
+        frame[name] = values
+    return frame
+
+
+def _write_pioneer(tmp_path, frame, name="protein_groups_wide.tsv"):
+    path = tmp_path / name
+    frame.to_csv(path, sep="\t", index=False)
+    return str(path)
+
+
+def test_pioneer_run_columns_gain_an_intensity_prefix(tmp_path):
+    pioneer = _write_pioneer(tmp_path, _pioneer_frame({"run_a": [10, 20]}))
+
+    converted = parse.convert_pioneer_to_maxquant_format(pioneer, _design("run_a"))
+
+    assert list(converted["Intensity run_a"]) == [10, 20]
+    assert list(converted["Majority protein IDs"]) == ["P1", "P2"]
+    assert list(converted["Gene names"]) == ["G_P1", "G_P2"]
+
+
+def test_pioneer_metadata_columns_are_never_treated_as_runs(tmp_path):
+    pioneer = _write_pioneer(tmp_path, _pioneer_frame({"run_a": [10, 20]}))
+
+    converted = parse.convert_pioneer_to_maxquant_format(pioneer, _design("run_a"))
+
+    assert [c for c in converted.columns if c.startswith("Intensity ")] == ["Intensity run_a"]
+
+
+def test_pioneer_run_matching_is_exact(tmp_path):
+    """Pioneer names run columns after the MS file without its extension; a design name
+    carrying the extension matches nothing."""
+    pioneer = _write_pioneer(tmp_path, _pioneer_frame({"run_a": [10, 20]}))
+
+    converted = parse.convert_pioneer_to_maxquant_format(pioneer, _design("run_a.raw"))
+
+    assert not [c for c in converted.columns if c.startswith("Intensity ")]
+
+
+def test_a_pioneer_column_absent_from_the_design_is_dropped(tmp_path):
+    pioneer = _write_pioneer(tmp_path, _pioneer_frame({"run_a": [10, 20], "run_b": [30, 40]}))
+
+    converted = parse.convert_pioneer_to_maxquant_format(pioneer, _design("run_a"))
+
+    assert "Intensity run_b" not in converted.columns
+
+
+def test_empty_pioneer_cells_become_zero(tmp_path):
+    pioneer = _write_pioneer(tmp_path, _pioneer_frame({"run_a": [10.0, np.nan]}))
+
+    converted = parse.convert_pioneer_to_maxquant_format(pioneer, _design("run_a"))
+
+    assert list(converted["Intensity run_a"]) == [10.0, 0.0]
+
+
+def test_decoy_and_entrapment_groups_are_dropped(tmp_path):
+    frame = _pioneer_frame({"run_a": [10, 20, 30, 40]}, proteins=("P1", "DECOY", "ENTRAP", "P2"))
+    frame.loc[1, "target"] = False
+    frame.loc[2, "entrap_id"] = 1
+    pioneer = _write_pioneer(tmp_path, frame)
+
+    converted = parse.convert_pioneer_to_maxquant_format(pioneer, _design("run_a"))
+
+    assert list(converted["Majority protein IDs"]) == ["P1", "P2"]
+    assert list(converted["Intensity run_a"]) == [10, 40]
+    for column in ("Reverse", "Only identified by site", "Potential contaminant"):
+        assert set(converted[column]) == {"-"}
+
+
+def test_the_pioneer_flag_columns_are_optional(tmp_path):
+    """Pioneer's output schema policy can omit target and entrap_id."""
+    frame = _pioneer_frame({"run_a": [10, 20]}).drop(columns=["target", "entrap_id"])
+    pioneer = _write_pioneer(tmp_path, frame)
+
+    converted = parse.convert_pioneer_to_maxquant_format(pioneer, _design("run_a"))
+
+    assert len(converted) == 2
+
+
+def test_empty_pioneer_gene_names_become_blank(tmp_path):
+    frame = _pioneer_frame({"run_a": [10, 20]})
+    frame.loc[0, "gene_names"] = np.nan
+    pioneer = _write_pioneer(tmp_path, frame)
+
+    converted = parse.convert_pioneer_to_maxquant_format(pioneer, _design("run_a"))
+
+    assert list(converted["Gene names"]) == ["", "G_P2"]
+
+
+def test_the_pioneer_protein_column_is_required(tmp_path):
+    frame = _pioneer_frame({"run_a": [10, 20]}).drop(columns=["protein"])
+    pioneer = _write_pioneer(tmp_path, frame)
+
+    with pytest.raises(KeyError):
+        parse.convert_pioneer_to_maxquant_format(pioneer, _design("run_a"))

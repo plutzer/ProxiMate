@@ -331,3 +331,28 @@ def test_prey_pca_matplotlib_accepts_color_threshold(tmp_path):
         matrix, color_values=scores, color_label="SaintScore",
         color_mode="continuous", color_threshold=0.1)
     assert isinstance(fig, matplotlib.figure.Figure)
+
+
+# --- spectral-count matrices ------------------------------------------------------
+
+SPECTRAL_COUNTS = {
+    "P1": [12, 10, 30, 28],
+    "P2": [3, 4, 5, 6],
+    "P3": [8, 9, 11, 10],
+    "P4": [0, 0, 0, 0],          # never observed: an all-zero row
+    "P5": [0, 2, 3, 4],
+}
+
+
+def test_a_never_detected_prey_is_dropped_before_pca_without_normalization(tmp_path):
+    """Zeros are non-detections, so an all-zero prey has nothing to impute from.  It
+    must not reach PCA as a row of NaN under the one normalization that does not
+    otherwise remove NaN rows."""
+    interaction, _ = _write_dataset(tmp_path, SPECTRAL_COUNTS)
+
+    data = prepare_pca_matrix(interaction, min_detection_frac=0.0,
+                              imputation="row_min", normalization="none")
+
+    assert "P4" not in data.index
+    assert np.isfinite(data.values).all()
+    assert set(data.index) == {"P1", "P2", "P3", "P5"}

@@ -158,7 +158,12 @@ def plot_results(results, feature_type, num_features=30):
     # Convert the enrichment to log2 scale
     filtered_results = np.log2(filtered_results)
 
+    # Hierarchical clustering needs at least two items on an axis; a single-bait
+    # dataset or a single passing feature otherwise makes scipy raise on an empty
+    # distance matrix.
     grid = sns.clustermap(filtered_results, cmap='viridis', figsize=(12, 8),
+                          row_cluster=filtered_results.shape[0] > 1,
+                          col_cluster=filtered_results.shape[1] > 1,
                           dendrogram_ratio=(0.18, 0.18), cbar_pos=None)
 
     ax = grid.ax_heatmap

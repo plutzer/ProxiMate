@@ -11,7 +11,8 @@ import shutil
 import re
 import tempfile
 import provenance
-from ed_validation import validate_maxquant_inputs, validate_diann_inputs, validate_fragpipe_inputs, validate_msstats_inputs
+from ed_validation import (validate_maxquant_inputs, validate_diann_inputs, validate_fragpipe_inputs,
+                           validate_msstats_inputs, validate_pioneer_inputs, PIONEER_METADATA_COLUMNS)
 from ed_exceptions import ProxiMateError
 from log_config import get_logger, add_file_handler, dataset_log
 
@@ -25,7 +26,7 @@ PARSE_OUTPUTS = ("ED.csv", "prey.txt", "bait.txt", "interaction.txt", "to_CompPA
 # Listed explicitly rather than inferred from the value, so that a genuinely
 # missing input is still fingerprinted as missing rather than quietly skipped.
 PARSE_FILE_PARAMS = frozenset({
-    "proteinGroups", "experimentalDesign", "diannMatrix", "msstatsFile",
+    "proteinGroups", "experimentalDesign", "diannMatrix", "pioneerMatrix", "msstatsFile",
     "fp_file", "preyfile", "interactionfile",
 })
 
@@ -301,6 +302,97 @@ def parse_diann(diannMatrix, experimentalDesign, quantType, outputPath):
 
     return num_expts, num_ctrls
 
+
+def convert_pioneer_to_maxquant_format(pioneer_file, experimental_design):
+    """
+    Convert Pioneer's protein_groups_wide.tsv to a MaxQuant-like proteinGroups format.
+
+    Decoy groups (``target`` false) and entrapment groups (``entrap_id`` non-zero)
+    are not real proteins and are dropped. Run columns are matched to the design
+    by exact name.
+
+    :param pioneer_file: path to protein_groups_wide.tsv
+    :param experimental_design: ExperimentalDesign object
+    :return: DataFrame in MaxQuant-like format
+    """
+    data = pd.read_csv(pioneer_file, sep="\t")
+
+    real = pd.Series(True, index=data.index)
+    if "target" in data.columns:
+        real &= data["target"].astype(bool)
+    if "entrap_id" in data.columns:
+        real &= data["entrap_id"].fillna(0) == 0
+    if (~real).any():
+        logger.info("Dropping %d decoy/entrapment protein group(s) from the Pioneer table", (~real).sum())
+        data = data[real].reset_index(drop=True)
+
+    mq_data = pd.DataFrame()
+    mq_data["Majority protein IDs"] = data["protein"]
+    mq_data["Protein names"] = data["protein_names"].fillna("") if "protein_names" in data.columns else ""
+    mq_data["Gene names"] = data["gene_names"].fillna("") if "gene_names" in data.columns else ""
+
+    # No reverse, site-only or contaminant flags survive the decoy drop above.
+    mq_data["Reverse"] = "-"
+    mq_data["Only identified by site"] = "-"
+    mq_data["Potential contaminant"] = "-"
+
+    # The wide table carries no protein length; nothing reads it for intensity input.
+    mq_data["Sequence length"] = 1
+
+    for col in data.columns:
+        if col in PIONEER_METADATA_COLUMNS:
+            continue
+        if col in experimental_design.name2experiment:
+            mq_data[f"Intensity {col}"] = data[col].fillna(0)
+
+    return mq_data
+
+
+@_parse_stage
+def parse_pioneer(pioneerMatrix, experimentalDesign, quantType, outputPath):
+    """
+    Parse Pioneer's protein_groups_wide.tsv and an experimental design file.
+
+    :param pioneerMatrix: path to protein_groups_wide.tsv
+    :param experimentalDesign: path to experimental design file
+    :param quantType: recorded only; Pioneer input is always parsed as Intensity
+    :param outputPath: path for the output directory
+    :return: tuple of (num_experiments, num_controls)
+    """
+    validate_pioneer_inputs(experimentalDesign, pioneerMatrix)
+
+    if not os.path.exists(outputPath):
+        logger.info("Creating output directory: %s", outputPath)
+        os.makedirs(outputPath)
+
+    add_file_handler(os.path.join(outputPath, "proximate.log"))
+
+    shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
+
+    experimental_design = ExperimentalDesign(experimentalDesign)
+    num_expts = experimental_design.num_experiments
+    num_ctrls = experimental_design.num_controls
+
+    mq_format_data = convert_pioneer_to_maxquant_format(pioneerMatrix, experimental_design)
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, newline='') as tmp_file:
+        tmp_path = tmp_file.name
+        mq_format_data.to_csv(tmp_file, sep="\t", index=False)
+
+    shutil.copy(tmp_path, f"{outputPath}/proteinGroups.txt")
+
+    try:
+        protein_groups = ProteinGroups(experimental_design, tmp_path,
+                                       "Intensity", "Intensity")
+        protein_groups.to_SAINT(outputPath)
+        protein_groups.to_CompPASS(outputPath)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    return num_expts, num_ctrls
+
+
 def _read_msstats_csv(msstats_file):
     """Read an MSstats ProteinLevelData.csv with the standard encoding fallback chain."""
     last_err = None
@@ -565,6 +657,10 @@ def main():
                         help="path to DIA-NN report.pg_matrix.tsv file",
                         default=None)
 
+    parser.add_argument("--pioneerMatrix",
+                        help="path to Pioneer protein_groups_wide.tsv file",
+                        default=None)
+
     parser.add_argument("--fragpipeFile",
                         help="path to FragPipe combined_protein.tsv file",
                         default=None)
@@ -609,6 +705,12 @@ def main():
             parse_diann(args.diannMatrix, args.experimentalDesign, args.quantType, args.outputPath)
         else:
             logger.error("No experimental design file provided.")
+    elif args.pioneerMatrix is not None:
+        # Pioneer input mode
+        if args.experimentalDesign is not None:
+            parse_pioneer(args.pioneerMatrix, args.experimentalDesign, args.quantType, args.outputPath)
+        else:
+            logger.error("No experimental design file provided.")
     elif args.msstatsFile is not None:
         # MSstats input mode
         if args.experimentalDesign is not None:
@@ -650,7 +752,7 @@ def main():
         shutil.copy(args.prey, os.path.join(args.outputPath, "prey.txt"))
         shutil.copy(args.interaction, os.path.join(args.outputPath, "interaction.txt"))
     else:
-        logger.error("No input file provided. Please specify --proteinGroups, --diannMatrix, --fragpipeFile, --msstatsFile, or --bait/--prey/--interaction.")
+        logger.error("No input file provided. Please specify --proteinGroups, --diannMatrix, --pioneerMatrix, --fragpipeFile, --msstatsFile, or --bait/--prey/--interaction.")
 
 if __name__ == "__main__":
     main()

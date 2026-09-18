@@ -37,6 +37,7 @@ from ed_validation import (
     validate_diann_inputs,
     validate_fragpipe_inputs,
     validate_maxquant_inputs,
+    validate_pioneer_inputs,
 )
 
 
@@ -436,6 +437,22 @@ def test_diann_metadata_columns_are_not_treated_as_runs():
     assert excinfo.value.ed_only == ["c_1"]
 
 
+def test_pioneer_run_columns_are_matched_by_name():
+    pioneer = pd.DataFrame(columns=["species", "gene_names", "protein", "target", "global_qval",
+                                    "t1_1", "t1_2", "c_1", "extra_run"])
+
+    EDPGCrossValidator.validate_pioneer_match(_ed_frame(), pioneer)
+
+
+def test_pioneer_metadata_columns_are_not_treated_as_runs():
+    pioneer = pd.DataFrame(columns=["protein", "target", "entrap_id", "t1_1", "t1_2"])
+
+    with pytest.raises(EDPGMismatchError) as excinfo:
+        EDPGCrossValidator.validate_pioneer_match(_ed_frame(), pioneer)
+
+    assert excinfo.value.ed_only == ["c_1"]
+
+
 def test_msstats_runs_are_matched_on_the_original_run_column():
     msstats = pd.DataFrame({"originalRUN": ["t1_1", "t1_2", "c_1", "c_1"]})
 
@@ -534,6 +551,25 @@ def test_a_header_only_diann_matrix_is_reported_as_empty(tmp_path):
     assert "empty" in excinfo.value.user_message.lower()
 
 
+def test_a_pioneer_table_without_a_protein_column_is_rejected(tmp_path):
+    path = tmp_path / "protein_groups_wide.tsv"
+    path.write_text("gene_names\tt1_1\tt1_2\tc_1\nG1\t1\t2\t3\n")
+
+    with pytest.raises(PGFileError) as excinfo:
+        validate_pioneer_inputs(_write(tmp_path, _ed_frame()), str(path))
+
+    assert "protein" in excinfo.value.user_message
+
+
+def test_pioneer_validation_returns_both_frames(tmp_path):
+    path = tmp_path / "protein_groups_wide.tsv"
+    path.write_text("protein\tt1_1\tt1_2\tc_1\nP1\t1\t2\t3\n")
+
+    ed_df, pioneer_df = validate_pioneer_inputs(_write(tmp_path, _ed_frame()), str(path))
+
+    assert list(pioneer_df["protein"]) == ["P1"]
+
+
 def test_fragpipe_validation_returns_both_frames(tmp_path):
     fp = pd.DataFrame([{c: "x" for c in FP_COLUMNS}])
     for experiment in ("t1_1", "t1_2", "c_1"):
@@ -545,3 +581,16 @@ def test_fragpipe_validation_returns_both_frames(tmp_path):
 
     assert len(ed_df) == 3
     assert "Protein ID" in fp_df.columns
+
+
+def test_a_decoy_column_satisfies_the_reverse_requirement():
+    """MaxQuant 2.4 and later name the column Decoy."""
+    PGValidator.validate_required_columns(_pg_frame().rename(columns={"Reverse": "Decoy"}))
+
+
+def test_a_file_with_neither_reverse_nor_decoy_names_reverse():
+    with pytest.raises(PGMissingColumnError) as excinfo:
+        PGValidator.validate_required_columns(_pg_frame().drop(columns=["Reverse"]))
+
+    assert excinfo.value.missing_columns == ["Reverse"]
+    assert "Decoy" in " ".join(excinfo.value.suggestions)

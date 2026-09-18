@@ -292,7 +292,8 @@ class PGMissingColumnError(PGFileError):
         suggestions = [
             "This should be a standard MaxQuant proteinGroups.txt file",
             "Ensure the file hasn't been modified or filtered",
-            "Required columns include: Majority protein IDs, Gene names, Reverse, etc."
+            "Required columns include: Majority protein IDs, Gene names, "
+            "Reverse (named Decoy by MaxQuant 2.4 and later), etc."
         ]
         super().__init__(message, user_message, suggestions)
 
@@ -339,6 +340,7 @@ class EDPGMismatchError(ProxiMateError):
             "Extra experiments in the data file are OK (they will be ignored)",
             "Check for typos, extra spaces, or different capitalization in ED file",
             "For MaxQuant: column names look like 'Intensity [ExperimentName]'",
-            "For DIA-NN: column names are raw file names"
+            "For DIA-NN: column names are raw file names",
+            "For Pioneer: column names are MS file names without extension, as in protein_groups_wide.tsv"
         ]
         super().__init__(message, user_message, suggestions)

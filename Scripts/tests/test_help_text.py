@@ -16,7 +16,7 @@ REQUIRED_KEYS = [
     "preset_stringent", "preset_moderate", "preset_relaxed", "preset_none",
     # Network Scoring
     "dataset_name", "input_format", "quant_type",
-    "pg_file", "diann_matrix_file", "fragpipe_file", "msstats_file",
+    "pg_file", "diann_matrix_file", "pioneer_matrix_file", "fragpipe_file", "msstats_file",
     "ed_file", "ed_file_msstats",
     "saint_bait", "saint_prey", "saint_interaction",
     "organism", "imputation_method", "pi_method", "pi_bait",

@@ -51,7 +51,7 @@ def test_biogrid_verification_covers_the_columns_preprocessing_reads():
 
     unverified = used - setup_datasets.BIOGRID_REQUIRED_COLUMNS
 
-    assert unverified == {"Experimental System", "Author", "Publication Source"}, (
+    assert unverified == {"Experimental System", "Author"}, (
         "the set of BioGRID columns used but not verified has changed")
 
 
@@ -284,3 +284,39 @@ def test_preprocessing_reports_the_organism_it_was_given(tmp_path, monkeypatch):
     assert setup_datasets.run_preprocess_biogrid(str(tmp_path), "human", 10090) is True
     assert "--organism_id" in calls[0]
     assert "10090" in calls[0]
+
+
+def test_the_no_hcm_variant_is_requested_under_its_own_name(tmp_path, monkeypatch):
+    """The variant drops Human Cell Map evidence in the subprocess and must land beside
+    the full summary without replacing it."""
+    for filename in (setup_datasets.BIOGRID_ALL_FILENAME,
+                     setup_datasets.BIOGRID_MV_FILENAME):
+        (tmp_path / filename).write_text("content")
+    organism_dir = tmp_path / "human"
+
+    calls = []
+
+    class _Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd)
+        (organism_dir / setup_datasets.BIOGRID_NO_HCM_SUMMARY_FILENAME).write_text("x")
+        return _Completed()
+
+    monkeypatch.setattr(setup_datasets.subprocess, "run", _run)
+
+    assert setup_datasets.run_preprocess_biogrid(
+        str(tmp_path), "human", 9606, exclude_hcm=True) is True
+    assert "--exclude_publication" in calls[0]
+    assert setup_datasets.HCM_PUBLICATION in calls[0]
+    assert setup_datasets.BIOGRID_NO_HCM_SUMMARY_FILENAME in calls[0]
+
+
+def test_only_human_has_a_no_hcm_variant():
+    """The GUI offers the variant for human only; a second organism gaining one needs
+    the checkbox condition in GUI/app.py widened too."""
+    assert [name for name, config in setup_datasets.ORGANISMS.items()
+            if config["has_hcm"]] == ["human"]

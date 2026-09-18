@@ -1,4 +1,4 @@
-"""End-to-end tests for the MaxQuant, DIA-NN and FragPipe parse entry points.
+"""End-to-end tests for the MaxQuant, DIA-NN, Pioneer and FragPipe parse entry points.
 
 Each writes the five files the scoring stage reads, and each reports the experiment counts
 that reach run.json and the GUI.  The MSstats entry point is covered by
@@ -77,6 +77,21 @@ def diann_file(tmp_path):
 
 
 @pytest.fixture
+def pioneer_file(tmp_path):
+    frame = pd.DataFrame({
+        "gene_names": ["G_{}".format(p) for p in PROTEINS],
+        "protein": PROTEINS,
+        "target": [True] * 3,
+    })
+    for experiment in EXPERIMENTS:
+        # A zero reaches Pioneer's wide table as an empty cell, which the converter fills.
+        frame[experiment] = [QUANT[p][experiment] or np.nan for p in PROTEINS]
+    path = tmp_path / "protein_groups_wide.tsv"
+    frame.to_csv(path, sep="	", index=False)
+    return str(path)
+
+
+@pytest.fixture
 def fragpipe_file(tmp_path):
     frame = pd.DataFrame({
         "Protein": ["sp|{}|X_HUMAN".format(p) for p in PROTEINS],
@@ -94,7 +109,7 @@ def fragpipe_file(tmp_path):
 
 
 @pytest.fixture
-def run(tmp_path, ed_file, maxquant_file, diann_file, fragpipe_file):
+def run(tmp_path, ed_file, maxquant_file, diann_file, pioneer_file, fragpipe_file):
     """Run one entry point into its own output directory and return that directory."""
     def _run(fmt):
         out = tmp_path / "out_{}".format(fmt)
@@ -102,6 +117,8 @@ def run(tmp_path, ed_file, maxquant_file, diann_file, fragpipe_file):
             counts = parse.parse_ed_pg(maxquant_file, ed_file, "Intensity", str(out))
         elif fmt == "diann":
             counts = parse.parse_diann(diann_file, ed_file, "Intensity", str(out))
+        elif fmt == "pioneer":
+            counts = parse.parse_pioneer(pioneer_file, ed_file, "Intensity", str(out))
         elif fmt == "fragpipe":
             counts = parse.parse_fragpipe(fragpipe_file, ed_file, "Intensity", str(out))
         else:
@@ -111,7 +128,7 @@ def run(tmp_path, ed_file, maxquant_file, diann_file, fragpipe_file):
     return _run
 
 
-FORMATS = ["maxquant", "diann", "fragpipe"]
+FORMATS = ["maxquant", "diann", "pioneer", "fragpipe"]
 
 
 # --- outputs -------------------------------------------------------------------
@@ -179,7 +196,7 @@ def test_comppass_input_follows_the_bait_name_and_id_convention(run, fmt):
 
 
 def test_every_format_produces_the_same_scoring_inputs(run):
-    """The three converters differ only in what they read.  A prey universe that varied
+    """The converters differ only in what they read.  A prey universe that varied
     by input format would make results incomparable between them."""
     preys = {}
     for fmt in FORMATS:
@@ -187,7 +204,7 @@ def test_every_format_produces_the_same_scoring_inputs(run):
         prey = pd.read_csv(out / "prey.txt", sep="\t", header=None, names=["Prey", "G"])
         preys[fmt] = set(prey["Prey"])
 
-    assert preys["maxquant"] == preys["diann"] == preys["fragpipe"]
+    assert preys["maxquant"] == preys["diann"] == preys["pioneer"] == preys["fragpipe"]
 
 
 # --- copies of the inputs ------------------------------------------------------
@@ -241,6 +258,18 @@ def test_diann_ignores_the_requested_quantification(tmp_path, ed_file, diann_fil
 
     parse.parse_diann(diann_file, ed_file, "LFQ", str(as_lfq))
     parse.parse_diann(diann_file, ed_file, "Intensity", str(as_intensity))
+
+    assert ((as_lfq / "interaction.txt").read_bytes()
+            == (as_intensity / "interaction.txt").read_bytes())
+
+
+def test_pioneer_ignores_the_requested_quantification(tmp_path, ed_file, pioneer_file):
+    """As for DIA-NN: quantType is recorded but the parse is always by intensity."""
+    as_lfq = tmp_path / "out_lfq"
+    as_intensity = tmp_path / "out_int"
+
+    parse.parse_pioneer(pioneer_file, ed_file, "LFQ", str(as_lfq))
+    parse.parse_pioneer(pioneer_file, ed_file, "Intensity", str(as_intensity))
 
     assert ((as_lfq / "interaction.txt").read_bytes()
             == (as_intensity / "interaction.txt").read_bytes())

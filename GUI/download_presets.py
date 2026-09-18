@@ -56,6 +56,7 @@ class Preset:
 _ANNOTATED_GROUPS = (
     ColumnGroup('identifiers', 'Identifiers',
                 ('Prey.ID', 'PreyGene', 'Experiment.ID', 'Bait.ID', 'First_ID',
+                 'Prey_Accessions', 'Bait_Accession',
                  'First_Prey_Gene', 'Matched_Gene_Name', 'Entry', 'Entry Name',
                  'source_group')),
     ColumnGroup('saint', 'SAINT scores',
