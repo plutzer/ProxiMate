@@ -2,11 +2,9 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 import time
-from scipy.stats import lognorm
-import os
 import math
 from log_config import get_logger
-from interaction_filter import write_filtered_interaction
+from interaction_filter import read_saint_inputs, write_filtered_interaction
 
 logger = get_logger(__name__)
 
@@ -58,22 +56,9 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
     logger.info("Prey-specific AFT %s: reading %s",
                 "imputation" if impute else "filtering (no imputation)", interaction_path)
 
-    # Read in interaction data
-    interaction = pd.read_csv(interaction_path, sep='\t',header=None)
-    # Create column names
-    interaction.columns = ['ExperimentID', 'Bait', 'Prey', 'Intensity']
+    interaction, ed, bait_dict = read_saint_inputs(interaction_path, ed_path)
     logger.info("Read %d interaction rows covering %d preys",
                 len(interaction), interaction['Prey'].nunique())
-
-    # Read in ED data
-    ed = pd.read_csv(ed_path)
-
-    # Make a dictionary mapping all Baits to their BaitID
-    bait_dict = {}
-    baits = ed['Bait']
-    Bait_ids = ed['Bait ID']
-    for i in range(len(baits)):
-        bait_dict[baits[i]] = Bait_ids[i]
 
     if impute:
         # Read in prey data
@@ -214,8 +199,8 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
         logger.info("Wrote imputed_prey.txt (%d preys)", len(prey_data))
 
     kept, before = write_filtered_interaction(interaction, output_dir)
-    logger.info("Filtered non-positive intensities: %d of %d rows kept", kept, before)
-    logger.info("Wrote filtered_interaction.txt (%d rows)", len(interaction))
+    logger.info("Wrote filtered_interaction.txt: %d of %d rows kept "
+                "(non-positive intensities dropped)", kept, before)
 
 if __name__ == '__main__':
     # This module is intended to be called from score.py via filter_impute()

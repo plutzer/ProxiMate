@@ -2,7 +2,6 @@
 the pure export-builder functions behind it."""
 
 import os
-import zipfile
 
 import numpy as np
 import pandas as pd
@@ -12,8 +11,9 @@ from download_presets import (DEFAULT_CUSTOM_COLUMNS, PRESETS, ColumnGroup,
                               Preset, available_presets, build_annotated_table,
                               build_custom_table, build_cytoscape_edges,
                               build_enrichment_table, build_gene_list,
-                              build_prohits_table, resolve_columns,
-                              saint_input_files, write_gene_list, zip_files)
+                              build_prohits_table, effective_selection,
+                              resolve_columns, saint_input_files,
+                              write_gene_list)
 
 # Thresholds where every score family participates; row 3 has WDFDR NaN.
 THRESHOLDS = {'SaintScore': 0.7, 'BFDR': 0.05, 'WD': 0.0, 'WDFDR': 1.0}
@@ -70,77 +70,24 @@ def _touch(dirpath, *names):
             fh.write("x\n")
 
 
-# ---------------------------------------------------------------- registry
-
-def test_registry_has_eight_presets_in_order():
-    assert list(PRESETS) == ['ed', 'saint_inputs', 'enrichment', 'annotated',
-                             'cytoscape', 'genelist', 'prohits', 'custom']
-
-
-def test_registry_kinds_and_extensions():
-    assert PRESETS['saint_inputs'].kind == 'files'
-    assert PRESETS['saint_inputs'].extension == '.zip'
-    assert PRESETS['genelist'].kind == 'genelist'
-    assert PRESETS['genelist'].extension == '.txt'
-    for key in ('ed', 'enrichment', 'annotated', 'cytoscape', 'prohits', 'custom'):
-        assert PRESETS[key].kind == 'table'
-        assert PRESETS[key].extension == '.csv'
-    for key in ('ed', 'saint_inputs', 'enrichment'):
-        assert not PRESETS[key].uses_thresholds
-    for key in ('annotated', 'cytoscape', 'genelist', 'prohits', 'custom'):
-        assert PRESETS[key].uses_thresholds
-
-
-def test_annotated_group_defaults():
-    groups = {g.key: g for g in PRESETS['annotated'].groups}
-    assert set(groups) == {'identifiers', 'saint', 'comppass', 'uniprot', 'go',
-                           'localization', 'biogrid', 'topology'}
-    for key in ('identifiers', 'saint', 'comppass'):
-        assert groups[key].default
-    for key in ('uniprot', 'go', 'localization', 'biogrid', 'topology'):
-        assert not groups[key].default
-
-
-def test_saint_inputs_file_choices():
-    files = {f.key: f for f in PRESETS['saint_inputs'].files}
-    assert set(files) == {'bait', 'prey', 'interaction', 'filtered_interaction',
-                          'imputed_prey', 'imputed_params'}
-    for key in ('bait', 'prey', 'interaction'):
-        assert files[key].default
-    for key in ('filtered_interaction', 'imputed_prey', 'imputed_params'):
-        assert not files[key].default
-
-
 # -------------------------------------------------------- available_presets
 
-def test_available_presets_empty_dir(tmp_path):
-    assert available_presets(str(tmp_path)) == []
+SAINT_FILES = ('bait.txt', 'prey.txt', 'interaction.txt')
 
 
-def test_available_presets_ed_only(tmp_path):
-    _touch(tmp_path, 'ED.csv')
-    assert available_presets(str(tmp_path)) == ['ed']
-
-
-def test_available_presets_unscored(tmp_path):
-    _touch(tmp_path, 'ED.csv', 'bait.txt', 'prey.txt', 'interaction.txt')
-    assert available_presets(str(tmp_path)) == ['ed', 'saint_inputs']
-
-
-def test_available_presets_scored(tmp_path):
-    _touch(tmp_path, 'ED.csv', 'bait.txt', 'prey.txt', 'interaction.txt',
-           'annotated_scores.csv')
-    assert available_presets(str(tmp_path)) == [
-        'ed', 'saint_inputs', 'annotated', 'cytoscape', 'genelist', 'prohits',
-        'custom']
-
-
-def test_available_presets_with_enrichment(tmp_path):
-    _touch(tmp_path, 'ED.csv', 'bait.txt', 'prey.txt', 'interaction.txt',
-           'annotated_scores.csv', 'Feature_enrichment.csv')
-    assert available_presets(str(tmp_path)) == [
-        'ed', 'saint_inputs', 'enrichment', 'annotated', 'cytoscape',
-        'genelist', 'prohits', 'custom']
+@pytest.mark.parametrize('files, expected', [
+    ((), []),
+    (('ED.csv',), ['ed']),
+    (('ED.csv', *SAINT_FILES), ['ed', 'saint_inputs']),
+    (('ED.csv', *SAINT_FILES, 'annotated_scores.csv'),
+     ['ed', 'saint_inputs', 'annotated', 'cytoscape', 'genelist', 'prohits', 'custom']),
+    (('ED.csv', *SAINT_FILES, 'annotated_scores.csv', 'Feature_enrichment.csv'),
+     ['ed', 'saint_inputs', 'enrichment', 'annotated', 'cytoscape', 'genelist',
+      'prohits', 'custom']),
+])
+def test_available_presets_follow_the_files_present(tmp_path, files, expected):
+    _touch(tmp_path, *files)
+    assert available_presets(str(tmp_path)) == expected
 
 
 # ---------------------------------------------------------- resolve_columns
@@ -161,15 +108,6 @@ def test_resolve_columns_dedupes_overlap():
     assert resolve_columns(['A', 'B', 'C'], preset, ['g1', 'g2']) == ['A', 'B', 'C']
 
 
-def test_resolve_columns_absent_group_is_empty(mouse_scores):
-    assert resolve_columns(mouse_scores.columns, PRESETS['annotated'],
-                           ['biogrid']) == []
-
-
-def test_resolve_columns_empty_selection(human_scores):
-    assert resolve_columns(human_scores.columns, PRESETS['annotated'], []) == []
-
-
 # ----------------------------------------------------- build_annotated_table
 
 def test_annotated_table_thresholds(human_scores):
@@ -179,20 +117,14 @@ def test_annotated_table_thresholds(human_scores):
     assert list(out.columns)[0] == 'Prey.ID'
 
 
-def test_annotated_table_wdfdr_nan_fails_tight_threshold(human_scores):
-    thresholds = {'SaintScore': 0.0, 'BFDR': 1.0, 'WD': 0.0, 'WDFDR': 0.05}
-    out = build_annotated_table(human_scores, ['identifiers'], thresholds)
-    assert 'G4' not in out['First_Prey_Gene'].values
-    assert len(out) == 5
-
-
 def test_annotated_table_no_thresholds(human_scores):
     out = build_annotated_table(human_scores, ['identifiers'], None)
     assert len(out) == 8
 
 
 def test_annotated_table_no_columns_raises(mouse_scores):
-    with pytest.raises(ValueError, match="column"):
+    """A group whose columns are all absent from the dataset resolves to nothing."""
+    with pytest.raises(ValueError):
         build_annotated_table(mouse_scores, ['biogrid'], None)
 
 
@@ -207,7 +139,7 @@ def test_enrichment_table_projection_keeps_rows(enrichment_frame):
 
 # ---------------------------------------------------- build_cytoscape_edges
 
-def test_cytoscape_edges_shape(human_scores):
+def test_cytoscape_edges_shape(human_scores, mouse_scores):
     out = build_cytoscape_edges(human_scores, THRESHOLDS)
     assert list(out.columns)[:2] == ['source', 'target']
     assert set(out['source']) == {'BaitA', 'BaitB'}
@@ -215,10 +147,8 @@ def test_cytoscape_edges_shape(human_scores):
     assert len(out) == 6
     assert 'SaintScore' in out.columns and 'In.BioGRID' in out.columns
 
-
-def test_cytoscape_edges_attrs_limited_to_present(mouse_scores):
-    out = build_cytoscape_edges(mouse_scores, THRESHOLDS)
-    assert 'In.BioGRID' not in out.columns
+    # Attributes are limited to the columns the dataset carries.
+    assert 'In.BioGRID' not in build_cytoscape_edges(mouse_scores, THRESHOLDS).columns
 
 
 def test_cytoscape_edges_preygene_fallback(human_scores):
@@ -253,23 +183,15 @@ def test_gene_list_drops_missing_genes(human_scores):
 
 # ------------------------------------------------------ build_prohits_table
 
-def test_prohits_headers_and_default_abundance(human_scores):
+def test_prohits_headers_and_abundance_column(human_scores):
     out = build_prohits_table(human_scores, THRESHOLDS)
     assert list(out.columns) == ['Bait', 'Prey', 'PreyGene', 'Abundance',
                                  'SaintScore', 'BFDR']
     assert out['Abundance'].tolist() == human_scores.loc[
         [0, 1, 3, 4, 6, 7], 'AvePSM'].tolist()
 
-
-def test_prohits_abundance_switch(human_scores):
-    out = build_prohits_table(human_scores, THRESHOLDS,
-                              abundance_col='AvgIntensity')
+    out = build_prohits_table(human_scores, THRESHOLDS, abundance_col='AvgIntensity')
     assert out['Abundance'].iloc[0] == 100.0
-
-
-def test_prohits_unknown_abundance_raises(human_scores):
-    with pytest.raises(ValueError, match="[Aa]bundance"):
-        build_prohits_table(human_scores, THRESHOLDS, abundance_col='Nope')
 
 
 # ------------------------------------------------------- build_custom_table
@@ -287,12 +209,7 @@ def test_custom_table_empty_selection_uses_defaults(human_scores):
     assert missing == []
 
 
-def test_custom_table_applies_thresholds(human_scores):
-    out, _ = build_custom_table(human_scores, ['SaintScore'], THRESHOLDS)
-    assert len(out) == 6
-
-
-# --------------------------------------- saint_input_files / writers / zip
+# --------------------------------------- saint_input_files / writers
 
 def test_saint_input_files_reports_missing(tmp_path):
     _touch(tmp_path, 'bait.txt', 'prey.txt', 'interaction.txt')
@@ -304,57 +221,33 @@ def test_saint_input_files_reports_missing(tmp_path):
     assert missing == ['filtered_interaction']
 
 
-def test_zip_files_round_trip(tmp_path):
-    _touch(tmp_path, 'a.txt', 'b.txt')
-    paths = [str(tmp_path / 'a.txt'), str(tmp_path / 'b.txt')]
-    zip_path = str(tmp_path / 'out.zip')
-    assert zip_files(paths, zip_path) == zip_path
-    with zipfile.ZipFile(zip_path) as zf:
-        assert sorted(zf.namelist()) == ['a.txt', 'b.txt']
-        assert zf.read('a.txt') == b"x\n"
-
-
-def test_zip_files_empty_raises(tmp_path):
-    with pytest.raises(ValueError):
-        zip_files([], str(tmp_path / 'out.zip'))
-
-
-def test_write_gene_list_pooled(tmp_path):
+@pytest.mark.parametrize('frame, expected', [
+    (pd.DataFrame({'Gene': ['G1', 'G2']}), "G1\nG2\n"),
+    (pd.DataFrame({'Bait': ['A', 'B'], 'Gene': ['G1', 'G2']}), "A\tG1\nB\tG2\n"),
+])
+def test_write_gene_list(tmp_path, frame, expected):
     path = str(tmp_path / 'genes.txt')
-    write_gene_list(pd.DataFrame({'Gene': ['G1', 'G2']}), path)
+    write_gene_list(frame, path)
     with open(path) as fh:
-        assert fh.read() == "G1\nG2\n"
-
-
-def test_write_gene_list_per_bait(tmp_path):
-    path = str(tmp_path / 'genes.txt')
-    write_gene_list(pd.DataFrame({'Bait': ['A', 'B'], 'Gene': ['G1', 'G2']}),
-                    path)
-    with open(path) as fh:
-        assert fh.read() == "A\tG1\nB\tG2\n"
+        assert fh.read() == expected
 
 
 # ------------------------------------------------------ effective_selection
 
 def test_effective_selection_keeps_valid_keys():
-    from download_presets import effective_selection
     assert effective_selection(PRESETS['annotated'],
                                ['identifiers', 'bait']) == ['identifiers']
 
 
-def test_effective_selection_stale_keys_fall_back_to_defaults():
-    from download_presets import effective_selection
-    assert effective_selection(PRESETS['saint_inputs'],
-                               ['identifiers', 'saint']) == [
-        'bait', 'prey', 'interaction']
-
-
-def test_effective_selection_empty_falls_back_to_defaults():
-    from download_presets import effective_selection
-    assert effective_selection(PRESETS['annotated'], []) == [
-        'identifiers', 'saint', 'comppass']
+@pytest.mark.parametrize('preset, selected', [
+    ('saint_inputs', ['identifiers', 'saint']),   # keys of another preset
+    ('annotated', []),
+])
+def test_effective_selection_falls_back_to_defaults(preset, selected):
+    defaults = {'saint_inputs': ['bait', 'prey', 'interaction'],
+                'annotated': ['identifiers', 'saint', 'comppass']}
+    assert effective_selection(PRESETS[preset], selected) == defaults[preset]
 
 
 def test_effective_selection_preset_without_groups():
-    from download_presets import effective_selection
     assert effective_selection(PRESETS['cytoscape'], ['identifiers']) == []

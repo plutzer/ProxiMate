@@ -90,36 +90,24 @@ def comppass_input_large():
     return _comppass_frame(counts)
 
 
-@pytest.fixture
-def saint_interaction_file(tmp_path):
-    """Write a 4-column SAINT interaction.txt containing zero and negative intensities.
-
-    Returns (path, positive_intensities) so tests can hand-compute the normalization
-    parameters from exactly the values SAINT would keep.
-    """
-    intensities = [100.0, 1000.0, 10000.0, 0.0, -5.0]
-    path = tmp_path / "interaction.txt"
-    with open(path, "w", newline="") as handle:
-        for i, intensity in enumerate(intensities):
-            handle.write(f"exp_{i}\tbait_{i}\tprey_{i}\t{intensity}\n")
-    positives = np.array([v for v in intensities if v > 0])
-    return path, positives
-
-
 # ---------------------------------------------------------------------------
-# Logging fixtures
+# Logging
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def isolate_logging():
-    """Restore ProxiMate's logging state around every test.
+def isolate_logging(monkeypatch):
+    """Run every test against a pristine ProxiMate logger and restore it afterwards.
 
     Autouse rather than opt-in: any test that exercises a parse entry point
     attaches a file handler to the process-wide logger pointed at a ``tmp_path``
     that pytest later deletes.  Without restoration those handlers stay attached
     and every later test writes through them.
 
-    Reaches into ``log_config``'s module state deliberately — the one-shot
+    The configuration is also torn down up front, and the environment variables
+    that would otherwise leak in from whoever launched pytest are cleared, so a
+    test sees the logger exactly as a fresh process would.
+
+    Reaches into ``log_config``'s module state deliberately: the one-shot
     ``_initialized`` guard and the handler registry are what have to be undone.
     """
     import log_config
@@ -130,8 +118,14 @@ def isolate_logging():
         list(package.handlers), package.level, package.propagate,
         list(root.handlers), root.level, log_config._initialized,
         dict(log_config._file_handlers), dict(log_config._file_handler_refs),
-        list(log_config._startup_diagnostics),
     )
+
+    package.handlers.clear()
+    log_config._initialized = False
+    log_config._file_handlers.clear()
+    log_config._file_handler_refs.clear()
+    for name in ("PROXIMATE_RUN_ID", "LOG_LEVEL", "PROXIMATE_LOG_DIR"):
+        monkeypatch.delenv(name, raising=False)
 
     yield
 
@@ -144,39 +138,3 @@ def isolate_logging():
     log_config._file_handlers.update(saved[6])
     log_config._file_handler_refs.clear()
     log_config._file_handler_refs.update(saved[7])
-    log_config._startup_diagnostics[:] = saved[8]
-
-
-@pytest.fixture
-def clean_logging(monkeypatch):
-    """Run a test against a pristine ProxiMate logger, yielding ``log_config``.
-
-    Builds on :func:`isolate_logging` by additionally tearing the configuration
-    down up front and clearing the environment variables that would otherwise
-    leak in from whoever launched pytest.
-    """
-    import log_config
-
-    logging.getLogger(log_config.PACKAGE).handlers.clear()
-    log_config._initialized = False
-    log_config._file_handlers.clear()
-    log_config._file_handler_refs.clear()
-    del log_config._startup_diagnostics[:]
-
-    for name in ("PROXIMATE_RUN_ID", "LOG_LEVEL", "LOG_FILE", "PROXIMATE_LOG_DIR"):
-        monkeypatch.delenv(name, raising=False)
-
-    return log_config
-
-
-@pytest.fixture
-def log_dir(tmp_path, monkeypatch):
-    """Point the unified operational log at a temporary directory.
-
-    Tests must never fall back to the ``/Outputs`` default, which exists only in
-    the container and would make results depend on the host filesystem.
-    """
-    target = tmp_path / "logs"
-    target.mkdir()
-    monkeypatch.setenv("PROXIMATE_LOG_DIR", str(target))
-    return target

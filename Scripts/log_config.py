@@ -24,7 +24,6 @@ Environment variables:
 - ``LOG_LEVEL`` — DEBUG, INFO, WARNING, ...  Defaults to INFO.  An unrecognized
   value is reported and INFO is used.
 - ``PROXIMATE_LOG_DIR`` — directory for the unified operational log.
-- ``LOG_FILE`` — an additional rotating log file at an explicit path.
 - ``PROXIMATE_RUN_ID`` — identifier shared by every process of one run.  It is
   minted on first use and exported, so subprocesses inherit it through
   ``os.environ`` and their records can be correlated with the parent's.
@@ -43,12 +42,8 @@ PACKAGE = "proximate"
 
 DEFAULT_LOG_DIR = "/Outputs"
 SERVER_LOG_FILENAME = "proximate-server.log"
-DATASET_LOG_FILENAME = "proximate.log"
 
-RUN_ID_ENV_VAR = "PROXIMATE_RUN_ID"
-
-# Keep the rotating logs bounded: the server log accumulates for the life of a
-# container, and LOG_FILE may point at a long-lived path.
+# The server log accumulates for the life of a container, so it is rotated.
 MAX_LOG_BYTES = 10 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
 
@@ -62,13 +57,11 @@ _initialized = False
 _scoped_run_id = contextvars.ContextVar("proximate_run_id", default=None)
 
 # Attached file handlers, keyed by normalized path, with a reference count so
-# that overlapping `dataset_log` blocks do not detach each other's handler.
+# that nested `dataset_log` blocks on one dataset do not detach each other's
+# handler: the GUI wraps an action in one block and the parse stage opens
+# another on the same path inside it.
 _file_handlers = {}
 _file_handler_refs = {}
-
-# Problems found while configuring logging, before any file handler exists.
-# Replayed into each new file handler so a dataset's log records them too.
-_startup_diagnostics = []
 
 
 class _RunIDFilter(logging.Filter):
@@ -84,39 +77,17 @@ class _RunIDFilter(logging.Filter):
         return True
 
 
-def _formatter():
-    return logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
-
-
 def _normalize(path):
     return os.path.realpath(os.fspath(path))
 
 
-def _diagnose(level, message, *args):
-    """Record and emit a problem with the logging configuration itself."""
-    _startup_diagnostics.append((level, message, args))
-    logging.getLogger(f"{PACKAGE}.log_config").log(level, message, *args)
-
-
-def _resolve_level():
-    """Return the configured level, reporting an unrecognized LOG_LEVEL."""
-    name = os.environ.get("LOG_LEVEL", "INFO").upper()
-    level = getattr(logging, name, None)
-    if not isinstance(level, int):
-        _diagnose(logging.WARNING,
-                  "Unrecognized LOG_LEVEL %r; using INFO instead.", name)
-        return logging.INFO
-    return level
-
-
-def _build_handler(handler, level):
-    handler.setLevel(level)
-    handler.setFormatter(_formatter())
+def _build_handler(handler):
+    handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
     handler.addFilter(_RunIDFilter())
     return handler
 
 
-def _attach_server_log(logger, level):
+def _attach_server_log(logger):
     """Attach the unified operational log.
 
     An explicitly configured directory that cannot be used is a misconfiguration
@@ -133,21 +104,16 @@ def _attach_server_log(logger, level):
         if configured:
             os.makedirs(log_dir, exist_ok=True)
         elif not os.path.isdir(log_dir):
-            raise OSError(f"{log_dir} does not exist")
+            return
         handler = logging.handlers.RotatingFileHandler(
             os.path.join(log_dir, SERVER_LOG_FILENAME),
             maxBytes=MAX_LOG_BYTES, backupCount=LOG_BACKUP_COUNT,
             encoding="utf-8")
     except OSError as error:
-        if configured:
-            _diagnose(logging.WARNING,
-                      "Cannot write the unified log to %s (%s); "
-                      "continuing with stderr only.", log_dir, error)
-        else:
-            _diagnose(logging.DEBUG,
-                      "No unified log: %s is unavailable (%s).", log_dir, error)
+        logger.warning("Cannot write the unified log to %s (%s); "
+                       "continuing with stderr only.", log_dir, error)
         return
-    logger.addHandler(_build_handler(handler, level))
+    logger.addHandler(_build_handler(handler))
 
 
 def setup_logging():
@@ -163,21 +129,31 @@ def setup_logging():
     # matplotlib, urllib3 and py4cytoscape.
     logger.propagate = False
     del logger.handlers[:]
-    del _startup_diagnostics[:]
+    logger.addHandler(_build_handler(logging.StreamHandler(sys.stderr)))
 
-    level = _resolve_level()
-    logger.setLevel(level)
+    name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, name, None)
+    logger.setLevel(level if isinstance(level, int) else logging.INFO)
+    if not isinstance(level, int):
+        logger.warning("Unrecognized LOG_LEVEL %r; using INFO instead.", name)
 
-    logger.addHandler(_build_handler(logging.StreamHandler(sys.stderr), level))
-    _attach_server_log(logger, level)
+    _attach_server_log(logger)
 
-    log_file = os.environ.get("LOG_FILE")
-    if log_file:
-        logger.addHandler(_build_handler(
-            logging.handlers.RotatingFileHandler(
-                log_file, maxBytes=MAX_LOG_BYTES,
-                backupCount=LOG_BACKUP_COUNT, encoding="utf-8"),
-            level))
+
+def _attach(key):
+    """Open a file handler on `key` (a normalized path) with one reference."""
+    handler = _build_handler(logging.FileHandler(key, mode="a", encoding="utf-8"))
+    logging.getLogger(PACKAGE).addHandler(handler)
+    _file_handlers[key] = handler
+    _file_handler_refs[key] = 1
+    return handler
+
+
+def _detach(key):
+    handler = _file_handlers.pop(key)
+    _file_handler_refs.pop(key)
+    logging.getLogger(PACKAGE).removeHandler(handler)
+    handler.close()
 
 
 def add_file_handler(log_path):
@@ -190,32 +166,7 @@ def add_file_handler(log_path):
     """
     setup_logging()
     key = _normalize(log_path)
-    if key in _file_handlers:
-        return _file_handlers[key]
-
-    level = _resolve_level()
-    handler = _build_handler(
-        logging.FileHandler(key, mode="a", encoding="utf-8"), level)
-    logging.getLogger(PACKAGE).addHandler(handler)
-    _file_handlers[key] = handler
-    _file_handler_refs[key] = 1
-
-    # A dataset's log should show any problem with the logging setup itself,
-    # even though it was found before this file existed.
-    for diag_level, message, args in _startup_diagnostics:
-        handler.handle(logging.getLogger(f"{PACKAGE}.log_config").makeRecord(
-            f"{PACKAGE}.log_config", diag_level, __file__, 0, message, args, None))
-    return handler
-
-
-def remove_file_handler(log_path):
-    """Detach the handler for `log_path`, whatever its reference count."""
-    key = _normalize(log_path)
-    handler = _file_handlers.pop(key, None)
-    _file_handler_refs.pop(key, None)
-    if handler is not None:
-        logging.getLogger(PACKAGE).removeHandler(handler)
-        handler.close()
+    return _file_handlers.get(key) or _attach(key)
 
 
 @contextlib.contextmanager
@@ -224,22 +175,24 @@ def dataset_log(output_dir):
 
     The handler is detached on the way out, including when the block raises, so
     a long-lived process does not keep writing to a dataset it has finished with.
+    A block nested inside another on the same directory shares its handler,
+    which stays attached until the outermost block exits.
     """
     setup_logging()
     os.makedirs(output_dir, exist_ok=True)
-    path = os.path.join(output_dir, DATASET_LOG_FILENAME)
+    path = os.path.join(output_dir, "proximate.log")
     key = _normalize(path)
 
     if key in _file_handlers:
         _file_handler_refs[key] += 1
     else:
-        add_file_handler(path)
+        _attach(key)
     try:
         yield path
     finally:
         _file_handler_refs[key] -= 1
         if _file_handler_refs[key] <= 0:
-            remove_file_handler(key)
+            _detach(key)
 
 
 def new_run_id():
@@ -260,10 +213,10 @@ def get_run_id():
     if scoped:
         return scoped
 
-    run_id = os.environ.get(RUN_ID_ENV_VAR)
+    run_id = os.environ.get("PROXIMATE_RUN_ID")
     if not run_id:
         run_id = new_run_id()
-        os.environ[RUN_ID_ENV_VAR] = run_id
+        os.environ["PROXIMATE_RUN_ID"] = run_id
     return run_id
 
 

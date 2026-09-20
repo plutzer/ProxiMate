@@ -84,7 +84,6 @@ all four. Attach `run.json` to a bug report.
 | `PROXIMATE_LOG_DIR` | `/Outputs` (container), the output directory (CLI) | where the operational log is written |
 | `PROXIMATE_OUTPUT_DIR` | `/Outputs` | where the GUI stores datasets |
 | `PROXIMATE_RUN_ID` | minted per run | set it to correlate an external job with a ProxiMate run |
-| `LOG_FILE` | unset | an additional rotating log at an explicit path |
 | `PROXIMATE_CYTOSCAPE_URL` | `http://host.docker.internal:1234/v1` in a container, `http://127.0.0.1:1234/v1` otherwise | where the Cytoscape tab reaches CyREST |
 | `PROXIMATE_CYTOSCAPE_TIMEOUT` | `120` | seconds any one CyREST request may take before the tab reports an error |
 

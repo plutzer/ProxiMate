@@ -5,12 +5,11 @@ These functions create static matplotlib versions of the interactive Plotly plot
 for PNG/SVG export, avoiding the kaleido dependency.
 """
 
-import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
 
-from QC_plots import prepare_pca_matrix, load_pca_metadata
+from QC_plots import (KNOWN_STATUS_STYLE, bait_scores, experiment_pca,
+                      known_status_split, prey_pca)
 
 
 def pca_plot_matplotlib(interaction, experimentalDesign, matrix=None):
@@ -32,19 +31,7 @@ def pca_plot_matplotlib(interaction, experimentalDesign, matrix=None):
     matplotlib.figure.Figure
         PCA scatter plot
     """
-    if matrix is None:
-        matrix = prepare_pca_matrix(interaction)
-    metadata = load_pca_metadata(interaction, experimentalDesign)
-
-    # Perform PCA
-    pca = PCA(n_components=2)
-    pca_result = pca.fit_transform(matrix.T)
-
-    pca_df = pd.DataFrame(data=pca_result, columns=['PC1', 'PC2'])
-    pca_df['Experiment'] = matrix.columns
-    pca_df = pca_df.merge(metadata, left_on='Experiment', right_on='Experiment', how='left')
-
-    explained_variance = pca.explained_variance_ratio_
+    pca_df, explained_variance = experiment_pca(interaction, experimentalDesign, matrix)
 
     # Create matplotlib figure
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -108,12 +95,7 @@ def prey_pca_matplotlib(matrix, color_values=None, color_label=None,
     matplotlib.figure.Figure
         PCA scatter plot
     """
-    pca = PCA(n_components=2)
-    pca_result = pca.fit_transform(matrix)
-    explained_variance = pca.explained_variance_ratio_
-
-    prey_df = pd.DataFrame(data=pca_result, columns=['PC1', 'PC2'])
-    prey_df['Prey'] = matrix.index
+    prey_df, explained_variance = prey_pca(matrix)
 
     fig, ax = plt.subplots(figsize=(10, 8))
 
@@ -174,13 +156,8 @@ def saint_scatter_matplotlib(results_path, bait_name, saintscore_threshold):
     matplotlib.figure.Figure
         Scatter plot
     """
-    # Load data
-    results = pd.read_csv(results_path, sep=",")
+    bait_data = bait_scores(results_path, bait_name)
 
-    # Filter for specific bait
-    bait_data = results[results['Experiment.ID'] == bait_name].copy()
-
-    # Create figure
     fig, ax = plt.subplots(figsize=(10, 7))
 
     if len(bait_data) == 0:
@@ -192,39 +169,12 @@ def saint_scatter_matplotlib(results_path, bait_name, saintscore_threshold):
         ax.axis('off')
         return fig
 
-    # Check available columns
-    has_biogrid = 'In.BioGRID' in bait_data.columns
-    has_multivalidated = 'Multivalidated' in bait_data.columns
-
-    # Separate data by BioGRID status
-    if has_multivalidated:
-        multivalidated = bait_data[bait_data['Multivalidated'] == True].copy()
-        in_biogrid = bait_data[(bait_data['In.BioGRID'] == True) & (bait_data['Multivalidated'] != True)].copy()
-        not_in_biogrid = bait_data[bait_data['In.BioGRID'] != True].copy()
-    elif has_biogrid:
-        multivalidated = pd.DataFrame()
-        in_biogrid = bait_data[bait_data['In.BioGRID'] == True].copy()
-        not_in_biogrid = bait_data[bait_data['In.BioGRID'] != True].copy()
-    else:
-        multivalidated = pd.DataFrame()
-        in_biogrid = pd.DataFrame()
-        not_in_biogrid = bait_data.copy()
-
-    # Plot in order: not in BioGRID (background), in BioGRID, multivalidated (foreground)
-    if len(not_in_biogrid) > 0:
-        ax.scatter(not_in_biogrid['FoldChange'], not_in_biogrid['SaintScore'],
-                   c='#1f77b4', s=50, alpha=0.7, edgecolors='white', linewidth=0.5,
-                   label='Not in BioGRID', zorder=1)
-
-    if len(in_biogrid) > 0:
-        ax.scatter(in_biogrid['FoldChange'], in_biogrid['SaintScore'],
-                   c='#ff7f0e', s=50, alpha=0.7, edgecolors='white', linewidth=0.5,
-                   label='In BioGRID', zorder=2)
-
-    if len(multivalidated) > 0:
-        ax.scatter(multivalidated['FoldChange'], multivalidated['SaintScore'],
-                   c='#d62728', s=50, alpha=0.7, edgecolors='white', linewidth=0.5,
-                   label='Multivalidated', zorder=3)
+    for zorder, (group, (name, color)) in enumerate(
+            zip(known_status_split(bait_data), KNOWN_STATUS_STYLE), start=1):
+        if len(group) > 0:
+            ax.scatter(group['FoldChange'], group['SaintScore'],
+                       c=color, s=50, alpha=0.7, edgecolors='white', linewidth=0.5,
+                       label=name, zorder=zorder)
 
     # Add threshold line
     ax.axhline(y=saintscore_threshold, color='red', linestyle='--', linewidth=2,

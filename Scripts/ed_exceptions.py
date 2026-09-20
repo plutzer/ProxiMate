@@ -8,6 +8,18 @@ Each exception provides:
 """
 
 
+def _format_row_examples(items, limit=5):
+    """Join up to `limit` items, with an 'and N more' suffix for the rest."""
+    examples = ", ".join(str(r) for r in items[:limit])
+    if len(items) > limit:
+        examples += f" (and {len(items) - limit} more)"
+    return examples
+
+
+def _plural(n):
+    return "s" if n != 1 else ""
+
+
 class ProxiMateError(Exception):
     """Base exception for all ProxiMate errors"""
 
@@ -87,19 +99,13 @@ class EDInvalidTypeError(EDFileError):
 
     def __init__(self, invalid_rows):
         self.invalid_rows = invalid_rows
-        num_invalid = len(invalid_rows)
-        message = f"Invalid Type values in {num_invalid} rows"
-        user_message = f"Found {num_invalid} row{'s' if num_invalid != 1 else ''} with invalid Type values"
-
-        # Show first 5 problem rows
-        row_examples = ", ".join(str(r) for r in invalid_rows[:5])
-        if len(invalid_rows) > 5:
-            row_examples += f" (and {len(invalid_rows) - 5} more)"
-
+        n = len(invalid_rows)
+        message = f"Invalid Type values in {n} rows"
+        user_message = f"Found {n} row{_plural(n)} with invalid Type values"
         suggestions = [
             "Type must be either 'C' (control) or 'T' (test/bait)",
             "Type values are case-sensitive",
-            f"Problem rows: {row_examples}"
+            f"Problem rows: {_format_row_examples(invalid_rows)}"
         ]
         super().__init__(message, user_message, suggestions)
 
@@ -109,21 +115,76 @@ class EDInvalidReplicateError(EDFileError):
 
     def __init__(self, invalid_rows):
         self.invalid_rows = invalid_rows
-        num_invalid = len(invalid_rows)
-        message = f"Invalid Replicate values in {num_invalid} rows"
-        user_message = f"Found {num_invalid} row{'s' if num_invalid != 1 else ''} with invalid Replicate values"
-
-        # Show first 5 problem rows
-        row_examples = ", ".join(str(r) for r in invalid_rows[:5])
-        if len(invalid_rows) > 5:
-            row_examples += f" (and {len(invalid_rows) - 5} more)"
-
+        n = len(invalid_rows)
+        message = f"Invalid Replicate values in {n} rows"
+        user_message = f"Found {n} row{_plural(n)} with invalid Replicate values"
         suggestions = [
             "Replicate must be a positive integer (1, 2, 3, etc.)",
             "Remove any text or special characters from the Replicate column",
-            f"Problem rows: {row_examples}"
+            f"Problem rows: {_format_row_examples(invalid_rows)}"
         ]
         super().__init__(message, user_message, suggestions)
+
+
+class EDNoTestExperimentsError(EDFileError):
+    """The design declares no Type == "T" rows, so there is nothing to score."""
+
+    def __init__(self):
+        super().__init__(
+            "Experimental design has no test (Type 'T') rows",
+            "The Experimental Design file contains no test experiments",
+            ["At least one row must have Type 'T' (a bait experiment)",
+             "Check that the Type column is not 'C' on every row"],
+        )
+
+
+# Text for each EDInvalidGroupError reason.  {n} and {s} are the offender count and its
+# plural suffix; {examples} is the formatted offender list.
+_GROUP_ERROR_TEMPLATES = {
+    "invalid_group_value": (
+        "Invalid Group values in {n} row{s}",
+        "Found {n} row{s} with an invalid Group value",
+        ["Group must be a positive integer (1, 2, 3, ...)",
+         "For multi-group controls, use a comma-separated list of integers (e.g. '1,2')",
+         "Use '*' on a control row to mark it as a universal control",
+         "Problem rows: {examples}"],
+    ),
+    "test_row_multi_group": (
+        "Test rows declare multiple groups in {n} row{s}",
+        "Found {n} test row{s} that declare more than one group",
+        ["Each test bait row must declare exactly one group number",
+         "Only control rows may be shared across multiple groups",
+         "Problem rows: {examples}"],
+    ),
+    "test_row_wildcard": (
+        "Test rows use '*' in {n} row{s}",
+        "Found {n} test row{s} using '*' (wildcard) for Group",
+        ["'*' is reserved for control rows (universal controls)",
+         "Each test bait must declare a specific group number",
+         "Problem rows: {examples}"],
+    ),
+    "test_row_missing_group_in_grouped_run": (
+        "Test rows are missing Group values in a grouped run ({n} row{s})",
+        "Found {n} test row{s} with no Group value in a grouped run",
+        ["When any row declares a Group, every test row must also declare one",
+         "Fill in the Group column for all test rows, or clear it entirely for a standard run",
+         "Problem rows: {examples}"],
+    ),
+    "control_wildcard_with_explicit_groups": (
+        "Control rows mix '*' with explicit groups in {n} row{s}",
+        "Found {n} control row{s} that mix '*' with specific group numbers",
+        ["Use either '*' alone (universal) or a list of group numbers — not both",
+         "Example: '*' OR '1,2', but not '*,1'",
+         "Problem rows: {examples}"],
+    ),
+    # Offenders here are group numbers, not row numbers.
+    "bait_group_has_no_control": (
+        "Test groups with no matching control: {examples}",
+        "These test group{s} have no matching control: {examples}",
+        ["Every test group must be covered by at least one control row",
+         "Assign a control to each missing group, or add a universal control ('*')"],
+    ),
+}
 
 
 class EDInvalidGroupError(EDFileError):
@@ -132,89 +193,13 @@ class EDInvalidGroupError(EDFileError):
     def __init__(self, reason, offenders):
         self.reason = reason
         self.offenders = offenders
+        if reason not in _GROUP_ERROR_TEMPLATES:
+            raise ValueError(f"Unknown group error reason: {reason!r}")
+        message, user_message, suggestions = _GROUP_ERROR_TEMPLATES[reason]
         n = len(offenders)
-        plural = "s" if n != 1 else ""
-
-        if reason == "invalid_group_value":
-            rows = _format_row_examples(offenders)
-            message = f"Invalid Group values in {n} row{plural}"
-            user_message = f"Found {n} row{plural} with an invalid Group value"
-            suggestions = [
-                "Group must be a positive integer (1, 2, 3, ...)",
-                "For multi-group controls, use a comma-separated list of integers (e.g. '1,2')",
-                "Use '*' on a control row to mark it as a universal control",
-                f"Problem rows: {rows}",
-            ]
-
-        elif reason == "test_row_multi_group":
-            rows = _format_row_examples(offenders)
-            message = f"Test rows declare multiple groups in {n} row{plural}"
-            user_message = f"Found {n} test row{plural} that declare more than one group"
-            suggestions = [
-                "Each test bait row must declare exactly one group number",
-                "Only control rows may be shared across multiple groups",
-                f"Problem rows: {rows}",
-            ]
-
-        elif reason == "test_row_wildcard":
-            rows = _format_row_examples(offenders)
-            message = f"Test rows use '*' in {n} row{plural}"
-            user_message = f"Found {n} test row{plural} using '*' (wildcard) for Group"
-            suggestions = [
-                "'*' is reserved for control rows (universal controls)",
-                "Each test bait must declare a specific group number",
-                f"Problem rows: {rows}",
-            ]
-
-        elif reason == "test_row_missing_group_in_grouped_run":
-            rows = _format_row_examples(offenders)
-            message = f"Test rows are missing Group values in a grouped run ({n} row{plural})"
-            user_message = (
-                f"Found {n} test row{plural} with no Group value in a grouped run"
-            )
-            suggestions = [
-                "When any row declares a Group, every test row must also declare one",
-                "Fill in the Group column for all test rows, or clear it entirely for a standard run",
-                f"Problem rows: {rows}",
-            ]
-
-        elif reason == "control_wildcard_with_explicit_groups":
-            rows = _format_row_examples(offenders)
-            message = f"Control rows mix '*' with explicit groups in {n} row{plural}"
-            user_message = (
-                f"Found {n} control row{plural} that mix '*' with specific group numbers"
-            )
-            suggestions = [
-                "Use either '*' alone (universal) or a list of group numbers — not both",
-                "Example: '*' OR '1,2', but not '*,1'",
-                f"Problem rows: {rows}",
-            ]
-
-        elif reason == "bait_group_has_no_control":
-            values = ", ".join(str(g) for g in offenders)
-            message = f"Test groups with no matching control: {values}"
-            user_message = (
-                f"These test group{'s' if n != 1 else ''} have no matching control: {values}"
-            )
-            suggestions = [
-                "Every test group must be covered by at least one control row",
-                "Assign a control to each missing group, or add a universal control ('*')",
-            ]
-
-        else:
-            message = f"Invalid Group column (reason: {reason})"
-            user_message = "Group column contains invalid values"
-            suggestions = []
-
-        super().__init__(message, user_message, suggestions)
-
-
-def _format_row_examples(row_indices, limit=5):
-    """Format a list of row numbers, truncating to `limit` with an 'and N more' suffix."""
-    examples = ", ".join(str(r) for r in row_indices[:limit])
-    if len(row_indices) > limit:
-        examples += f" (and {len(row_indices) - limit} more)"
-    return examples
+        fields = {"n": n, "s": _plural(n), "examples": _format_row_examples(offenders)}
+        super().__init__(message.format(**fields), user_message.format(**fields),
+                         [s.format(**fields) for s in suggestions])
 
 
 class EDMissingValueError(EDFileError):
@@ -223,19 +208,13 @@ class EDMissingValueError(EDFileError):
     def __init__(self, column_name, row_indices):
         self.column_name = column_name
         self.row_indices = row_indices
-        num_missing = len(row_indices)
+        n = len(row_indices)
         message = f"Missing values in column '{column_name}' at rows: {row_indices}"
-        user_message = f"Column '{column_name}' has empty values in {num_missing} row{'s' if num_missing != 1 else ''}"
-
-        # Show first 5 problem rows
-        row_examples = ", ".join(str(r) for r in row_indices[:5])
-        if len(row_indices) > 5:
-            row_examples += f" (and {len(row_indices) - 5} more)"
-
+        user_message = f"Column '{column_name}' has empty values in {n} row{_plural(n)}"
         suggestions = [
             f"All rows must have a value for '{column_name}'",
             "Check for blank cells or missing data",
-            f"Problem rows: {row_examples}"
+            f"Problem rows: {_format_row_examples(row_indices)}"
         ]
         super().__init__(message, user_message, suggestions)
 
@@ -245,19 +224,13 @@ class EDDuplicateExperimentError(EDFileError):
 
     def __init__(self, duplicates):
         self.duplicates = duplicates
-        num_dupes = len(duplicates)
+        n = len(duplicates)
         message = f"Duplicate Experiment Names: {', '.join(duplicates)}"
-        user_message = f"Found {num_dupes} duplicate Experiment Name{'s' if num_dupes != 1 else ''}"
-
-        # Show first 3 duplicates
-        dupe_examples = ", ".join(duplicates[:3])
-        if len(duplicates) > 3:
-            dupe_examples += f" (and {len(duplicates) - 3} more)"
-
+        user_message = f"Found {n} duplicate Experiment Name{_plural(n)}"
         suggestions = [
             "Each Experiment Name must be unique",
             "Use different names for each experiment (e.g., Sample_1, Sample_2)",
-            f"Duplicates found: {dupe_examples}"
+            f"Duplicates found: {_format_row_examples(duplicates, limit=3)}"
         ]
         super().__init__(message, user_message, suggestions)
 
@@ -324,15 +297,9 @@ class EDPGMismatchError(ProxiMateError):
 
         details = []
         if ed_only:
-            ed_examples = ", ".join(ed_only[:3])
-            if len(ed_only) > 3:
-                ed_examples += f" (and {len(ed_only) - 3} more)"
-            details.append(f"In ED but not in proteinGroups: {ed_examples}")
+            details.append(f"In ED but not in proteinGroups: {_format_row_examples(ed_only, limit=3)}")
         if pg_only:
-            pg_examples = ", ".join(pg_only[:3])
-            if len(pg_only) > 3:
-                pg_examples += f" (and {len(pg_only) - 3} more)"
-            details.append(f"In proteinGroups but not in ED: {pg_examples}")
+            details.append(f"In proteinGroups but not in ED: {_format_row_examples(pg_only, limit=3)}")
 
         user_message = "Experiment names don't match between files:\n" + "\n".join(details)
         suggestions = [

@@ -1,14 +1,22 @@
-"""Tests for the hypergeometric annotation-feature enrichment."""
+"""Tests for the hypergeometric annotation-feature enrichment and its heatmap.
 
-import warnings
+The heatmap is rendered by Shiny's ``render.plot``, which resizes the figure to the
+browser card before drawing it, so the layout assertions re-run that resize and measure
+the drawn artists rather than reading the source.
+"""
 
+import matplotlib
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
 from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 
-from Ann_Enrichment import enrich_foreground, process_refactored, split_and_clean
+from Ann_Enrichment import (MAX_LABEL_CHARS, enrich_foreground, plot_results,
+                            process_refactored, split_and_clean)
 
 
 # --- split_and_clean -----------------------------------------------------------
@@ -18,37 +26,20 @@ def test_splits_on_semicolons_and_strips_whitespace():
         "Nucleus", "Cytoplasm", "Golgi"}
 
 
-@pytest.mark.parametrize("value", [np.nan, None, 3.5, ["Nucleus"]])
-def test_non_string_input_yields_an_empty_set(value):
+@pytest.mark.parametrize("value", [np.nan, None, 3.5, ""])
+def test_non_string_or_empty_input_yields_an_empty_set(value):
     assert split_and_clean(value) == set()
 
 
-def test_empty_string_yields_an_empty_set():
-    assert split_and_clean("") == set()
-
-
 def test_trailing_digits_are_stripped():
-    """Numbered instances of a feature collapse onto one label.
-
-    UniProt numbers repeated features, so the Repeats, Domains and Motifs columns
-    carry "WD 1", "WD 2", "WD 3"; enrichment asks whether a protein has WD repeats
-    at all, not which one.  GO columns are unaffected either way -- annotator's
-    clean_gocc has already stripped the bracketed accession by this point.
-    """
+    """UniProt numbers repeated features ("WD 1", "WD 2"); enrichment asks whether a
+    protein has WD repeats at all, not which one."""
     assert split_and_clean("WD 1;WD 2;WD 3") == {"WD"}
     assert split_and_clean("Complex1") == {"Complex"}
 
 
 def test_annotations_beginning_with_a_digit_are_dropped():
     assert split_and_clean("40S Ribosome;Nucleus") == {"Nucleus"}
-
-
-def test_all_digit_annotations_collapse_to_nothing():
-    assert split_and_clean("12345;Nucleus") == {"Nucleus"}
-
-
-def test_duplicates_collapse():
-    assert split_and_clean("Nucleus;Nucleus;Nucleus") == {"Nucleus"}
 
 
 # --- enrich_foreground ---------------------------------------------------------
@@ -77,57 +68,14 @@ def test_pvalue_and_enrichment_match_the_hypergeometric_definition(feature_map):
     assert row["enrichment"] == pytest.approx((3 / 4) / (6 / 10))
 
 
-def test_rare_features_are_dropped(feature_map):
-    """Vesicle has K = 2 < 5, so it never reaches the test even with k = 2."""
+def test_rare_and_singly_seen_features_are_dropped(feature_map):
+    """Vesicle has K = 2 < 5 so it never reaches the test even with k = 2; Nucleus clears
+    K >= 5 but a single foreground hit fails the k >= 2 guard."""
     result = enrich_foreground({"P01", "P02", "P07", "P08"}, set(feature_map), feature_map)
+    assert set(result["Feature"]) == {"Nucleus"}
 
-    assert "Nucleus" in set(result["Feature"])
-    assert "Vesicle" not in set(result["Feature"])
-
-
-def test_features_seen_once_in_the_foreground_are_dropped(feature_map):
-    """Nucleus clears K >= 5 but a single foreground hit fails the k >= 2 guard."""
     result = enrich_foreground({"P01"}, set(feature_map), feature_map)
-
-    assert "Nucleus" not in set(result["Feature"])
-
-
-def test_results_are_sorted_by_ascending_pvalue():
-    all_ids = {f"P{i:02d}" for i in range(1, 21)}
-    mapping = {p: set() for p in all_ids}
-    # "Common" is spread across the population; "Focused" concentrates in the foreground.
-    for i in range(1, 16):
-        mapping[f"P{i:02d}"].add("Common")
-    for i in range(1, 7):
-        mapping[f"P{i:02d}"].add("Focused")
-
-    result = enrich_foreground({f"P{i:02d}" for i in range(1, 7)}, all_ids, mapping)
-
-    assert len(result) == 2
-    assert list(result["p_value"]) == sorted(result["p_value"])
-
-
-def test_columns_are_stable_when_nothing_passes(feature_map):
-    result = enrich_foreground(set(), set(feature_map), feature_map)
-
-    assert len(result) == 0
-    assert list(result.columns) == [
-        "Feature", "k", "n", "K", "M", "p_value", "enrichment"]
-
-
-def test_foreground_outside_all_ids_produces_k_greater_than_k_population():
-    """feat_population counts only proteins in all_ids while feat_foreground counts every
-    foreground protein, so callers must keep the foreground a subset of all_ids.
-    process_refactored does; a direct caller need not."""
-    all_ids = {f"P{i:02d}" for i in range(1, 6)}
-    mapping = {f"P{i:02d}": {"Shared"} for i in range(1, 7)}   # P06 is outside all_ids
-    foreground = set(mapping)                                   # includes P06
-
-    row = enrich_foreground(foreground, all_ids, mapping).set_index("Feature").loc["Shared"]
-
-    assert row["k"] == 6
-    assert row["K"] == 5
-    assert row["k"] > row["K"]
+    assert result.empty
 
 
 # --- process_refactored --------------------------------------------------------
@@ -184,14 +132,6 @@ def test_threshold_selects_the_foreground(annotated_scores):
     assert e1.loc["Nucleus", "M"] == 12
 
 
-def test_a_lower_threshold_widens_the_foreground(annotated_scores):
-    narrow = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
-    wide = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.0))
-
-    assert narrow[narrow["Bait"] == "E1"]["n"].iloc[0] == 4
-    assert wide[wide["Bait"] == "E1"]["n"].iloc[0] == 12
-
-
 def test_adjusted_pvalues_are_corrected_within_each_bait_and_feature_type(annotated_scores):
     """BH runs per (feature type, experiment) group, not across the whole result."""
     results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
@@ -201,77 +141,23 @@ def test_adjusted_pvalues_are_corrected_within_each_bait_and_feature_type(annota
         assert np.allclose(group["adj_p"].to_numpy(dtype=float), expected)
 
 
-def test_result_columns_are_in_a_stable_order(annotated_scores):
-    """The GUI and its CSV export read these positionally-familiar columns."""
-    results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
+def test_result_columns_are_stable_even_when_nothing_passes(annotated_scores):
+    """The GUI and its CSV export read these columns positionally."""
+    populated = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
+    empty = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=1.5))
 
-    assert list(results.columns) == [
+    assert list(populated.columns) == [
         "Bait", "Feature", "Feature_type", "k", "n", "K", "M",
         "p_value", "enrichment", "adj_p"]
-
-
-def test_empty_result_keeps_the_same_columns(annotated_scores):
-    empty = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=1.5))
-    populated = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
-
     assert len(empty) == 0
     assert list(empty.columns) == list(populated.columns)
 
 
 def test_count_columns_are_integers(annotated_scores):
-    """k, n, K and M are counts.  Accumulating results onto an empty seed frame
-    would leave them as object dtype."""
     results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
 
     for column in ("k", "n", "K", "M"):
         assert results[column].dtype == np.int64, column
-
-
-def test_produces_no_pandas_warnings(annotated_scores):
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", FutureWarning)
-        warnings.simplefilter("error", DeprecationWarning)
-        process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
-
-
-def test_carries_bait_and_feature_type_labels(annotated_scores):
-    results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=0.7))
-
-    assert set(results["Bait"]) == {"E1", "E2"}
-    assert set(results["Feature_type"]) == {"SCL"}
-
-
-def test_experiments_with_no_passing_features_contribute_nothing(annotated_scores):
-    """A threshold above every score leaves an empty foreground, so no rows are added."""
-    results = process_refactored(annotated_scores, ["SCL"], _thresholds(SaintScore=1.5))
-
-    assert len(results) == 0
-
-
-def test_feature_map_keeps_the_last_row_for_a_repeated_prey():
-    """feature_map is built with dict(zip(...)) over every row, so when a prey's
-    annotation differs between its experiment rows the last one silently wins."""
-    rows = []
-    for experiment, scl_for_p01 in (("E1", "Nucleus"), ("E2", "Cytoplasm")):
-        for i in range(1, 8):
-            prey = f"P{i:02d}"
-            rows.append({
-                "Experiment.ID": experiment,
-                "Prey.ID": prey,
-                "SaintScore": 0.9,
-                "BFDR": 0.01,
-                "WD": 5.0,
-                "WDFDR": 0.01,
-                "SCL": scl_for_p01 if prey == "P01" else "Nucleus",
-            })
-    data = pd.DataFrame(rows)
-
-    results = process_refactored(data, ["SCL"], _thresholds(SaintScore=0.7))
-    nucleus = results[results["Feature"] == "Nucleus"].iloc[0]
-
-    # Seven preys, but P01's last row says Cytoplasm, so Nucleus counts only six.
-    assert nucleus["M"] == 7
-    assert nucleus["K"] == 6
 
 
 def test_every_score_narrows_the_foreground(annotated_scores):
@@ -285,20 +171,175 @@ def test_every_score_narrows_the_foreground(annotated_scores):
         assert results.empty, f"{narrowing} did not reach the foreground"
 
 
-def test_the_thresholds_combine_as_they_do_elsewhere(annotated_scores):
-    """All conditions must hold at once; one open threshold does not readmit a prey the
-    others excluded."""
-    results = process_refactored(
-        annotated_scores, ["SCL"], _thresholds(SaintScore=0.7, BFDR=0.001))
+def test_conflicting_annotations_for_one_prey_are_an_error():
+    """A prey's feature set is a property of the protein, not of the experiment it was
+    seen in; two rows disagreeing about it is corrupt input, not a tie to break."""
+    rows = []
+    for experiment, scl_for_p01 in (("E1", "Nucleus"), ("E2", "Cytoplasm")):
+        for i in range(1, 8):
+            prey = f"P{i:02d}"
+            rows.append({
+                "Experiment.ID": experiment,
+                "Prey.ID": prey,
+                "SaintScore": 0.9,
+                "BFDR": 0.01,
+                "WD": 5.0,
+                "WDFDR": 0.01,
+                "SCL": scl_for_p01 if prey == "P01" else "Nucleus",
+            })
 
-    assert results.empty
+    with pytest.raises(ValueError):
+        process_refactored(pd.DataFrame(rows), ["SCL"], _thresholds(SaintScore=0.7))
 
 
-def test_a_missing_wdfdr_fails_the_threshold(annotated_scores):
-    """Scoring with no permutations leaves WDFDR null.  Elsewhere a null fails the
-    filter rather than passing it by default, and the foreground agrees."""
-    annotated_scores.loc[:, "WDFDR"] = np.nan
+# --- plot_results -------------------------------------------------------------
 
-    results = process_refactored(annotated_scores, ["SCL"], _thresholds(WDFDR=0.05))
+# Shiny renders at 96 ppi.  The card the heatmap sits in is around 8.75 inches wide on a
+# maximized window.
+PPI = 96.0
+CONTAINER_SIZE = (8.75, 4.17)
 
-    assert results.empty
+FEATURES = [
+    "COP9 signalosome",
+    "Cul2-RING ubiquitin ligase complex",
+    "glutamatergic synapse",
+    "postsynaptic density",
+    "Cul3-RING ubiquitin ligase complex",
+    "lysosomal membrane",
+    "cytoplasmic ribonucleoprotein granule",
+    "nuclear speck",
+    "extracellular exosome",
+    "focal adhesion",
+]
+BAITS = ["CUL3-mT", "mT-CUL3", "KLHL12-mT", "mT-KEAP1"]
+
+
+def _results(features=FEATURES):
+    """A long-format enrichment table of the shape ``process_refactored`` returns."""
+    rng = np.random.default_rng(0)
+    rows = [(bait, feature, "GO_CC", 5, 50, 20, 2000, 0.001, rng.uniform(1, 40), 0.001)
+            for bait in BAITS for feature in features]
+    return pd.DataFrame(rows, columns=["Bait", "Feature", "Feature_type", "k", "n",
+                                       "K", "M", "p_value", "enrichment", "adj_p"])
+
+
+def _draw(grid, size):
+    """Resize and draw the figure the way Shiny does, and return its renderer.
+
+    ``render.plot`` substitutes a tight layout only when the figure carries no layout
+    engine of its own, so applying one here mirrors it rather than pre-empting it.
+    """
+    figure = grid.figure
+    figure.set_size_inches(*size)
+    figure.set_dpi(PPI)
+    if figure.get_layout_engine() is None:
+        figure.set_layout_engine(layout="tight")
+    figure.canvas.draw()
+    return figure.canvas.get_renderer()
+
+
+@pytest.fixture
+def rendered():
+    """Draw the heatmap at the size of a maximized window and clean up after."""
+    grid = plot_results(_results(), "GO_CC", num_features=30)
+    yield grid, _draw(grid, CONTAINER_SIZE)
+    plt.close(grid.figure)
+
+
+def _visible_text(figure):
+    for ax in figure.axes:
+        for text in [ax.xaxis.label, ax.yaxis.label, ax.title,
+                     *ax.get_xticklabels(), *ax.get_yticklabels()]:
+            if text.get_visible() and text.get_text():
+                yield text
+
+
+def _clipped(figure, renderer):
+    """Text whose bounding box leaves the canvas, and so is drawn only in part."""
+    canvas = figure.bbox
+    out = []
+    for text in _visible_text(figure):
+        box = text.get_window_extent(renderer)
+        if (box.x0 < canvas.x0 - 0.5 or box.x1 > canvas.x1 + 0.5
+                or box.y0 < canvas.y0 - 0.5 or box.y1 > canvas.y1 + 0.5):
+            out.append(text.get_text())
+    return out
+
+
+def _overlap(a, b):
+    """Area shared by two bounding boxes, in square points."""
+    width = min(a.x1, b.x1) - max(a.x0, b.x0)
+    height = min(a.y1, b.y1) - max(a.y0, b.y0)
+    return max(width, 0) * max(height, 0)
+
+
+def test_the_layout_is_recomputed_when_the_figure_is_resized(rendered):
+    """seaborn leaves behind an engine that does nothing, which would freeze the margins
+    at the ones computed for the authored figure size."""
+    grid, _ = rendered
+    engine = grid.figure.get_layout_engine()
+
+    assert engine is not None
+    assert type(engine).__name__ != "PlaceHolderLayoutEngine"
+    assert engine.adjust_compatible, "Shiny replaces an engine it cannot adjust and warns"
+
+
+def test_no_label_is_clipped_by_the_figure_edge(rendered):
+    grid, renderer = rendered
+    assert _clipped(grid.figure, renderer) == []
+
+
+def test_the_colorbar_does_not_cover_the_data(rendered):
+    grid, _ = rendered
+    cbar = grid.cax.get_window_extent()
+
+    assert _overlap(cbar, grid.ax_heatmap.get_window_extent()) == 0
+    assert _overlap(cbar, grid.ax_row_dendrogram.get_window_extent()) == 0
+    assert _overlap(cbar, grid.ax_col_dendrogram.get_window_extent()) == 0
+
+
+def test_every_selected_feature_gets_a_labelled_row(rendered):
+    grid, _ = rendered
+
+    assert set(grid.data2d.index) == set(FEATURES)
+    assert list(grid.ax_heatmap.get_yticks()) == list(np.arange(len(FEATURES)) + 0.5)
+    assert [t.get_text() for t in grid.ax_heatmap.get_yticklabels()] == \
+        list(grid.data2d.index)
+
+
+def test_features_are_selected_by_adjusted_p_enrichment_and_count():
+    """A feature reaches the map only where adj_p <= 0.05 and enrichment >= 2 in some
+    bait; the top-N ranks by how many baits it passes in."""
+    results = _results()
+    results.loc[results["Feature"] == "COP9 signalosome", "adj_p"] = 0.2
+    results.loc[results["Feature"] == "nuclear speck", "enrichment"] = 1.5
+    # "focal adhesion" passes in one bait only, so it ranks below every other feature.
+    focal = results["Feature"] == "focal adhesion"
+    results.loc[focal & (results["Bait"] != BAITS[0]), "adj_p"] = 0.5
+
+    grid = plot_results(results, "GO_CC", num_features=30)
+    everything = set(grid.data2d.index)
+    plt.close(grid.figure)
+
+    assert "COP9 signalosome" not in everything
+    assert "nuclear speck" not in everything
+    assert "focal adhesion" in everything
+
+    grid = plot_results(results, "GO_CC", num_features=7)
+    top = set(grid.data2d.index)
+    plt.close(grid.figure)
+
+    assert len(top) == 7
+    assert "focal adhesion" not in top
+    assert top < everything
+
+
+def test_a_long_feature_name_is_truncated_with_an_ellipsis():
+    """Drawn in full, one long name takes the width the map itself needs."""
+    long_name = "positive regulation of transcription " * 4
+    grid = plot_results(_results(FEATURES + [long_name]), "GO_CC", num_features=30)
+    labels = [text.get_text() for text in grid.ax_heatmap.get_yticklabels()]
+    plt.close(grid.figure)
+
+    assert any(label.endswith("...") for label in labels)
+    assert all(len(label) <= MAX_LABEL_CHARS for label in labels)

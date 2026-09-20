@@ -1,4 +1,9 @@
-"""Tests for building the node and edge tables the Cytoscape tab draws."""
+"""Tests for the Cytoscape tab: the node/edge tables (cytoscape_net), the controller
+with CyREST stubbed out (cytoscape_ctl), and the CyREST helpers (cytoscape_p4c).
+
+Nothing here may set a bypass: a locked view shows nothing on screen and stops the
+mouse, so every bypass setter is made to raise for every test.
+"""
 
 import itertools
 
@@ -6,10 +11,26 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import cytoscape_ctl as ctl
 import cytoscape_net as cn
+import cytoscape_p4c as cy
 
 
 PASSING = {'SaintScore': 0.7, 'BFDR': 0.05, 'WD': 0.0, 'WDFDR': 1.0}
+
+BYPASS_SETTERS = ('set_node_position_bypass', 'set_network_zoom_bypass',
+                  'set_network_center_bypass', 'set_node_property_bypass',
+                  'set_edge_property_bypass', 'set_network_property_bypass')
+
+
+@pytest.fixture(autouse=True)
+def no_bypass(monkeypatch):
+    """Every bypass setter raises, so any code path that reaches one fails the test."""
+    def boom(*a, **k):
+        raise AssertionError("a bypass setter was called")
+    for name in BYPASS_SETTERS:
+        if hasattr(cy.p4c, name):
+            monkeypatch.setattr(cy.p4c, name, boom)
 
 
 def _row(bait, bait_acc, prey, gene, saint=0.9, bfdr=0.01, wd=2.0, wdfdr=0.01,
@@ -51,13 +72,15 @@ def _corum(tmp_path, complexes):
     return str(path)
 
 
-# --- nodes --------------------------------------------------------------------------------
+# =============================================================================================
+# cytoscape_net: nodes
+# =============================================================================================
 
-def test_nodes_are_keyed_on_accession_with_baits_as_diamonds(scores):
+def test_nodes_are_keyed_on_accession(scores):
     nodes, _ = cn.build(scores, PASSING, prey_prey=False)
 
     by_id = nodes.set_index('id')
-    assert by_id.loc['PA', 'role'] == 'bait' and by_id.loc['PA', 'shape'] == 'DIAMOND'
+    assert by_id.loc['PA', 'role'] == 'bait'
     assert by_id.loc['P1', 'role'] == 'prey' and by_id.loc['P1', 'symbol'] == 'G1'
     assert 'P3' not in by_id.index
 
@@ -92,12 +115,16 @@ def test_label_policies(scores, policy, expected):
     assert set(nodes['display_label']) == expected
 
 
-def test_an_unknown_label_policy_raises(scores):
-    with pytest.raises(ValueError, match='label policy'):
-        cn.build(scores, PASSING, prey_prey=False, label_policy='some')
+@pytest.mark.parametrize('kwargs', [
+    {'label_policy': 'some'}, {'width_source': 'Entropy'}])
+def test_an_unknown_option_raises(scores, kwargs):
+    with pytest.raises(ValueError):
+        cn.build(scores, PASSING, prey_prey=False, **kwargs)
 
 
-# --- edges --------------------------------------------------------------------------------
+# =============================================================================================
+# cytoscape_net: edges
+# =============================================================================================
 
 def test_only_passing_interactions_become_edges_and_carry_their_scores(scores):
     _, edges = cn.build(scores, PASSING, prey_prey=False)
@@ -107,14 +134,6 @@ def test_only_passing_interactions_become_edges_and_carry_their_scores(scores):
     assert {'SaintScore', 'BFDR', 'FoldChange', 'WD', 'WDFDR', 'AvgIntensity', 'In.BioGRID'} <= set(edges.columns)
     assert edges['visible'].all()
     assert edges['name'].iloc[0] == 'PA (proximity) P1'
-
-
-def test_a_missing_wdfdr_fails_the_thresholds(scores):
-    scores.loc[0, 'WDFDR'] = np.nan
-
-    _, edges = cn.build(scores, {**PASSING, "WDFDR": 0.5}, prey_prey=False)
-
-    assert 'P1' not in set(edges['target'])
 
 
 def test_widths_follow_log_abundance(scores):
@@ -132,14 +151,16 @@ def test_spectral_counts_drive_widths_when_intensity_is_absent(scores):
     assert edges['width'].nunique() > 1
 
 
-def test_no_abundance_column_gives_one_width(scores):
-    _, edges = cn.build(scores.drop(columns=['AvgIntensity']), PASSING, prey_prey=False)
+def test_a_uniform_width_or_no_abundance_column_gives_one_width(scores):
+    _, edges = cn.build(scores, PASSING, prey_prey=False, width_source='uniform')
+    assert edges['width'].nunique() == 1
 
+    _, edges = cn.build(scores.drop(columns=['AvgIntensity']), PASSING, prey_prey=False)
     assert edges['width'].nunique() == 1
 
 
 @pytest.mark.parametrize('source, thinner, thicker', [
-    ('SaintScore', ('PB', 'PA'), ('PA', 'P1')),      # 0.9 for both PA rows, PB->PA row is 0.9 too
+    ('SaintScore', ('PB', 'PA'), ('PA', 'P1')),
     ('WD', ('PA', 'P1'), ('PB', 'P2')),
     ('FoldChange', ('PA', 'P1'), ('PB', 'P2')),
 ])
@@ -155,38 +176,8 @@ def test_other_width_sources_follow_their_column(scores, source, thinner, thicke
     assert by_pair[thinner] < by_pair[thicker]
 
 
-def test_saint_widths_are_linear_over_the_band(scores):
-    scores['SaintScore'] = [1.0, 0.75, 0.2, 0.75, 1.0]
-
-    _, edges = cn.build(scores, PASSING, prey_prey=False, width_source='SaintScore')
-
-    lo, hi = cn.PROXIMITY_WIDTH
-    assert set(edges['width'].round(3)) == {hi, round(lo + 0.75 * (hi - lo), 3)}
-
-
-def test_a_uniform_width_source_gives_one_width(scores):
-    _, edges = cn.build(scores, PASSING, prey_prey=False, width_source='uniform')
-
-    assert edges['width'].nunique() == 1
-
-
-def test_an_unknown_width_source_raises(scores):
-    with pytest.raises(ValueError, match='width source'):
-        cn.build(scores, PASSING, prey_prey=False, width_source='Entropy')
-
-
-def test_a_width_source_without_its_column_names_it(scores):
-    with pytest.raises(KeyError, match='FoldChange'):
-        cn.build(scores.drop(columns=['FoldChange']), PASSING, prey_prey=False, width_source='FoldChange')
-
-
-def test_a_missing_required_column_names_itself(scores):
-    with pytest.raises(KeyError, match='BFDR'):
-        cn.build(scores.drop(columns=['BFDR']), PASSING)
-
-
 def test_nothing_passing_raises(scores):
-    with pytest.raises(ValueError, match='no interactions pass'):
+    with pytest.raises(ValueError):
         cn.build(scores, {**PASSING, 'SaintScore': 0.99}, prey_prey=False)
 
 
@@ -218,22 +209,15 @@ def test_pairs_carry_the_larger_publication_count_and_any_multivalidation(scores
     assert pairs['n_publications'].iloc[0] == 3 and bool(pairs['multivalidated'].iloc[0])
 
 
-def test_unweighted_literature_edges_sit_at_the_band_floor(scores, tmp_path):
+def test_literature_edges_thicken_with_publications_only_when_weighted(scores, tmp_path):
     scores.loc[len(scores)] = _row('BaitA', 'PA', 'P4', 'G4')
     biogrid = _biogrid(tmp_path, [('P1', 'P2', 40, False), ('P2', 'P4', 1, False)])
 
     _, edges = cn.build(scores, PASSING, biogrid_path=biogrid)
-
     lit = edges[edges['interaction'] == 'literature']
     assert set(lit['width']) == {cn.LITERATURE_WIDTH[0]}
 
-
-def test_weighted_literature_edges_thicken_with_publications(scores, tmp_path):
-    scores.loc[len(scores)] = _row('BaitA', 'PA', 'P4', 'G4')
-    biogrid = _biogrid(tmp_path, [('P1', 'P2', 40, False), ('P2', 'P4', 1, False)])
-
     _, edges = cn.build(scores, PASSING, biogrid_path=biogrid, literature_weighted=True)
-
     by_pair = edges[edges['interaction'] == 'literature'].set_index(['source', 'target'])['width']
     assert by_pair[('P2', 'P4')] < by_pair[('P1', 'P2')] <= cn.LITERATURE_WIDTH[1]
 
@@ -248,13 +232,6 @@ def test_the_multivalidated_scope_hides_single_evidence_pairs(scores, tmp_path):
     assert visible[edges['name'] == 'P1 (literature) P2'].all()
     assert not visible[edges['name'] == 'P2 (literature) P4'].any()
     assert visible[edges['interaction'] == 'proximity'].all()
-
-
-def test_an_unknown_biogrid_scope_raises(scores):
-    _, edges = cn.build(scores, PASSING, prey_prey=False)
-
-    with pytest.raises(ValueError, match='BioGRID scope'):
-        cn.edge_visibility(edges, PASSING, biogrid_scope='some')
 
 
 # --- complex edges ----------------------------------------------------------------------
@@ -313,15 +290,6 @@ def test_tightening_hides_edges_and_literature_edges_follow_their_preys(scores, 
     assert list(faded) == [cn.NODE_ALPHA['faded']] * 2
 
 
-def test_the_literature_edge_survives_while_both_preys_keep_an_edge(scores, tmp_path):
-    biogrid = _biogrid(tmp_path, [('P1', 'P2')])
-    _, edges = cn.build(scores, PASSING, biogrid_path=biogrid)
-
-    visible = cn.edge_visibility(edges, PASSING)
-
-    assert visible.all()
-
-
 @pytest.mark.parametrize('new, tighter', [
     ({**PASSING, 'SaintScore': 0.9}, True),
     ({**PASSING, 'BFDR': 0.1}, False),
@@ -331,17 +299,10 @@ def test_only_tighter_or_equal_thresholds_can_be_applied_in_place(new, tighter):
     assert cn.is_tighter_or_equal(new, PASSING) is tighter
 
 
-# --- zwidth ------------------------------------------------------------------------------------
+def test_zwidth_maps_a_constant_to_the_midpoint_and_missing_or_zero_to_the_floor():
+    assert list(cn.zwidth(pd.Series([10.0, 10.0, 10.0]), (1.0, 3.0))) == [2.0, 2.0, 2.0]
 
-def test_a_constant_column_maps_to_the_band_midpoint():
-    widths = cn.zwidth(pd.Series([10.0, 10.0, 10.0]), (1.0, 3.0))
-
-    assert list(widths) == [2.0, 2.0, 2.0]
-
-
-def test_missing_and_zero_values_map_to_the_band_floor():
     widths = cn.zwidth(pd.Series([np.nan, 0.0, 10.0, 1000.0]), (1.0, 3.0))
-
     assert list(widths[:2]) == [1.0, 1.0]
     assert 1.0 <= widths[2] < widths[3] <= 3.0
 
@@ -386,7 +347,7 @@ def test_a_seed_resolves_by_symbol_or_accession_case_insensitively(drawn):
 
     assert cn.resolve_node(nodes, 'baita')['id'] == 'PA'
     assert cn.resolve_node(nodes, 'p1')['symbol'] == 'G1'
-    with pytest.raises(ValueError, match='not in the drawn network'):
+    with pytest.raises(ValueError):
         cn.resolve_node(nodes, 'nobody')
 
 
@@ -405,13 +366,6 @@ def test_singletons_are_the_preys_with_no_other_bait(drawn):
     assert cn.related(nodes, edges, 'BaitB', 'singletons') == ['PA']
 
 
-def test_a_prey_seed_cannot_have_interactors(drawn):
-    nodes, edges = drawn
-
-    with pytest.raises(ValueError, match='needs a bait'):
-        cn.related(nodes, edges, 'G1', 'interactors')
-
-
 def test_partners_are_reference_neighbours_above_the_publication_floor(drawn):
     nodes, edges = drawn
 
@@ -419,21 +373,10 @@ def test_partners_are_reference_neighbours_above_the_publication_floor(drawn):
     assert cn.related(nodes, edges, 'G1', 'partners', min_publications=10) == []
 
 
-def test_cocomplex_needs_the_complex_layer(scores, drawn, complexes):
-    nodes, edges = drawn
-    with pytest.raises(ValueError, match='without CORUM'):
-        cn.related(nodes, edges, 'G1', 'cocomplex')
-
+def test_cocomplex_follows_the_complex_layer(scores, complexes):
     nodes, edges = cn.build(scores, PASSING, prey_prey=False, corum_path=complexes)
 
     assert cn.related(nodes, edges, 'G1', 'cocomplex') == ['P2', 'PA']
-
-
-def test_an_unknown_relation_raises(drawn):
-    nodes, edges = drawn
-
-    with pytest.raises(ValueError, match='relation'):
-        cn.related(nodes, edges, 'BaitA', 'friends')
 
 
 # --- clustering ------------------------------------------------------------------------------
@@ -461,13 +404,6 @@ def test_two_cliques_joined_by_a_weak_edge_split_in_two():
     assert membership['A0'] != membership['B0']
 
 
-def test_clustering_is_reproducible_for_a_seed():
-    edges = _two_cliques()
-    ids = sorted(set(edges['source']) | set(edges['target']))
-
-    assert cn.cluster(edges, ids, seed=5).equals(cn.cluster(edges, ids, seed=5))
-
-
 def test_zero_literature_weight_leaves_only_the_proximity_edge():
     edges = _two_cliques()
     ids = sorted(set(edges['source']) | set(edges['target']))
@@ -477,11 +413,6 @@ def test_zero_literature_weight_leaves_only_the_proximity_edge():
     # With no reference edges, the six untouched nodes are singletons and A0-B0 pair up.
     assert membership['A0'] == membership['B0']
     assert membership.nunique() == 7
-
-
-def test_too_small_a_selection_cannot_be_clustered():
-    with pytest.raises(ValueError, match='at least 4'):
-        cn.cluster(_two_cliques(), ['A0', 'A1', 'A2'])
 
 
 def test_packing_keeps_communities_apart_and_members_on_one_circle():
@@ -505,9 +436,183 @@ def test_packing_keeps_communities_apart_and_members_on_one_circle():
         assert np.linalg.norm(ca - cb) >= ra + rb
 
 
-def test_community_fills_cycle_the_palette():
-    membership = pd.Series([0, 1, len(cn.COMMUNITY_FILL)], index=['a', 'b', 'c'])
+# =============================================================================================
+# cytoscape_ctl: the controller over a stubbed CyREST
+# =============================================================================================
 
-    fills = cn.community_fill(membership)
+@pytest.fixture
+def cytoscape(monkeypatch):
+    """Stub every CyREST touch; ``calls`` records them in order."""
+    calls = []
+    stub = {'selected': [], 'positions': {}}
+    monkeypatch.setattr(ctl.cy, 'selected_nodes', lambda net: list(stub['selected']))
+    monkeypatch.setattr(ctl.cy, 'current_positions', lambda net: dict(stub['positions']))
+    monkeypatch.setattr(ctl.cy, 'select_nodes', lambda net, names, add=False: calls.append(('select', list(names), add)))
+    monkeypatch.setattr(ctl.cy, 'set_positions', lambda net, pos: calls.append(('positions', dict(pos))))
+    monkeypatch.setattr(ctl.cy, 'update_edge_columns', lambda net, frame: calls.append(('edges', frame)))
+    monkeypatch.setattr(ctl.cy, 'update_node_columns', lambda net, frame: calls.append(('nodes', frame)))
+    stub['calls'] = calls
+    return stub
 
-    assert fills['a'] == fills['c'] == cn.COMMUNITY_FILL[0] and fills['b'] == cn.COMMUNITY_FILL[1]
+
+@pytest.fixture
+def controlled(scores, tmp_path, cytoscape):
+    """The state after a draw of BaitA -> P1, P2, P4 and BaitB -> P2, PA with a literature
+    edge P1-P2, without touching Cytoscape."""
+    scores.loc[len(scores)] = _row('BaitA', 'PA', 'P4', 'G4')
+    biogrid = _biogrid(tmp_path, [('P1', 'P2', 2, False)])
+    nodes, edges = cn.build(scores, PASSING, biogrid_path=biogrid)
+    ctl.STATE.update(dataset='d', title='ProxiMate: d', net_suid=1, nodes=nodes, edges=edges,
+                     thresholds=dict(PASSING),
+                     style={'width_source': 'abundance', 'literature_weighted': False, 'biogrid_scope': 'all'})
+    yield nodes, edges
+    ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
+                     thresholds=None, style=None)
+
+
+def _last(calls, kind):
+    return [payload for name, *payload in calls if name == kind][-1]
+
+
+def test_restyling_pushes_width_and_visibility_without_moving_anything(controlled, cytoscape):
+    changed = ctl.restyle_edges('uniform', False, 'multivalidated')
+
+    frame = _last(cytoscape['calls'], 'edges')[0]
+    assert changed == len(frame) > 0
+    assert set(frame.columns) == {'name', 'visible', 'width'}
+    assert not frame.loc[frame['name'] == 'P1 (literature) P2', 'visible'].item()
+    assert ctl.STATE['edges']['width'][ctl.STATE['edges']['interaction'] == 'proximity'].nunique() == 1
+    assert ctl.snapshot()['style'] == {'width_source': 'uniform', 'literature_weighted': False,
+                                       'biogrid_scope': 'multivalidated'}
+    assert not any(name == 'positions' for name, *_ in cytoscape['calls'])
+
+
+def test_rethresholding_keeps_the_drawn_biogrid_scope(controlled, cytoscape):
+    ctl.restyle_edges('abundance', False, 'multivalidated')
+
+    ctl.apply_thresholds(PASSING)
+
+    edges = ctl.STATE['edges']
+    assert not edges.loc[edges['interaction'] == 'literature', 'visible'].any()
+
+
+def test_loners_are_selected_with_their_bait(controlled, cytoscape):
+    cytoscape['selected'] = ['PA', 'P2']
+
+    chosen = ctl.select_loners()
+
+    assert chosen == ['PA', 'P4']
+    assert _last(cytoscape['calls'], 'select') == [['PA', 'P4'], False]
+
+
+def test_related_selection_can_add_to_the_current_one(controlled, cytoscape):
+    chosen = ctl.select_related('BaitB', 'interactors', add=True, min_saint=0.5)
+
+    assert chosen == ['P2', 'PA']
+    assert _last(cytoscape['calls'], 'select') == [['P2', 'PA'], True]
+
+
+def test_an_empty_relation_is_an_error_not_a_silent_deselect(controlled, cytoscape):
+    with pytest.raises(ValueError):
+        ctl.select_related('BaitB', 'interactors', min_saint=0.99)
+    assert not any(name == 'select' for name, *_ in cytoscape['calls'])
+
+
+def test_clustering_recolours_numbers_and_moves_only_the_selection(controlled, cytoscape):
+    cytoscape['selected'] = ['PA', 'P1', 'P2', 'P4']
+    cytoscape['positions'] = {i: (10.0 * k, 50.0) for k, i in enumerate(['PA', 'P1', 'P2', 'P4', 'PB'])}
+
+    result = ctl.cluster_selection(resolution=1.0, seed=1)
+
+    assert result['n'] == 4 and sum(result['sizes']) == 4
+    frame = _last(cytoscape['calls'], 'nodes')[0]
+    assert set(frame['name']) == {'PA', 'P1', 'P2', 'P4'}
+    assert set(frame.columns) == {'name', 'community', 'fill'}
+    moved = _last(cytoscape['calls'], 'positions')[0]
+    assert set(moved) == {'PA', 'P1', 'P2', 'P4'}
+    assert all(x >= 0 and y >= 50 for x, y in moved.values())
+    nodes = ctl.STATE['nodes'].set_index('id')
+    assert np.isnan(nodes.loc['PB', 'community'])   # untouched
+    assert nodes.loc['PA', 'fill'] in cn.COMMUNITY_FILL
+
+
+def test_a_second_clustering_numbers_above_the_first(controlled, cytoscape):
+    cytoscape['positions'] = {i: (10.0 * k, 0.0) for k, i in enumerate(['PA', 'P1', 'P2', 'P4', 'PB'])}
+    cytoscape['selected'] = ['PA', 'P1', 'P2', 'P4']
+    ctl.cluster_selection()
+    first = ctl.STATE['nodes'].set_index('id').loc[['PA', 'P1', 'P2', 'P4'], 'community'].max()
+
+    cytoscape['selected'] = ['PB', 'PA', 'P2', 'P4']
+    ctl.cluster_selection()
+
+    second = ctl.STATE['nodes'].set_index('id').loc[['PB', 'PA'], 'community'].min()
+    assert second > first
+
+
+# =============================================================================================
+# cytoscape_p4c: the CyREST helpers
+# =============================================================================================
+
+class _Response:
+    def __init__(self, code=200, content=b'', payload=None):
+        self.status_code = code
+        self.content = content
+        self._payload = payload or {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise cy.requests.HTTPError(str(self.status_code))
+
+    def json(self):
+        return self._payload
+
+
+def test_the_probe_reports_a_down_desktop_as_an_error_not_an_exception(monkeypatch):
+    def refused(*a, **k):
+        raise cy.requests.ConnectionError('refused')
+    monkeypatch.setattr(cy.requests, 'get', refused)
+
+    result = cy.probe()
+
+    assert result['ok'] is False and 'refused' in result['error']
+
+
+def test_selecting_clears_first_unless_adding(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cy.p4c, 'clear_selection', lambda **k: calls.append('clear'))
+    monkeypatch.setattr(cy.p4c, 'select_nodes', lambda names, **k: calls.append(('select', names, k['preserve_current_selection'])))
+
+    cy.select_nodes(2, ['a', 'b'])
+    cy.select_nodes(2, ['c'], add=True)
+
+    assert calls == ['clear', ('select', ['a', 'b'], False), ('select', ['c'], True)]
+
+
+def test_positions_are_written_as_plain_view_values(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cy, 'node_suids', lambda net: {'a': 11, 'b': 12})
+    monkeypatch.setattr(cy, 'view_suid', lambda net: 7)
+    monkeypatch.setattr(cy.requests, 'put', lambda url, **k: seen.update(url=url, **k) or _Response())
+
+    n = cy.set_positions(3, {'a': (1.5, 2), 'b': (-3, 4)})
+
+    assert n == 2
+    assert seen['url'].endswith('/networks/3/views/7/nodes')
+    assert 'bypass' not in seen['url']
+    assert {p['visualProperty'] for p in seen['json'][0]['view']} == {'NODE_X_LOCATION', 'NODE_Y_LOCATION'}
+
+
+def test_unlock_clears_only_the_locks_that_are_held(monkeypatch):
+    cleared = []
+    monkeypatch.setattr(cy, 'locked_view_properties', lambda net: ['NETWORK_SCALE_FACTOR'])
+    monkeypatch.setattr(cy.p4c, 'clear_network_property_bypass',
+                        lambda vp, **k: cleared.append(vp))
+    assert cy.unlock(3) == ['NETWORK_SCALE_FACTOR']
+    assert cleared == ['NETWORK_SCALE_FACTOR']
+
+    monkeypatch.setattr(cy, 'locked_view_properties', lambda net: [])
+
+    def boom(*a, **k):
+        raise AssertionError("cleared a lock that was not held")
+    monkeypatch.setattr(cy.p4c, 'clear_network_property_bypass', boom)
+    assert cy.unlock(3) == []

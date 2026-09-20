@@ -115,8 +115,8 @@ _SAINT_INPUT_FILES = (
 
 # Edge attributes offered to Cytoscape, in output order; limited to those
 # present in the dataset.
-_CYTOSCAPE_ATTRS = ('SaintScore', 'BFDR', 'FoldChange', 'WD', 'WDFDR',
-                    'AvgIntensity', 'In.BioGRID')
+CYTOSCAPE_ATTRS = ('SaintScore', 'BFDR', 'FoldChange', 'WD', 'WDFDR',
+                   'AvgIntensity', 'In.BioGRID')
 
 PRESETS = {p.key: p for p in (
     Preset('ed', 'Experimental Design', 'table', ('ED.csv',),
@@ -215,7 +215,7 @@ def build_cytoscape_edges(df, thresholds):
         'source': filtered['Experiment.ID'],
         'target': filtered[_target_gene_column(filtered)],
     })
-    for col in _CYTOSCAPE_ATTRS:
+    for col in CYTOSCAPE_ATTRS:
         if col in filtered.columns:
             edges[col] = filtered[col].values
     return edges

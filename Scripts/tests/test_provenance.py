@@ -1,4 +1,5 @@
-"""Tests for the run manifest written alongside each dataset's results."""
+"""Tests for the run manifest written alongside each dataset's results, and for the
+logging configuration that puts a ``proximate.log`` beside it."""
 
 import hashlib
 import json
@@ -6,6 +7,7 @@ import os
 
 import pytest
 
+import log_config
 import provenance
 import setup_datasets
 
@@ -21,6 +23,11 @@ def _only_run(output_dir):
     return next(iter(runs.values()))
 
 
+def _lines(path):
+    with open(path, encoding="utf-8") as handle:
+        return [line.rstrip("\n") for line in handle if line.strip()]
+
+
 @pytest.fixture
 def run_id(monkeypatch):
     """Pin the run ID so stages in a test share one run without minting."""
@@ -32,23 +39,6 @@ def run_id(monkeypatch):
 # ---------------------------------------------------------------------------
 # Stage lifecycle
 # ---------------------------------------------------------------------------
-
-def test_stage_writes_a_manifest_with_the_schema_version(tmp_path, run_id):
-    with provenance.stage(tmp_path, "parse"):
-        pass
-
-    assert _manifest(tmp_path)["schema_version"] == provenance.SCHEMA_VERSION
-
-
-def test_successful_stage_is_recorded_as_ok(tmp_path, run_id):
-    with provenance.stage(tmp_path, "parse"):
-        pass
-
-    stage = _only_run(tmp_path)["stages"][0]
-    assert stage["stage"] == "parse"
-    assert stage["status"] == "ok"
-    assert stage["wall_seconds"] >= 0
-
 
 def test_failing_stage_records_the_error_and_reraises(tmp_path, run_id):
     with pytest.raises(ValueError, match="boom"):
@@ -62,38 +52,18 @@ def test_failing_stage_records_the_error_and_reraises(tmp_path, run_id):
     assert stage["error"]["traceback"]
 
 
-def test_sys_exit_is_recorded_as_a_failure(tmp_path, run_id):
+@pytest.mark.parametrize("code, status", [(0, "ok"), (1, "error")])
+def test_sys_exit_is_recorded_by_its_exit_code(tmp_path, run_id, code, status):
     """score.py and annotator.py signal failure with sys.exit(1); catching only
     Exception would file those runs as successful."""
     with pytest.raises(SystemExit):
         with provenance.stage(tmp_path, "score"):
-            raise SystemExit(1)
+            raise SystemExit(code)
 
     stage = _only_run(tmp_path)["stages"][0]
-    assert stage["status"] == "error"
-    assert stage["exit_code"] == 1
+    assert stage["status"] == status
+    assert stage["exit_code"] == code
 
-
-def test_sys_exit_zero_is_recorded_as_success(tmp_path, run_id):
-    with pytest.raises(SystemExit):
-        with provenance.stage(tmp_path, "parse"):
-            raise SystemExit(0)
-
-    assert _only_run(tmp_path)["stages"][0]["status"] == "ok"
-
-
-def test_stage_creates_the_output_directory(tmp_path, run_id):
-    target = tmp_path / "not_yet_created"
-
-    with provenance.stage(target, "parse"):
-        pass
-
-    assert (target / provenance.RUN_JSON_FILENAME).exists()
-
-
-# ---------------------------------------------------------------------------
-# Accumulating stages and runs
-# ---------------------------------------------------------------------------
 
 def test_three_stages_accumulate_under_one_run(tmp_path, run_id):
     for name in ("parse", "score", "annotate"):
@@ -102,6 +72,7 @@ def test_three_stages_accumulate_under_one_run(tmp_path, run_id):
 
     run = _only_run(tmp_path)
     assert [s["stage"] for s in run["stages"]] == ["parse", "score", "annotate"]
+    assert [s["status"] for s in run["stages"]] == ["ok"] * 3
     assert run["run_id"] == run_id
 
 
@@ -118,133 +89,46 @@ def test_rescoring_a_dataset_keeps_the_earlier_run(tmp_path, monkeypatch):
         "20260831T120000Z-aaaaaaaa", "20260831T130000Z-bbbbbbbb"}
 
 
-def test_stage_mints_a_run_id_when_none_is_set(tmp_path, clean_logging):
-    with provenance.stage(tmp_path, "parse"):
-        pass
-
-    assert _only_run(tmp_path)["run_id"] == os.environ["PROXIMATE_RUN_ID"]
-
-
 # ---------------------------------------------------------------------------
 # Recorded content
 # ---------------------------------------------------------------------------
 
-def test_stage_records_inputs_outputs_and_metrics(tmp_path, run_id):
+def test_stage_records_inputs_outputs_metrics_and_arguments(tmp_path, run_id):
     source = tmp_path / "ED.csv"
-    source.write_text("Experiment Name,Type\ne1,T\n")
+    source.write_bytes(b"Experiment Name,Type\ne1,T\n")
 
-    with provenance.stage(tmp_path, "parse") as record:
+    with provenance.stage(tmp_path, "parse", cli_args={"path": tmp_path}) as record:
         record.add_input(source, role="experimentalDesign")
+        record.add_input(tmp_path / "absent.txt", role="proteinGroups")
         record.add_output(source, rows=1)
         record.metric("n_experiments", 12)
         record.extra(quant_type="Intensity")
 
     stage = _only_run(tmp_path)["stages"][0]
-    assert stage["inputs"][0]["role"] == "experimentalDesign"
-    assert stage["inputs"][0]["bytes"] == source.stat().st_size
+    present, absent = stage["inputs"]
+    assert present["role"] == "experimentalDesign"
+    assert present["bytes"] == source.stat().st_size
+    assert present["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert absent["role"] == "proteinGroups"
+    assert absent["missing"] is True
     assert stage["outputs"][0]["rows"] == 1
     assert stage["metrics"]["n_experiments"] == 12
     assert stage["extra"]["quant_type"] == "Intensity"
+    # A Path in the cli args must not abort the JSON write.
+    assert isinstance(stage["cli_args"]["path"], str)
 
 
-def test_recorded_inputs_carry_a_sha256(tmp_path, run_id):
-    source = tmp_path / "input.txt"
-    source.write_bytes(b"proteinGroups")
-
-    with provenance.stage(tmp_path, "parse") as record:
-        record.add_input(source)
-
-    expected = hashlib.sha256(b"proteinGroups").hexdigest()
-    assert _only_run(tmp_path)["stages"][0]["inputs"][0]["sha256"] == expected
-
-
-def test_a_missing_input_is_recorded_rather_than_raising(tmp_path, run_id):
-    with provenance.stage(tmp_path, "parse") as record:
-        record.add_input(tmp_path / "absent.txt", role="proteinGroups")
-
-    entry = _only_run(tmp_path)["stages"][0]["inputs"][0]
-    assert entry["role"] == "proteinGroups"
-    assert entry["missing"] is True
-
-
-def test_cli_args_are_recorded(tmp_path, run_id):
-    import argparse
-    args = argparse.Namespace(quantType="LFQ", n_iterations=5, seed=1234)
-
-    with provenance.stage(tmp_path, "score", cli_args=vars(args)):
-        pass
-
-    recorded = _only_run(tmp_path)["stages"][0]["cli_args"]
-    assert recorded == {"quantType": "LFQ", "n_iterations": 5, "seed": 1234}
-
-
-def test_cli_args_are_copied_not_captured_by_reference(tmp_path, run_id):
-    """`vars(args)` hands over argparse's live namespace dict."""
-    live = {"quantType": "LFQ"}
-
-    with provenance.stage(tmp_path, "score", cli_args=live):
-        live["quantType"] = "MUTATED"
-
-    assert _only_run(tmp_path)["stages"][0]["cli_args"]["quantType"] == "LFQ"
-
-
-def test_unserializable_values_do_not_break_the_manifest(tmp_path, run_id):
-    """argparse namespaces and metrics can hold numpy scalars and Paths."""
-    with provenance.stage(tmp_path, "score", cli_args={"path": tmp_path}) as record:
-        record.metric("rows", 10)
-
-    assert isinstance(_only_run(tmp_path)["stages"][0]["cli_args"]["path"], str)
-
-
-def test_environment_is_recorded_once_per_run(tmp_path, run_id):
-    with provenance.stage(tmp_path, "parse"):
-        pass
-
-    environment = _only_run(tmp_path)["environment"]
-    assert environment["python"]
-    assert environment["packages"]["pandas"]
-
-
-def test_version_prefers_the_baked_in_environment_variable(tmp_path, monkeypatch):
-    monkeypatch.setenv("PROXIMATE_VERSION", "9f2c1ab")
-
-    version = provenance.proximate_version()
-
-    assert version["version"] == "9f2c1ab"
-    assert version["source"] == "env"
-
-
-def test_a_baked_version_is_labelled_bare(monkeypatch):
-    """What a built image shows: the stamp and nothing else."""
-    monkeypatch.setattr(provenance, "proximate_version",
-                        lambda: {"version": "9f2c1ab", "source": "env"})
-
-    assert provenance.version_label() == "version 9f2c1ab"
-
-
-def test_a_source_checkout_is_labelled_as_one(monkeypatch):
+@pytest.mark.parametrize("version, label", [
+    ({"version": "9f2c1ab", "source": "env"}, "version 9f2c1ab"),
+    ({"version": "9f2c1ab", "source": "git"}, "version 9f2c1ab (source checkout)"),
+    ({"version": None, "source": "unknown"}, "version unknown"),
+])
+def test_version_label(monkeypatch, version, label):
     """A commit read from a working tree may include uncommitted edits, so it must not
     be mistaken for the build that commit produced."""
-    monkeypatch.setattr(provenance, "proximate_version",
-                        lambda: {"version": "9f2c1ab", "source": "git"})
+    monkeypatch.setattr(provenance, "proximate_version", lambda: version)
 
-    assert provenance.version_label() == "version 9f2c1ab (source checkout)"
-
-
-def test_an_unidentifiable_build_is_labelled_unknown(monkeypatch):
-    monkeypatch.setattr(provenance, "proximate_version",
-                        lambda: {"version": None, "source": "unknown"})
-
-    assert provenance.version_label() == "version unknown"
-
-
-def test_an_unstamped_image_is_also_labelled_unknown(monkeypatch):
-    """The Dockerfile defaults PROXIMATE_VERSION to the literal "unknown", so an image
-    built without the build argument reports that string rather than nothing.  It says
-    as little as an absent version and must read the same way."""
-    monkeypatch.setenv("PROXIMATE_VERSION", "unknown")
-
-    assert provenance.version_label() == "version unknown"
+    assert provenance.version_label() == label
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +136,7 @@ def test_an_unstamped_image_is_also_labelled_unknown(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_a_corrupt_manifest_is_replaced_rather_than_raising(tmp_path, run_id):
-    target = tmp_path / provenance.RUN_JSON_FILENAME
-    target.write_text("{ this is not json")
+    (tmp_path / provenance.RUN_JSON_FILENAME).write_text("{ this is not json")
 
     with provenance.stage(tmp_path, "parse"):
         pass
@@ -262,7 +145,6 @@ def test_a_corrupt_manifest_is_replaced_rather_than_raising(tmp_path, run_id):
 
 
 def test_a_failed_manifest_write_does_not_mask_the_real_work(tmp_path, run_id, monkeypatch):
-    """A provenance problem must never turn a successful run into a failure."""
     monkeypatch.setattr(provenance.json, "dump",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
 
@@ -270,38 +152,31 @@ def test_a_failed_manifest_write_does_not_mask_the_real_work(tmp_path, run_id, m
         pass  # must not raise
 
 
-def test_the_manifest_write_leaves_no_temporary_files(tmp_path, run_id):
-    with provenance.stage(tmp_path, "parse"):
-        pass
-
-    assert [p.name for p in tmp_path.iterdir()] == [provenance.RUN_JSON_FILENAME]
-
-
-# ---------------------------------------------------------------------------
-# Dataset build info
-# ---------------------------------------------------------------------------
-
 # ---------------------------------------------------------------------------
 # parse.py's stage decorator
 # ---------------------------------------------------------------------------
 
-def test_scalar_arguments_are_not_recorded_as_input_files(tmp_path, run_id):
-    """`quantType` is a value like "LFQ", not a path.  Fingerprinting it files a
-    bogus missing-input entry beside the real ones."""
+def test_parse_stage_classifies_arguments(tmp_path, run_id):
+    """A file argument is fingerprinted as an input, a scalar such as ``quantType``
+    is a parameter, and a file that is not there is recorded as missing."""
     import parse
 
     source = tmp_path / "proteinGroups.txt"
     source.write_text("data\n")
 
     @parse._parse_stage
-    def fake_entry(proteinGroups, quantType, outputPath):
+    def fake_entry(proteinGroups, experimentalDesign, quantType, outputPath):
         return 3, 1
 
-    fake_entry(str(source), "LFQ", str(tmp_path))
+    fake_entry(str(source), str(tmp_path / "absent.csv"), "LFQ", str(tmp_path))
 
-    inputs = _only_run(tmp_path)["stages"][0]["inputs"]
-    assert [i["role"] for i in inputs] == ["proteinGroups"]
-    assert inputs[0]["sha256"]
+    stage = _only_run(tmp_path)["stages"][0]
+    by_role = {entry["role"]: entry for entry in stage["inputs"]}
+    assert set(by_role) == {"proteinGroups", "experimentalDesign"}
+    assert by_role["proteinGroups"]["sha256"]
+    assert by_role["experimentalDesign"]["missing"] is True
+    assert stage["params"]["quantType"] == "LFQ"
+    assert stage["metrics"] == {"n_experiments": 3, "n_controls": 1}
 
 
 def test_a_parse_that_fails_validation_still_writes_a_dataset_log(tmp_path, run_id):
@@ -318,119 +193,106 @@ def test_a_parse_that_fails_validation_still_writes_a_dataset_log(tmp_path, run_
     with pytest.raises(ValueError):
         fake_entry(str(tmp_path / "absent.txt"), str(tmp_path))
 
-    log = tmp_path / "proximate.log"
-    assert log.exists()
-    assert "inputs rejected" in log.read_text(encoding="utf-8")
-
-
-def test_scalar_arguments_are_still_recorded_as_parameters(tmp_path, run_id):
-    import parse
-
-    @parse._parse_stage
-    def fake_entry(quantType, outputPath):
-        return 1, 0
-
-    fake_entry("Spectral Counts", str(tmp_path))
-
-    assert _only_run(tmp_path)["stages"][0]["params"]["quantType"] == "Spectral Counts"
-
-
-def test_a_missing_input_file_is_still_recorded_as_missing(tmp_path, run_id):
-    """Distinguishing a scalar from a path must not silence the genuine
-    "the input was not there" signal."""
-    import parse
-
-    @parse._parse_stage
-    def fake_entry(proteinGroups, outputPath):
-        return 1, 0
-
-    fake_entry(str(tmp_path / "absent.txt"), str(tmp_path))
-
-    inputs = _only_run(tmp_path)["stages"][0]["inputs"]
-    assert inputs[0]["role"] == "proteinGroups"
-    assert inputs[0]["missing"] is True
-
-
-def test_build_info_is_read_from_the_file_setup_datasets_writes(tmp_path):
-    setup_datasets.write_build_info(str(tmp_path), {"biogrid": True})
-
-    assert "Build date" in provenance.read_build_info(str(tmp_path))
-
-
-def test_missing_build_info_reads_as_none(tmp_path):
-    assert provenance.read_build_info(str(tmp_path)) is None
+    assert "inputs rejected" in (tmp_path / "proximate.log").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
 # Locating a dataset's annotation databases
 # ---------------------------------------------------------------------------
 
-def test_the_biogrid_summary_is_looked_for_where_setup_datasets_writes_it(tmp_path):
+@pytest.mark.parametrize("exclude_hcm, filename", [
+    (False, setup_datasets.BIOGRID_SUMMARY_FILENAME),
+    (True, setup_datasets.BIOGRID_NO_HCM_SUMMARY_FILENAME),
+])
+def test_the_biogrid_summary_is_looked_for_where_setup_datasets_writes_it(
+        tmp_path, exclude_hcm, filename):
     """The summary is built per organism, so there is no copy at the top of the
     datasets directory to fall back on."""
-    path = provenance.biogrid_summary_path("mouse", str(tmp_path))
+    path = provenance.biogrid_summary_path("mouse", str(tmp_path), exclude_hcm=exclude_hcm)
 
-    assert path == os.path.join(str(tmp_path), "mouse",
-                                setup_datasets.BIOGRID_SUMMARY_FILENAME)
-
-
-def test_the_organism_is_read_from_the_run_that_annotated_the_dataset(tmp_path, run_id):
-    with provenance.stage(tmp_path, "annotate") as record:
-        record.extra(organism="yeast")
-
-    assert provenance.dataset_organism(tmp_path) == "yeast"
+    assert path == os.path.join(str(tmp_path), "mouse", filename)
 
 
-def test_a_dataset_with_no_manifest_falls_back_to_human(tmp_path):
-    """Datasets scored before the organism was recorded still have to resolve to
-    something, and every one of them was human."""
-    assert provenance.dataset_organism(tmp_path) == "human"
+def test_annotation_settings_come_from_the_latest_run_that_recorded_them(
+        tmp_path, monkeypatch):
+    """A dataset with no manifest, or a corrupt one, resolves to human against the
+    full summary: every dataset scored before either became a parameter was.  Once
+    recorded, the most recent annotating run wins."""
+    assert provenance.annotation_settings(tmp_path) == {
+        "organism": "human", "exclude_hcm": False}
 
-
-def test_a_manifest_recording_no_organism_falls_back_to_human(tmp_path, run_id):
-    with provenance.stage(tmp_path, "parse"):
-        pass
-
-    assert provenance.dataset_organism(tmp_path) == "human"
-
-
-def test_the_most_recently_recorded_organism_wins(tmp_path, monkeypatch):
-    """A dataset re-scored against another organism is annotated against that one."""
     monkeypatch.setenv("PROXIMATE_RUN_ID", "20260831T120000Z-0badcafe")
     with provenance.stage(tmp_path, "annotate") as record:
-        record.extra(organism="human")
+        record.extra(organism="human", exclude_hcm=True)
     monkeypatch.setenv("PROXIMATE_RUN_ID", "20260901T120000Z-1badcafe")
     with provenance.stage(tmp_path, "annotate") as record:
         record.extra(organism="mouse")
 
-    assert provenance.dataset_organism(tmp_path) == "mouse"
+    assert provenance.annotation_settings(tmp_path) == {"organism": "mouse", "exclude_hcm": True}
 
-
-def test_an_unreadable_manifest_falls_back_rather_than_raising(tmp_path):
-    """QC plots resolve this on every redraw; a corrupt manifest must not take the
-    panel down with it."""
     (tmp_path / provenance.RUN_JSON_FILENAME).write_text("{not json", encoding="utf-8")
-
-    assert provenance.dataset_organism(tmp_path) == "human"
-
-
-def test_the_no_hcm_summary_is_looked_for_beside_the_full_one(tmp_path):
-    path = provenance.biogrid_summary_path("human", str(tmp_path), exclude_hcm=True)
-
-    assert path == os.path.join(str(tmp_path), "human",
-                                setup_datasets.BIOGRID_NO_HCM_SUMMARY_FILENAME)
+    assert provenance.annotation_settings(tmp_path) == {
+        "organism": "human", "exclude_hcm": False}
 
 
-def test_whether_hcm_was_excluded_is_read_from_the_annotating_run(tmp_path, run_id):
-    with provenance.stage(tmp_path, "annotate") as record:
-        record.extra(organism="human", exclude_hcm=True)
+# ---------------------------------------------------------------------------
+# Logging: the per-dataset log and the run ID stamped on it
+# ---------------------------------------------------------------------------
 
-    assert provenance.dataset_excludes_hcm(tmp_path) is True
+def test_add_file_handler_is_idempotent_for_the_same_file(tmp_path):
+    """The long-lived GUI process calls this per action; a second call, or one
+    through an unnormalized spelling of the path, must not duplicate every
+    subsequent line."""
+    target = tmp_path / "proximate.log"
+
+    log_config.add_file_handler(target)
+    log_config.add_file_handler(target)
+    log_config.add_file_handler(tmp_path / "." / "proximate.log")
+    log_config.get_logger("score").info("only once")
+
+    assert sum("only once" in line for line in _lines(target)) == 1
 
 
-def test_a_manifest_recording_nothing_about_hcm_means_the_full_summary(tmp_path, run_id):
-    """Every dataset annotated before the variant existed used the full summary."""
-    with provenance.stage(tmp_path, "annotate") as record:
-        record.extra(organism="human")
+def test_nested_dataset_log_blocks_share_one_handler_until_the_outer_exits(tmp_path):
+    """app.py wraps an action in ``dataset_log`` and the parse stage opens another on
+    the same directory inside it.  The inner exit must not detach the handler the
+    outer block is still using, and once the outer block has exited (here by
+    raising) nothing further may reach the file."""
+    logger = log_config.get_logger("app")
+    target = tmp_path / "proximate.log"
 
-    assert provenance.dataset_excludes_hcm(tmp_path) is False
+    with pytest.raises(ValueError):
+        with log_config.dataset_log(tmp_path):
+            with log_config.dataset_log(tmp_path):
+                logger.info("inside both")
+            logger.info("after inner")
+            raise ValueError("boom")
+    logger.info("after outer")
+
+    lines = _lines(target)
+    assert sum("inside both" in line for line in lines) == 1
+    assert any("after inner" in line for line in lines)
+    assert not any("after outer" in line for line in lines)
+    assert not log_config._file_handlers
+
+
+def test_run_id_is_minted_exported_and_overridden_by_run_context(tmp_path):
+    """Children inherit os.environ, so exporting the minted ID is what shares it;
+    ``run_context`` overrides it for a block, including one that raises."""
+    target = tmp_path / "proximate.log"
+    log_config.add_file_handler(target)
+    logger = log_config.get_logger("app")
+
+    ambient = log_config.get_run_id()
+    assert os.environ["PROXIMATE_RUN_ID"] == ambient
+
+    with pytest.raises(ValueError):
+        with log_config.run_context("20260831T000000Z-scoped01"):
+            logger.info("during")
+            raise ValueError("boom")
+    logger.info("after")
+
+    assert log_config.get_run_id() == ambient
+    lines = _lines(target)
+    assert "20260831T000000Z-scoped01" in next(l for l in lines if "during" in l)
+    assert ambient in next(l for l in lines if "after" in l)

@@ -67,6 +67,23 @@ RESULT_COLUMNS = ['Bait', 'Feature', 'Feature_type', 'k', 'n', 'K', 'M',
                   'p_value', 'enrichment', 'adj_p']
 
 
+def _feature_map(data, column):
+    """Map each prey to its feature set for one annotation column.
+
+    A prey's annotation is a property of the protein and is repeated on every one of
+    its experiment rows; rows that disagree are corrupt input and raise.
+    """
+    features = data[column].apply(split_and_clean)
+    feature_map = {}
+    for prey, feats in zip(data['Prey.ID'], features):
+        if prey in feature_map and feature_map[prey] != feats:
+            raise ValueError(
+                f"Prey {prey!r} carries conflicting {column} annotations: "
+                f"{sorted(feature_map[prey])} vs {sorted(feats)}")
+        feature_map[prey] = feats
+    return feature_map
+
+
 def process_refactored(data, columns_for_analysis, thresholds):
     """Test each bait's high-confidence preys for enrichment of each feature type.
 
@@ -86,9 +103,7 @@ def process_refactored(data, columns_for_analysis, thresholds):
 
     for column in columns_for_analysis:
         # Create a feature map for this feature type
-        feature_df = data[['Prey.ID', column]].copy()
-        feature_df.loc[:, 'list'] = feature_df[column].apply(split_and_clean)
-        feature_map = dict(zip(feature_df['Prey.ID'], feature_df['list']))
+        feature_map = _feature_map(data, column)
 
         for experiment in experiments:
             foreground = data[data['Experiment.ID'] == experiment]
