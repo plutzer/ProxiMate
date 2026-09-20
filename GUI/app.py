@@ -2898,9 +2898,10 @@ def server(input: Inputs, output: Outputs, session: Session):
             notify("Select a scored dataset first.", type="error")
             return
         dataset_path = os.path.join(out_dir, dataset_name)
-        organism = provenance.dataset_organism(dataset_path)
+        settings = provenance.annotation_settings(dataset_path)
+        organism = settings["organism"]
         biogrid_path = provenance.biogrid_summary_path(
-            organism, exclude_hcm=provenance.dataset_excludes_hcm(dataset_path))
+            organism, exclude_hcm=settings["exclude_hcm"])
         corum_path = None
         if input.cy_corum.get():
             from setup_datasets import CORUM_FILENAME, ORGANISMS

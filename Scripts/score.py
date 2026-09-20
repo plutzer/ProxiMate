@@ -23,40 +23,39 @@ SAINT_EXPRESS_INT_DEFAULT_DIR = "/bin/SAINTexpress-int_default"
 SAINT_EXPRESS_SPC_DIR = "/bin/SAINTexpress-spc"
 
 
-def _build_saint_cmd(compress_n_rep, quant_type, imputation, prey_filename):
-    """Build the SAINTexpress command vector. Filenames are relative to cwd."""
+def _select_saint(quant_type, imputation):
+    """Return (binary, prey_file) for a run.
+
+    Three SAINTexpress builds are installed.  Intensity runs with AFT imputation
+    (--imputation 1, 2 or 3) use the custom build, which reads the imputed prey file;
+    unimputed intensity runs use the stock intensity build with prey.txt.  Spectral
+    counts always use the spc build with prey.txt: imputation is not implemented for
+    them, so a request for it is reported and ignored.
+    """
     if quant_type == "Spectral Counts":
-        if imputation == "1":
+        if imputation in ("1", "2", "3"):
             logger.warning("Imputation for spectral counts not yet implemented. Running SPC SAINT without imputation...")
-        return [SAINT_EXPRESS_SPC_DIR,
-                "-L", str(compress_n_rep),
-                "filtered_interaction.txt", "prey.txt", "bait.txt"]
-
+        return SAINT_EXPRESS_SPC_DIR, "prey.txt"
     if imputation in ("1", "2", "3"):
-        return [SAINT_EXPRESS_INT_DIR,
-                "-L", str(compress_n_rep),
-                "filtered_interaction.txt", prey_filename, "bait.txt"]
-
-    return [SAINT_EXPRESS_INT_DEFAULT_DIR,
-            "-L", str(compress_n_rep),
-            "filtered_interaction.txt", prey_filename, "bait.txt"]
+        return SAINT_EXPRESS_INT_DIR, "imputed_prey.txt"
+    return SAINT_EXPRESS_INT_DEFAULT_DIR, "prey.txt"
 
 
-def _choose_prey_filename(quant_type, imputation):
-    """SAINT reads imputed_prey.txt for intensity+imputation runs; prey.txt otherwise."""
-    if quant_type != "Spectral Counts" and imputation in ("1", "2", "3"):
-        return "imputed_prey.txt"
-    return "prey.txt"
+def _build_saint_cmd(compress_n_rep, quant_type, imputation):
+    """Build the SAINTexpress command vector. Filenames are relative to cwd."""
+    binary, prey_file = _select_saint(quant_type, imputation)
+    return [binary, "-L", str(compress_n_rep),
+            "filtered_interaction.txt", prey_file, "bait.txt"]
 
 
-def _run_saint(cwd, compress_n_rep, quant_type, imputation, prey_filename):
+def _run_saint(cwd, compress_n_rep, quant_type, imputation):
     """Invoke SAINTexpress in `cwd`. Writes list.txt there. Exits on failure.
 
     Returns the command vector, whose first element is the SAINTexpress build
     that ran — three are installed, and which one produced a result is not
     otherwise recoverable from the output.
     """
-    saint_cmd = _build_saint_cmd(compress_n_rep, quant_type, imputation, prey_filename)
+    saint_cmd = _build_saint_cmd(compress_n_rep, quant_type, imputation)
     logger.info("SAINTexpress command (cwd=%s): %s", cwd, " ".join(saint_cmd))
     p = subprocess.run(saint_cmd, cwd=cwd, capture_output=True, text=True)
     if p.returncode != 0:
@@ -281,7 +280,7 @@ def _score(args, record):
         logger.exception("Failed to parse experimental design for grouping decision")
         sys.exit(1)
 
-    prey_filename = _choose_prey_filename(args.quantType, args.imputation)
+    _, prey_filename = _select_saint(args.quantType, args.imputation)
     use_imputed_prey = (prey_filename == "imputed_prey.txt")
     record.extra(prey_file=prey_filename, use_imputed_prey=use_imputed_prey,
                  run_mode="grouped" if ed.is_grouped() else "legacy",
@@ -304,7 +303,7 @@ def _score(args, record):
             os.makedirs(group_dir, exist_ok=True)
             _build_group_saint_inputs(args.scoreInputs, group_dir, ed, group, use_imputed_prey)
             saint_cmd = _run_saint(group_dir, args.compress_n_rep, args.quantType,
-                                   args.imputation, prey_filename)
+                                   args.imputation)
 
             df = pd.read_csv(os.path.join(group_dir, "list.txt"), sep="\t")
             df["source_group"] = group
@@ -339,7 +338,7 @@ def _score(args, record):
     else:
         logger.info("Running SAINTexpress (quantType=%s, imputation=%s)...", args.quantType, args.imputation)
         saint_cmd = _run_saint(args.scoreInputs, args.compress_n_rep, args.quantType,
-                               args.imputation, prey_filename)
+                               args.imputation)
         record.extra(saint_binary=saint_cmd[0], saint_cmd=saint_cmd)
 
     ########################################################################################################################

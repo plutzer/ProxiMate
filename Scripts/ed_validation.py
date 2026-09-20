@@ -7,7 +7,6 @@ clear, early feedback about file format and content issues.
 
 import pandas as pd
 import os
-import re
 from log_config import get_logger
 from ed_exceptions import (
     EDFileNotFoundError,
@@ -25,9 +24,15 @@ from ed_exceptions import (
     FPMissingColumnError,
     EDPGMismatchError
 )
+from experimental_design import GROUP_WILDCARD, _parse_group_cell
+from protein_groups import apply_column_aliases, get_quant_col_prefix
 
 
-GROUP_WILDCARD = "*"
+# Non-run columns of DIA-NN's report.pg_matrix.tsv; every other column is an MS run.
+DIANN_METADATA_COLUMNS = frozenset({
+    "Protein.Group", "Protein.Names", "Genes", "First.Protein.Description",
+    "N.Sequences", "N.Proteotypic.Sequences",
+})
 
 # Non-run columns of Pioneer's protein_groups_wide.tsv. Pioneer's output schema
 # policy may omit some of them; every other column is an MS run.
@@ -35,10 +40,44 @@ PIONEER_METADATA_COLUMNS = frozenset({
     "species", "gene_names", "protein_names", "protein", "target", "entrap_id",
     "global_pg_score", "global_qval",
 })
-_GROUP_INT_PATTERN = re.compile(r"^[1-9][0-9]*$")
+
+# Non-sample columns of FragPipe's combined_protein.tsv.
+FRAGPIPE_METADATA_COLUMNS = frozenset({
+    "Protein", "Protein ID", "Entry Name", "Gene", "Protein Length",
+    "Organism", "Protein Existence", "Description",
+    "Protein Probability", "Top Peptide Probability",
+    "Combined Total Peptides", "Combined Spectral Count",
+    "Combined Unique Spectral Count", "Combined Total Spectral Count",
+    "Indistinguishable Proteins",
+})
+
+# FragPipe sample columns are "<sample><suffix>"; ordered longest-first so that
+# " Total Spectral Count" is not read as sample "X Total" with " Spectral Count".
+FRAGPIPE_QUANT_SUFFIXES = (
+    " Unique Spectral Count", " Total Spectral Count",
+    " MaxLFQ Intensity", " Spectral Count", " Intensity",
+)
+
+CSV_ENCODINGS = ('utf-8', 'utf-8-sig', 'latin-1', 'cp1252')
 
 
 logger = get_logger(__name__)
+
+
+def read_csv_any_encoding(filepath):
+    """Read a CSV exported from Excel or R, trying each of CSV_ENCODINGS in turn.
+
+    Returns the first non-empty frame; raises ValueError when no encoding yields one.
+    """
+    last_err = None
+    for encoding in CSV_ENCODINGS:
+        try:
+            df = pd.read_csv(filepath, encoding=encoding)
+            if not df.empty:
+                return df
+        except UnicodeDecodeError as e:
+            last_err = e
+    raise ValueError(f"Could not read {filepath} as a non-empty CSV: {last_err}")
 
 
 class EDValidator:
@@ -66,27 +105,12 @@ class EDValidator:
         Returns the DataFrame if successful.
         """
         try:
-            # Try reading with different encodings
-            df = None
-            for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
-                try:
-                    df = pd.read_csv(filepath, encoding=encoding)
-                    if not df.empty:
-                        break
-                except UnicodeDecodeError:
-                    continue
-
-            if df is None or df.empty:
-                raise EDFileEmptyError(filepath)
-
-            return df
-
-        # A file with no data rows is empty, not malformed.  The catch-all below
-        # would relabel it as a format error and send the user looking for one.
-        except EDFileEmptyError:
-            raise
+            return read_csv_any_encoding(filepath)
         except pd.errors.ParserError as e:
             raise EDFileFormatError(f"CSV parsing error: {str(e)}")
+        except ValueError:
+            # No encoding yielded a data row: the file is empty, not malformed.
+            raise EDFileEmptyError(filepath)
         except Exception as e:
             raise EDFileFormatError(f"Unexpected error reading file: {str(e)}")
 
@@ -100,35 +124,26 @@ class EDValidator:
     @classmethod
     def validate_column_values(cls, df):
         """Validate data within each column"""
-        # Check for empty values in required columns
+        # Row numbers are reported as the spreadsheet shows them: 1-based, after the header.
         for col in cls.REQUIRED_COLUMNS:
             null_mask = df[col].isnull() | (df[col].astype(str).str.strip() == '')
             if null_mask.any():
-                # Get row indices (1-based for user display)
-                row_indices = [idx + 2 for idx in df.index[null_mask].tolist()]  # +2 for header row + 0-based indexing
-                raise EDMissingValueError(col, row_indices)
+                raise EDMissingValueError(col, [idx + 2 for idx in df.index[null_mask]])
 
-        # Validate Type column
         invalid_types = df[~df['Type'].isin(cls.VALID_TYPES)]
         if len(invalid_types) > 0:
-            # Get row indices (1-based for user display)
-            row_indices = [idx + 2 for idx in invalid_types.index.tolist()]
-            raise EDInvalidTypeError(row_indices)
+            raise EDInvalidTypeError([idx + 2 for idx in invalid_types.index])
 
-        # Validate Replicate column
         invalid_rows = []
         for idx, val in df['Replicate'].items():
             try:
-                int_val = int(val)
-                if int_val <= 0:
-                    invalid_rows.append(idx + 2)  # 1-based + header row
+                if int(val) <= 0:
+                    invalid_rows.append(idx + 2)
             except (ValueError, TypeError):
-                invalid_rows.append(idx + 2)  # 1-based + header row
-
+                invalid_rows.append(idx + 2)
         if invalid_rows:
             raise EDInvalidReplicateError(invalid_rows)
 
-        # Check for duplicate Experiment Names
         duplicates = df[df.duplicated(subset=['Experiment Name'], keep=False)]['Experiment Name'].unique().tolist()
         if duplicates:
             raise EDDuplicateExperimentError(duplicates)
@@ -143,107 +158,58 @@ class EDValidator:
         if "Group" not in df.columns:
             return
 
-        # Parse each row's cell into (row_number, type, parsed_spec) or collect per-category errors.
-        invalid_value_rows = []
-        test_multi_rows = []
-        test_wildcard_rows = []
-        wildcard_mix_rows = []
-
-        parsed = []  # list of (row_number, type, spec) where spec: None | "*" | frozenset[int]
-
+        # (row_number, type, spec) per row, where spec is None | "*" | frozenset[int];
+        # cells the grammar rejects are collected by reason instead.
+        parsed = []
+        malformed = {}
         for idx, row in df.iterrows():
-            row_number = idx + 2  # 1-based header + 0-based index
-            row_type = row["Type"]
-            raw = row.get("Group")
-
-            if pd.isna(raw):
-                parsed.append((row_number, row_type, None))
+            row_number = idx + 2
+            raw = None if pd.isna(row["Group"]) else row["Group"]
+            try:
+                spec = _parse_group_cell(raw)
+            except EDInvalidGroupError as e:
+                malformed.setdefault(e.reason, []).append(row_number)
                 continue
+            parsed.append((row_number, row["Type"], spec))
 
-            s = str(raw).strip()
-            if s == "":
-                parsed.append((row_number, row_type, None))
-                continue
+        test_wildcard_rows = [rn for rn, t, g in parsed if t == "T" and g == GROUP_WILDCARD]
+        test_multi_rows = [rn for rn, t, g in parsed
+                           if t == "T" and isinstance(g, frozenset) and len(g) > 1]
 
-            if s == GROUP_WILDCARD:
-                if row_type == "T":
-                    test_wildcard_rows.append(row_number)
-                parsed.append((row_number, row_type, GROUP_WILDCARD))
-                continue
-
-            tokens = [t.strip() for t in s.split(",")]
-            has_wildcard = GROUP_WILDCARD in tokens
-            explicit = [t for t in tokens if t != GROUP_WILDCARD and t != ""]
-
-            if has_wildcard and explicit:
-                wildcard_mix_rows.append(row_number)
-                parsed.append((row_number, row_type, None))
-                continue
-
-            malformed = False
-            values = set()
-            for t in explicit:
-                if not _GROUP_INT_PATTERN.match(t):
-                    invalid_value_rows.append(row_number)
-                    malformed = True
-                    break
-                values.add(int(t))
-
-            if malformed:
-                parsed.append((row_number, row_type, None))
-                continue
-
-            if not values:
-                invalid_value_rows.append(row_number)
-                parsed.append((row_number, row_type, None))
-                continue
-
-            if row_type == "T" and len(values) > 1:
-                test_multi_rows.append(row_number)
-
-            parsed.append((row_number, row_type, frozenset(values)))
-
-        # Raise errors in priority order (most actionable first)
-        if invalid_value_rows:
-            raise EDInvalidGroupError("invalid_group_value", invalid_value_rows)
-        if wildcard_mix_rows:
-            raise EDInvalidGroupError("control_wildcard_with_explicit_groups", wildcard_mix_rows)
+        # Raise in priority order (most basic problem first)
+        for reason in ("invalid_group_value", "control_wildcard_with_explicit_groups"):
+            if malformed.get(reason):
+                raise EDInvalidGroupError(reason, malformed[reason])
         if test_wildcard_rows:
             raise EDInvalidGroupError("test_row_wildcard", test_wildcard_rows)
         if test_multi_rows:
             raise EDInvalidGroupError("test_row_multi_group", test_multi_rows)
 
-        # If no row has a non-empty group, this is a legacy run (column present but unused).
-        non_empty = [p for p in parsed if p[2] is not None]
-        if not non_empty:
+        # Column present but unused: not a grouped run.
+        if all(g is None for _, _, g in parsed):
             return
 
-        # Grouped run: every test row must declare a group
-        missing_on_test = [
-            rn for (rn, t, g) in parsed
-            if t == "T" and g is None
-        ]
+        missing_on_test = [rn for rn, t, g in parsed if t == "T" and g is None]
         if missing_on_test:
             raise EDInvalidGroupError("test_row_missing_group_in_grouped_run", missing_on_test)
 
-        # Every test group must be covered by at least one control (universal or explicit)
+        # Every test group must be covered by a control (universal or explicit)
         test_groups = set()
+        explicit_ctrl_groups = set()
+        has_universal = False
         for rn, t, g in parsed:
             if t == "T" and isinstance(g, frozenset):
                 test_groups |= g
-
-        has_universal = any(t == "C" and g == GROUP_WILDCARD for (rn, t, g) in parsed)
-        explicit_ctrl_groups = set()
-        for rn, t, g in parsed:
-            if t == "C" and isinstance(g, frozenset):
+            elif t == "C" and isinstance(g, frozenset):
                 explicit_ctrl_groups |= g
+            elif t == "C" and g == GROUP_WILDCARD:
+                has_universal = True
 
         if not has_universal:
             orphans = sorted(test_groups - explicit_ctrl_groups)
             if orphans:
                 raise EDInvalidGroupError("bait_group_has_no_control", orphans)
 
-        # Non-fatal: warn about controls whose declared groups are never referenced by any test
         unreferenced = sorted(explicit_ctrl_groups - test_groups)
         if unreferenced:
             logger.warning(
@@ -267,324 +233,179 @@ class EDValidator:
         return df
 
 
-class PGValidator:
-    """Validator for proteinGroups files"""
+class _TableValidator:
+    """Existence, readability and required-column checks for a tab-separated data table.
 
-    REQUIRED_COLUMNS = ["Majority protein IDs", "Gene names", "Reverse",
-                       "Only identified by site", "Potential contaminant"]
+    Subclasses set LABEL (for messages), REQUIRED_COLUMNS, MISSING_COLUMN_ERROR and
+    HINT (what a valid file is).
+    """
+
+    LABEL = "data"
+    REQUIRED_COLUMNS = []
+    MISSING_COLUMN_ERROR = PGMissingColumnError
+    HINT = "Ensure this is a valid tab-separated table"
 
     @staticmethod
     def validate_file_exists(filepath):
-        """Check if file exists and is readable"""
         if not filepath or not os.path.exists(filepath):
             raise PGFileNotFoundError(filepath)
 
-    @staticmethod
-    def validate_file_format(filepath):
-        """
-        Try to read the proteinGroups file.
-        Returns the DataFrame if successful (just headers + few rows for speed).
-        """
+    @classmethod
+    def validate_file_format(cls, filepath):
+        """Read the header and a few rows (enough to validate, fast for large files)."""
         try:
-            # MaxQuant files are tab-separated
-            # Read just header + few rows for validation (much faster for large files)
             df = pd.read_csv(filepath, sep="\t", low_memory=False, nrows=10)
             if df.empty:
                 raise PGFileError(
-                    message="proteinGroups file is empty",
-                    user_message="The proteinGroups file is empty",
+                    message=f"{cls.LABEL} file is empty",
+                    user_message=f"The {cls.LABEL} file is empty",
                     suggestions=["Ensure the file contains data"]
                 )
             return df
-        # The empty-file error above is raised inside this try; without re-raising it
-        # first, the catch-all reports it as an unreadable file.
         except PGFileError:
             raise
         except Exception as e:
             raise PGFileError(
-                message=f"Error reading proteinGroups: {str(e)}",
-                user_message=f"Unable to read proteinGroups file",
-                suggestions=[
-                    "Ensure this is a valid MaxQuant proteinGroups.txt file",
-                    "File should be tab-separated",
-                    f"Technical details: {str(e)}"
-                ]
+                message=f"Error reading {cls.LABEL} file: {str(e)}",
+                user_message=f"Unable to read {cls.LABEL} file",
+                suggestions=[cls.HINT, "File should be tab-separated",
+                             f"Technical details: {str(e)}"]
             )
 
     @classmethod
+    def _columns(cls, df):
+        return df.columns
+
+    @classmethod
     def validate_required_columns(cls, df):
-        """Check required columns are present, under their canonical or alias names."""
-        from protein_groups import apply_column_aliases
-        columns = apply_column_aliases(df).columns
+        columns = cls._columns(df)
         missing = [col for col in cls.REQUIRED_COLUMNS if col not in columns]
         if missing:
-            raise PGMissingColumnError(missing)
+            raise cls.MISSING_COLUMN_ERROR(missing)
 
     @classmethod
-    def validate_pg_file(cls, filepath):
-        """
-        Complete validation of proteinGroups file.
-        Returns DataFrame headers if all validations pass.
-        """
+    def validate_file(cls, filepath):
         cls.validate_file_exists(filepath)
         df = cls.validate_file_format(filepath)
         cls.validate_required_columns(df)
-
         return df
 
 
-class FPValidator:
-    """Validator for FragPipe combined_protein.tsv files"""
+class PGValidator(_TableValidator):
+    """Validator for MaxQuant proteinGroups.txt"""
 
+    LABEL = "proteinGroups"
+    REQUIRED_COLUMNS = ["Majority protein IDs", "Gene names", "Reverse",
+                        "Only identified by site", "Potential contaminant"]
+    MISSING_COLUMN_ERROR = PGMissingColumnError
+    HINT = "Ensure this is a valid MaxQuant proteinGroups.txt file"
+
+    @classmethod
+    def _columns(cls, df):
+        """Required columns may appear under their MaxQuant 2.4+ alias names."""
+        return apply_column_aliases(df).columns
+
+
+class FPValidator(_TableValidator):
+    """Validator for FragPipe combined_protein.tsv"""
+
+    LABEL = "FragPipe combined_protein.tsv"
     REQUIRED_COLUMNS = ["Protein", "Protein ID", "Gene", "Protein Length"]
+    MISSING_COLUMN_ERROR = FPMissingColumnError
+    HINT = "Ensure this is a valid FragPipe combined_protein.tsv file"
 
-    @staticmethod
-    def validate_file_exists(filepath):
-        """Check if file exists and is readable"""
-        if not filepath or not os.path.exists(filepath):
-            raise PGFileNotFoundError(filepath)
 
-    @staticmethod
-    def validate_file_format(filepath):
-        """
-        Try to read the FragPipe file.
-        Returns the DataFrame if successful (just headers + few rows for speed).
-        """
-        try:
-            df = pd.read_csv(filepath, sep="\t", low_memory=False, nrows=10)
-            if df.empty:
-                raise PGFileError(
-                    message="FragPipe file is empty",
-                    user_message="The FragPipe combined_protein.tsv file is empty",
-                    suggestions=["Ensure the file contains data"]
-                )
-            return df
-        except PGFileError:
-            raise
-        except Exception as e:
-            raise PGFileError(
-                message=f"Error reading FragPipe file: {str(e)}",
-                user_message="Unable to read FragPipe file",
-                suggestions=[
-                    "Ensure this is a valid FragPipe combined_protein.tsv file",
-                    "File should be tab-separated",
-                    f"Technical details: {str(e)}"
-                ]
-            )
+class _PioneerValidator(_TableValidator):
+    LABEL = "Pioneer protein_groups_wide.tsv"
+    REQUIRED_COLUMNS = ["protein"]
+    HINT = "Ensure this is the protein_groups_wide.tsv written by Pioneer's SearchDIA"
 
     @classmethod
     def validate_required_columns(cls, df):
-        """Check required columns are present"""
-        missing = [col for col in cls.REQUIRED_COLUMNS if col not in df.columns]
-        if missing:
-            raise FPMissingColumnError(missing)
+        if "protein" not in df.columns:
+            raise PGFileError(
+                message="Pioneer table lacks a 'protein' column",
+                user_message="The Pioneer file has no 'protein' column",
+                suggestions=["Upload protein_groups_wide.tsv, not the precursor or long-format table"]
+            )
 
-    @classmethod
-    def validate_fp_file(cls, filepath):
-        """
-        Complete validation of FragPipe file.
-        Returns DataFrame headers if all validations pass.
-        """
-        cls.validate_file_exists(filepath)
-        df = cls.validate_file_format(filepath)
-        cls.validate_required_columns(df)
-        return df
+
+class _DiannValidator(_TableValidator):
+    LABEL = "DIA-NN matrix"
+    HINT = "Ensure this is a valid DIA-NN report.pg_matrix.tsv file"
 
 
 class EDPGCrossValidator:
-    """Cross-validation between ED and proteinGroups files"""
+    """Cross-validation between ED and the data file's experiments"""
 
     @staticmethod
-    def validate_experiment_match(ed_df, pg_df, quant_prefix):
-        """
-        Validate that experiments in ED match columns in proteinGroups.
-
-        Args:
-            ed_df: Experimental Design DataFrame
-            pg_df: proteinGroups DataFrame (just headers needed)
-            quant_prefix: Quantification prefix (e.g., "Intensity ", "LFQ intensity ")
-        """
-        # Get experiment names from ED
-        ed_experiments = set(ed_df['Experiment Name'].unique())
-
-        # Get experiment names from proteinGroups columns
-        pg_experiments = set()
-        for col in pg_df.columns:
-            if col.startswith(quant_prefix):
-                exp_name = col.replace(quant_prefix, '', 1)  # Remove prefix
-                pg_experiments.add(exp_name)
-
-        # Find mismatches
-        ed_only = sorted(list(ed_experiments - pg_experiments))
-        pg_only = sorted(list(pg_experiments - ed_experiments))
-
-        # Warn about extra experiments in data file (not an error)
-        if pg_only:
-            pg_examples = ", ".join(pg_only[:5])
-            if len(pg_only) > 5:
-                pg_examples += f" (and {len(pg_only) - 5} more)"
-            logger.warning("%d experiment(s) in proteinGroups will be ignored (not in ED): %s", len(pg_only), pg_examples)
-
-        # Error only if ED experiments are missing from data file
-        if ed_only:
-            raise EDPGMismatchError(ed_only, [])
-
-    @staticmethod
-    def validate_diann_match(ed_df, diann_df):
-        """
-        Validate that experiments in ED match columns in DIA-NN matrix.
-
-        DIA-NN columns are raw file paths/names directly.
-        """
-        # Get experiment names from ED
-        ed_experiments = set(ed_df['Experiment Name'].unique())
-
-        # Get all column names from DIA-NN except metadata columns
-        metadata_cols = ["Protein.Group", "Protein.Names", "Genes", "First.Protein.Description",
-                        "N.Sequences", "N.Proteotypic.Sequences"]
-        diann_experiments = set(col for col in diann_df.columns if col not in metadata_cols)
-
-        # Find mismatches
-        ed_only = sorted(list(ed_experiments - diann_experiments))
-        diann_only = sorted(list(diann_experiments - ed_experiments))
-
-        # Warn about extra experiments in data file (not an error)
-        if diann_only:
-            diann_examples = ", ".join(diann_only[:5])
-            if len(diann_only) > 5:
-                diann_examples += f" (and {len(diann_only) - 5} more)"
-            logger.warning("%d experiment(s) in DIA-NN will be ignored (not in ED): %s", len(diann_only), diann_examples)
-
-        # Error only if ED experiments are missing from data file
-        if ed_only:
-            raise EDPGMismatchError(ed_only, [])
-
-    @staticmethod
-    def validate_pioneer_match(ed_df, pioneer_df):
-        """
-        Validate that experiments in ED match run columns in Pioneer's protein_groups_wide.tsv.
-
-        Run columns are the MS file names without extension.
-        """
-        ed_experiments = set(ed_df['Experiment Name'].unique())
-        pioneer_experiments = set(pioneer_df.columns) - PIONEER_METADATA_COLUMNS
-
-        ed_only = sorted(ed_experiments - pioneer_experiments)
-        pioneer_only = sorted(pioneer_experiments - ed_experiments)
-
-        if pioneer_only:
-            examples = ", ".join(pioneer_only[:5])
-            if len(pioneer_only) > 5:
-                examples += f" (and {len(pioneer_only) - 5} more)"
-            logger.warning("%d run(s) in Pioneer will be ignored (not in ED): %s", len(pioneer_only), examples)
-
-        if ed_only:
-            raise EDPGMismatchError(ed_only, [])
-
-    @staticmethod
-    def validate_msstats_match(ed_df, msstats_df):
-        """
-        Validate that experiments in ED match originalRUN values in MSstats ProteinLevelData.
-        """
+    def _check(ed_df, data_experiments, source):
+        """Every design experiment must be in the data; extra data experiments are ignored."""
         ed_experiments = set(ed_df['Experiment Name'].astype(str).unique())
-        msstats_experiments = set(msstats_df['originalRUN'].astype(str).unique())
+        data_experiments = set(str(e) for e in data_experiments)
 
-        ed_only = sorted(list(ed_experiments - msstats_experiments))
-        msstats_only = sorted(list(msstats_experiments - ed_experiments))
+        data_only = sorted(data_experiments - ed_experiments)
+        if data_only:
+            examples = ", ".join(data_only[:5])
+            if len(data_only) > 5:
+                examples += f" (and {len(data_only) - 5} more)"
+            logger.warning("%d experiment(s) in %s will be ignored (not in ED): %s",
+                           len(data_only), source, examples)
 
-        if msstats_only:
-            examples = ", ".join(msstats_only[:5])
-            if len(msstats_only) > 5:
-                examples += f" (and {len(msstats_only) - 5} more)"
-            logger.warning("%d run(s) in MSstats ProteinLevelData will be ignored (not in ED): %s",
-                           len(msstats_only), examples)
-
+        ed_only = sorted(ed_experiments - data_experiments)
         if ed_only:
             raise EDPGMismatchError(ed_only, [])
 
-    @staticmethod
-    def validate_fragpipe_match(ed_df, fp_df):
-        """
-        Validate that experiments in ED match columns in FragPipe combined_protein.tsv.
+    @classmethod
+    def validate_experiment_match(cls, ed_df, pg_df, quant_prefix):
+        """proteinGroups experiments are the columns carrying `quant_prefix`."""
+        cls._check(ed_df, [col[len(quant_prefix):] for col in pg_df.columns
+                           if col.startswith(quant_prefix)], "proteinGroups")
 
-        FragPipe columns follow the pattern: {SampleName} {QuantSuffix}
-        Suffixes are stripped to extract sample names.
-        """
-        METADATA_COLS = {
-            "Protein", "Protein ID", "Entry Name", "Gene", "Protein Length",
-            "Organism", "Protein Existence", "Description",
-            "Protein Probability", "Top Peptide Probability",
-            "Combined Total Peptides", "Combined Spectral Count",
-            "Combined Unique Spectral Count", "Combined Total Spectral Count",
-            "Indistinguishable Proteins"
-        }
-        # Ordered longest-first for greedy matching
-        QUANT_SUFFIXES = [
-            " Unique Spectral Count", " Total Spectral Count",
-            " MaxLFQ Intensity", " Spectral Count", " Intensity"
-        ]
+    @classmethod
+    def validate_diann_match(cls, ed_df, diann_df):
+        """DIA-NN run columns are the raw file paths/names directly."""
+        cls._check(ed_df, set(diann_df.columns) - DIANN_METADATA_COLUMNS, "DIA-NN")
 
-        fp_experiments = set()
+    @classmethod
+    def validate_pioneer_match(cls, ed_df, pioneer_df):
+        """Pioneer run columns are the MS file names without extension."""
+        cls._check(ed_df, set(pioneer_df.columns) - PIONEER_METADATA_COLUMNS, "Pioneer")
+
+    @classmethod
+    def validate_msstats_match(cls, ed_df, msstats_df):
+        """MSstats runs are the originalRUN values."""
+        cls._check(ed_df, msstats_df['originalRUN'].unique(), "MSstats ProteinLevelData")
+
+    @classmethod
+    def validate_fragpipe_match(cls, ed_df, fp_df):
+        """FragPipe sample columns are "<sample><quant suffix>"."""
+        samples = set()
         for col in fp_df.columns:
-            if col in METADATA_COLS:
+            if col in FRAGPIPE_METADATA_COLUMNS:
                 continue
-            for suffix in QUANT_SUFFIXES:
+            for suffix in FRAGPIPE_QUANT_SUFFIXES:
                 if col.endswith(suffix):
-                    sample_name = col[:-len(suffix)]
-                    if sample_name:
-                        fp_experiments.add(sample_name)
+                    if col[:-len(suffix)]:
+                        samples.add(col[:-len(suffix)])
                     break
-
-        ed_experiments = set(ed_df['Experiment Name'].unique())
-        ed_only = sorted(list(ed_experiments - fp_experiments))
-        fp_only = sorted(list(fp_experiments - ed_experiments))
-
-        if fp_only:
-            fp_examples = ", ".join(fp_only[:5])
-            if len(fp_only) > 5:
-                fp_examples += f" (and {len(fp_only) - 5} more)"
-            logger.warning("%d experiment(s) in FragPipe will be ignored (not in ED): %s", len(fp_only), fp_examples)
-
-        if ed_only:
-            raise EDPGMismatchError(ed_only, [])
+        cls._check(ed_df, samples, "FragPipe")
 
 
 def validate_maxquant_inputs(ed_file, pg_file, quant_type):
     """
     Validate MaxQuant inputs (ED + proteinGroups).
     Returns (ed_df, pg_df_headers) if successful.
-    Raises specific exception if validation fails.
-
-    Args:
-        ed_file: Path to experimental design CSV file
-        pg_file: Path to proteinGroups.txt file
-        quant_type: Quantification type ("Intensity", "LFQ", or "Spectral Counts")
-
-    Returns:
-        tuple: (ed_df, pg_df) - Validated DataFrames
 
     Raises:
         EDFileError: If ED file has validation issues
         PGFileError: If proteinGroups file has validation issues
         EDPGMismatchError: If experiment names don't match
+        ValueError: If quant_type is not a known quantification
     """
-    # Validate ED file
     ed_df = EDValidator.validate_ed_file(ed_file)
-
-    # Validate proteinGroups file
-    pg_df = PGValidator.validate_pg_file(pg_file)
-
-    # Determine quantification prefix
-    quant_prefix_map = {
-        "Intensity": "Intensity ",
-        "LFQ": "LFQ intensity ",
-        "Spectral Counts": "MS/MS count "
-    }
-    quant_prefix = quant_prefix_map.get(quant_type, "Intensity ")
-
-    # Cross-validate
-    EDPGCrossValidator.validate_experiment_match(ed_df, pg_df, quant_prefix)
-
+    pg_df = PGValidator.validate_file(pg_file)
+    EDPGCrossValidator.validate_experiment_match(ed_df, pg_df, get_quant_col_prefix(quant_type))
     return ed_df, pg_df
 
 
@@ -592,49 +413,10 @@ def validate_diann_inputs(ed_file, diann_file):
     """
     Validate DIA-NN inputs (ED + matrix).
     Returns (ed_df, diann_df_headers) if successful.
-
-    Args:
-        ed_file: Path to experimental design CSV file
-        diann_file: Path to DIA-NN report.pg_matrix.tsv file
-
-    Returns:
-        tuple: (ed_df, diann_df) - Validated DataFrames
-
-    Raises:
-        EDFileError: If ED file has validation issues
-        PGFileError: If DIA-NN file has validation issues
-        EDPGMismatchError: If experiment names don't match
     """
-    # Validate ED file
     ed_df = EDValidator.validate_ed_file(ed_file)
-
-    # Validate DIA-NN file
-    try:
-        diann_df = pd.read_csv(diann_file, sep="\t", nrows=10)  # Just headers + few rows
-        if diann_df.empty:
-            raise PGFileError(
-                message="DIA-NN matrix is empty",
-                user_message="The DIA-NN matrix file is empty",
-                suggestions=["Ensure the file contains data"]
-            )
-    # As above: the empty-matrix error is raised inside this try and must not be
-    # rewritten by the catch-all.
-    except PGFileError:
-        raise
-    except Exception as e:
-        raise PGFileError(
-            message=f"Error reading DIA-NN matrix: {str(e)}",
-            user_message=f"Unable to read DIA-NN matrix file",
-            suggestions=[
-                "Ensure this is a valid DIA-NN report.pg_matrix.tsv file",
-                "File should be tab-separated",
-                f"Technical details: {str(e)}"
-            ]
-        )
-
-    # Cross-validate
+    diann_df = _DiannValidator.validate_file(diann_file)
     EDPGCrossValidator.validate_diann_match(ed_df, diann_df)
-
     return ed_df, diann_df
 
 
@@ -642,110 +424,48 @@ def validate_pioneer_inputs(ed_file, pioneer_file):
     """
     Validate Pioneer inputs (ED + protein_groups_wide.tsv).
     Returns (ed_df, pioneer_df_headers) if successful.
-
-    Raises:
-        EDFileError: If ED file has validation issues
-        PGFileError: If the Pioneer table is unreadable, empty, or lacks a 'protein' column
-        EDPGMismatchError: If experiment names don't match
     """
     ed_df = EDValidator.validate_ed_file(ed_file)
-
-    try:
-        pioneer_df = pd.read_csv(pioneer_file, sep="\t", nrows=10)
-        if pioneer_df.empty:
-            raise PGFileError(
-                message="Pioneer table is empty",
-                user_message="The Pioneer protein_groups_wide.tsv file is empty",
-                suggestions=["Ensure the file contains data"]
-            )
-    except PGFileError:
-        raise
-    except Exception as e:
-        raise PGFileError(
-            message=f"Error reading Pioneer table: {str(e)}",
-            user_message="Unable to read Pioneer protein_groups_wide.tsv file",
-            suggestions=[
-                "Ensure this is the protein_groups_wide.tsv written by Pioneer's SearchDIA",
-                "File should be tab-separated",
-                f"Technical details: {str(e)}"
-            ]
-        )
-
-    if "protein" not in pioneer_df.columns:
-        raise PGFileError(
-            message="Pioneer table lacks a 'protein' column",
-            user_message="The Pioneer file has no 'protein' column",
-            suggestions=["Upload protein_groups_wide.tsv, not the precursor or long-format table"]
-        )
-
+    pioneer_df = _PioneerValidator.validate_file(pioneer_file)
     EDPGCrossValidator.validate_pioneer_match(ed_df, pioneer_df)
-
     return ed_df, pioneer_df
+
+
+MSSTATS_REQUIRED_COLUMNS = ["Protein", "originalRUN", "GROUP", "SUBJECT", "LABEL", "LogIntensities"]
 
 
 def validate_msstats_inputs(ed_file, msstats_file):
     """
     Validate MSstats inputs (ED + ProteinLevelData.csv).
-    Returns (ed_df, msstats_df) if successful.
-
-    Args:
-        ed_file: Path to experimental design CSV file
-        msstats_file: Path to MSstats ProteinLevelData.csv file
-
-    Returns:
-        tuple: (ed_df, msstats_df) - Validated DataFrames
-
-    Raises:
-        EDFileError: If ED file has validation issues
-        PGFileError: If MSstats file has validation issues
-        EDPGMismatchError: If experiment names don't match
+    Returns (ed_df, msstats_df) if successful; the whole table is read, since its
+    runs are rows rather than columns.
     """
     ed_df = EDValidator.validate_ed_file(ed_file)
 
     if not msstats_file or not os.path.exists(msstats_file):
         raise PGFileNotFoundError(msstats_file)
 
-    if os.path.getsize(msstats_file) == 0:
+    try:
+        msstats_df = read_csv_any_encoding(msstats_file)
+    except Exception as e:
         raise PGFileError(
-            message="MSstats ProteinLevelData file is empty",
-            user_message="The MSstats ProteinLevelData.csv file is empty",
-            suggestions=["Ensure the file contains data from MSstats::dataProcess()"]
-        )
-
-    msstats_df = None
-    last_err = None
-    for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
-        try:
-            msstats_df = pd.read_csv(msstats_file, encoding=encoding)
-            if not msstats_df.empty:
-                break
-        except UnicodeDecodeError as e:
-            last_err = e
-            continue
-        except Exception as e:
-            last_err = e
-            break
-
-    if msstats_df is None or msstats_df.empty:
-        raise PGFileError(
-            message=f"Error reading MSstats ProteinLevelData: {last_err}",
+            message=f"Error reading MSstats ProteinLevelData: {e}",
             user_message="Unable to read MSstats ProteinLevelData.csv file",
             suggestions=[
                 "Ensure this is a valid ProteinLevelData CSV produced by MSstats::dataProcess()",
                 "File should be comma-separated",
-                f"Technical details: {last_err}"
+                f"Technical details: {e}"
             ]
         )
 
-    required = ["Protein", "originalRUN", "GROUP", "SUBJECT", "LABEL", "LogIntensities"]
-    missing = [c for c in required if c not in msstats_df.columns]
+    missing = [c for c in MSSTATS_REQUIRED_COLUMNS if c not in msstats_df.columns]
     if missing:
         raise PGFileError(
             message=f"MSstats ProteinLevelData missing columns: {missing}",
             user_message=f"The MSstats ProteinLevelData.csv file is missing required column(s): {', '.join(missing)}",
             suggestions=[
                 "Ensure the file is the ProteinLevelData output from MSstats::dataProcess()",
-                f"Required columns: {', '.join(required)}",
+                f"Required columns: {', '.join(MSSTATS_REQUIRED_COLUMNS)}",
             ]
         )
 
@@ -758,20 +478,8 @@ def validate_fragpipe_inputs(ed_file, fp_file):
     """
     Validate FragPipe inputs (ED + combined_protein.tsv).
     Returns (ed_df, fp_df_headers) if successful.
-
-    Args:
-        ed_file: Path to experimental design CSV file
-        fp_file: Path to FragPipe combined_protein.tsv file
-
-    Returns:
-        tuple: (ed_df, fp_df) - Validated DataFrames
-
-    Raises:
-        EDFileError: If ED file has validation issues
-        PGFileError: If FragPipe file has validation issues
-        EDPGMismatchError: If experiment names don't match
     """
     ed_df = EDValidator.validate_ed_file(ed_file)
-    fp_df = FPValidator.validate_fp_file(fp_file)
+    fp_df = FPValidator.validate_file(fp_file)
     EDPGCrossValidator.validate_fragpipe_match(ed_df, fp_df)
     return ed_df, fp_df

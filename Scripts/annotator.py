@@ -10,21 +10,11 @@ import time
 import subprocess
 import provenance
 from log_config import get_logger, add_file_handler
+# Organism registry (taxonomy IDs and per-organism database flags) is owned by
+# setup_datasets, which builds the annotation databases this module reads.
+from setup_datasets import ORGANISMS
 
 logger = get_logger(__name__)
-
-# Supported organisms for ProxiMate annotation.
-# To add a new organism:
-#   1. Add an entry here with its NCBI Taxonomy ID and feature flags
-#   2. Sync this config in both setup_datasets.py and Scripts/annotator.py
-#   3. Add the organism to the GUI dropdown in GUI/app.py (scoring panel)
-#   4. If the organism has a species-specific database (like HPA for human),
-#      add a download function in setup_datasets.py and conditional logic below
-ORGANISMS = {
-    "human": {"organism_id": 9606, "has_hpa": True, "has_corum": True, "has_hcm": True},
-    "mouse": {"organism_id": 10090, "has_hpa": False, "has_corum": False, "has_hcm": False},
-    "yeast": {"organism_id": 559292, "has_hpa": False, "has_corum": False, "has_hcm": False},
-}
 
 def get_first_SCL(item):
     if pd.isnull(item):

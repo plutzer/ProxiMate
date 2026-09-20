@@ -21,20 +21,19 @@ run that otherwise succeeded.
 """
 
 import copy
-import getpass
 import hashlib
 import json
 import os
 import platform
-import socket
 import subprocess
-import sys
 import tempfile
 import time
 import traceback
 from datetime import datetime, timezone
 
 from log_config import get_logger, get_run_id
+from setup_datasets import (BIOGRID_NO_HCM_SUMMARY_FILENAME, BIOGRID_SUMMARY_FILENAME,
+                            BUILD_INFO_FILENAME)
 
 logger = get_logger(__name__)
 
@@ -46,9 +45,6 @@ DEFAULT_DATASETS_DIR = "/Datasets"
 # Recorded for every run so a result can be reproduced against the same stack.
 TRACKED_PACKAGES = ("pandas", "numpy", "scipy", "statsmodels", "scikit-learn",
                     "matplotlib", "shiny", "plotly")
-
-# Hashing a very large input costs more than the provenance is worth.
-MAX_HASH_BYTES = 2 * 1024 * 1024 * 1024
 
 # Only the tail of a traceback is worth keeping; the rest is noise in a manifest.
 MAX_TRACEBACK_CHARS = 4000
@@ -130,18 +126,8 @@ def _package_versions():
 
 def environment_snapshot():
     """Describe the interpreter and stack this run executed on."""
-    try:
-        user = getpass.getuser()
-    except (KeyError, OSError):
-        # No password-file entry for the container's UID.
-        user = None
     return {
         "python": platform.python_version(),
-        "platform": platform.platform(),
-        "hostname": socket.gethostname(),
-        "user": user,
-        "executable": sys.executable,
-        "argv": [str(a) for a in sys.argv],
         "packages": _package_versions(),
     }
 
@@ -166,11 +152,6 @@ def file_record(path, role=None, rows=None):
     entry["mtime_utc"] = datetime.fromtimestamp(
         os.path.getmtime(path), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    if size > MAX_HASH_BYTES:
-        entry["sha256"] = None
-        entry["hash_skipped"] = "too_large"
-        return entry
-
     try:
         digest = hashlib.sha256()
         with open(path, "rb") as handle:
@@ -184,12 +165,7 @@ def file_record(path, role=None, rows=None):
 
 
 def read_build_info(datasets_dir=DEFAULT_DATASETS_DIR):
-    """Return the annotation datasets' build stamp, or None if absent.
-
-    The filename comes from ``setup_datasets`` so the two stay in step.
-    """
-    from setup_datasets import BUILD_INFO_FILENAME
-
+    """Return the annotation datasets' build stamp, or None if absent."""
     try:
         with open(os.path.join(datasets_dir, BUILD_INFO_FILENAME), encoding="utf-8") as handle:
             return handle.read()
@@ -202,47 +178,34 @@ def biogrid_summary_path(organism, datasets_dir=None, exclude_hcm=False):
 
     The summary is filtered by taxonomy id, so each organism gets its own; there is no
     copy at the top of the datasets directory.  ``exclude_hcm`` selects the variant with
-    Human Cell Map evidence removed.  The filenames come from ``setup_datasets`` so the
-    two stay in step.
+    Human Cell Map evidence removed.
     """
-    from setup_datasets import BIOGRID_NO_HCM_SUMMARY_FILENAME, BIOGRID_SUMMARY_FILENAME
-
     if datasets_dir is None:
         datasets_dir = DEFAULT_DATASETS_DIR
     filename = BIOGRID_NO_HCM_SUMMARY_FILENAME if exclude_hcm else BIOGRID_SUMMARY_FILENAME
     return os.path.join(datasets_dir, organism, filename)
 
 
-def dataset_organism(output_dir, default="human"):
-    """The organism a dataset's results were annotated against.
+def annotation_settings(output_dir):
+    """The organism and BioGRID variant a dataset's results were annotated against.
 
-    Falls back to ``default`` for a dataset whose manifest records none, which covers
-    every run scored before the organism became a parameter.
-    """
-    return _annotation_setting(output_dir, "organism", default)
-
-
-def dataset_excludes_hcm(output_dir):
-    """Whether a dataset was annotated against the BioGRID summary without Human Cell
-    Map evidence.  A manifest that records nothing means the full summary was used."""
-    return _annotation_setting(output_dir, "exclude_hcm", False)
-
-
-def _annotation_setting(output_dir, key, default):
-    """The last value of ``key`` recorded in any stage's ``extra`` of the manifest.
-
-    A manifest that cannot be read yields ``default``: callers resolve these to draw a
-    plot, and an unreadable manifest is not a reason to fail one.
+    Returns ``{"organism": ..., "exclude_hcm": ...}`` from the last stage of the
+    manifest that recorded each.  A dataset whose manifest records no organism is
+    human, which covers every run scored before the organism became a parameter;
+    one recording nothing about HCM was annotated against the full summary.  A
+    manifest that cannot be read yields the same defaults: callers resolve these
+    to draw a plot, and an unreadable manifest is not a reason to fail one.
     """
     document = _load(os.path.join(str(output_dir), RUN_JSON_FILENAME))
 
-    value = default
+    settings = {"organism": "human", "exclude_hcm": False}
     for run in document["runs"].values():
         for entry in run.get("stages", []):
             extra = entry.get("extra", {})
-            if key in extra:
-                value = extra[key]
-    return value
+            for key in settings:
+                if key in extra:
+                    settings[key] = extra[key]
+    return settings
 
 
 def _load(manifest_path):

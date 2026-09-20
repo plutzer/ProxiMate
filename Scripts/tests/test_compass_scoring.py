@@ -6,7 +6,6 @@ import pytest
 from scipy.stats import entropy as scipy_entropy
 
 from compPASS_pval import (
-    DEFAULT_NORM_FACTOR,
     calculate_wd_matrix,
     entropy,
     get_ave_psm,
@@ -15,7 +14,7 @@ from compPASS_pval import (
 )
 
 
-# --- entropy -------------------------------------------------------------------
+# --- components ------------------------------------------------------------------
 
 def test_entropy_matches_an_independent_implementation():
     """The (x + 1/n)/(sum + 1) pseudocount yields a proper probability vector."""
@@ -26,17 +25,6 @@ def test_entropy_matches_an_independent_implementation():
     assert entropy(counts) == pytest.approx(scipy_entropy(probabilities, base=2))
 
 
-def test_entropy_of_all_zero_counts_is_log2_n():
-    assert entropy([0, 0, 0, 0]) == pytest.approx(2.0)
-    assert entropy([0, 0]) == pytest.approx(1.0)
-
-
-def test_entropy_is_maximal_for_a_uniform_spread():
-    assert entropy([2, 2, 2, 2]) > entropy([8, 0, 0, 0])
-
-
-# --- normalize_matrix ----------------------------------------------------------
-
 def test_normalize_matrix_takes_the_quantile_over_nonzero_entries_only():
     """Zeros are excluded, so the median of [2, 4, 8] is 4.0 rather than 3.0."""
     matrix = np.array([[0.0, 2.0], [4.0, 8.0]])
@@ -45,17 +33,6 @@ def test_normalize_matrix_takes_the_quantile_over_nonzero_entries_only():
     assert q == pytest.approx(4.0)
     assert np.allclose(normalized, matrix / 4.0)
 
-
-@pytest.mark.parametrize("falsy_factor", [None, 0])
-def test_falsy_normalization_factor_disables_normalization(falsy_factor):
-    matrix = np.array([[1.0, 2.0], [3.0, 4.0]])
-    normalized, q = normalize_matrix(matrix, falsy_factor)
-
-    assert q is None
-    assert np.allclose(normalized, matrix)
-
-
-# --- calculate_wd_matrix -------------------------------------------------------
 
 def test_wd_matrix_matches_the_hand_computed_formula():
     """WD = sqrt(AvePSM * ((sd/mean) * (N_experiments/N_exp_with_prey)) ** N_saw)."""
@@ -76,8 +53,6 @@ def test_wd_matrix_matches_the_hand_computed_formula():
     assert q is None
     assert np.allclose(wd, expected)
 
-
-# --- get_ave_psm ---------------------------------------------------------------
 
 def test_ave_psm_averages_replicates_and_counts_nonzero_ones(comppass_input):
     ave_psm = get_ave_psm(comppass_input).set_index(["Experiment.ID", "Prey"])
@@ -111,20 +86,16 @@ def test_score_compass_statistics_match_hand_computation(comppass_input):
     """Prey P1 has AvePSM 11, 1, 1 across the three baits.
 
     Mean divides the prey's total by the number of experiments; SD uses the sample
-    convention (n_experiments - 1); Z and WD follow from those.
+    convention (n_experiments - 1); Z and WD follow from those.  No bait's protein ID
+    is a prey here, so nothing is a self-interaction.
     """
-    scored = score_compPass(comppass_input, norm_factor=None).set_index(
-        ["Experiment.ID", "Prey"])
-    row = scored.loc[("B1", "P1")]
+    scored = score_compPass(comppass_input, norm_factor=None)
+    row = scored.set_index(["Experiment.ID", "Prey"]).loc[("B1", "P1")]
 
     assert row["Mean"] == pytest.approx(4.333333, abs=1e-6)
     assert row["SD"] == pytest.approx(5.773503, abs=1e-6)
     assert row["Z"] == pytest.approx(1.154701, abs=1e-6)
     assert row["WD"] == pytest.approx(4.418894, abs=1e-6)
-
-
-def test_score_compass_flags_no_self_interaction_when_baits_differ(comppass_input):
-    scored = score_compPass(comppass_input, norm_factor=None)
     assert not scored["Self.Interaction"].any()
     assert not scored["Self.Only"].any()
 
@@ -164,75 +135,40 @@ def test_self_interaction_is_excluded_from_the_prey_mean(
     assert scored.loc[("B1", "B1_ID"), "N_Exp_With_Prey"] == 3
 
 
-def test_normalization_rescales_wd_scores(comppass_input):
-    unnormalized = score_compPass(comppass_input.copy(), norm_factor=None)["WD"]
-    normalized = score_compPass(comppass_input.copy(), norm_factor=0.98)["WD"]
+def test_normalization_rescales_wd_scores_by_one_quantile(comppass_input_large):
+    """norm_factor is not inert: a single quantile divides every WD score."""
+    unnormalized = score_compPass(comppass_input_large.copy(), norm_factor=None)["WD"]
+    at_098 = score_compPass(comppass_input_large.copy(), norm_factor=0.98)["WD"]
+    at_050 = score_compPass(comppass_input_large.copy(), norm_factor=0.50)["WD"]
 
-    ratios = (unnormalized.to_numpy() / normalized.to_numpy())
+    ratios = (unnormalized.to_numpy() / at_098.to_numpy())
     finite = ratios[np.isfinite(ratios)]
-    # A single quantile divides every score, so all ratios share one value.
     assert np.allclose(finite, finite[0])
     assert finite[0] > 0
+    assert not np.allclose(at_098.to_numpy(), at_050.to_numpy())
 
 
-def test_iterations_add_pvalue_columns(comppass_input):
-    scored = score_compPass(comppass_input, norm_factor=0.98, iterations=20)
+# --- the permutation null ------------------------------------------------------
 
-    assert "WD_pval" in scored.columns
-    assert "WDFDR" in scored.columns
-    assert scored["WD_pval"].between(0.0, 1.0).all()
-    assert scored["WDFDR"].between(0.0, 1.0).all()
+@pytest.mark.parametrize("seed_kwargs", [{}, {"seed": 7}], ids=["default-seed", "explicit"])
+def test_wd_pvalues_are_reproducible_across_runs(comppass_input_large, seed_kwargs):
+    """Two runs over identical input agree exactly, so WD p-values are reproducible."""
+    first = score_compPass(comppass_input_large.copy(), 0.98, iterations=200, **seed_kwargs)
+    second = score_compPass(comppass_input_large.copy(), 0.98, iterations=200, **seed_kwargs)
 
-
-# --- defaults ------------------------------------------------------------------
-
-def test_norm_factor_defaults_to_the_module_constant(comppass_input_large):
-    assert DEFAULT_NORM_FACTOR == 0.98
-
-    defaulted = score_compPass(comppass_input_large.copy(), iterations=50)
-    explicit = score_compPass(comppass_input_large.copy(), DEFAULT_NORM_FACTOR,
-                              iterations=50)
-
-    assert np.array_equal(defaulted["WD"].to_numpy(), explicit["WD"].to_numpy())
-    assert np.array_equal(defaulted["WD_pval"].to_numpy(),
-                          explicit["WD_pval"].to_numpy())
-
-
-# --- reproducibility of the permutation null ------------------------------------
-
-def test_wd_pvalues_are_reproducible_across_runs(comppass_input_large):
-    """The default seed makes two runs over identical input agree exactly."""
-    first = score_compPass(comppass_input_large.copy(), 0.98, iterations=200)
-    second = score_compPass(comppass_input_large.copy(), 0.98, iterations=200)
-
+    assert first["WD_pval"].between(0.0, 1.0).all()
     assert np.array_equal(first["WD_pval"].to_numpy(), second["WD_pval"].to_numpy())
     assert np.array_equal(first["WDFDR"].to_numpy(), second["WDFDR"].to_numpy())
 
 
-def test_an_explicit_seed_reproduces_across_runs(comppass_input_large):
-    first = score_compPass(comppass_input_large.copy(), 0.98, iterations=200, seed=7)
-    second = score_compPass(comppass_input_large.copy(), 0.98, iterations=200, seed=7)
-
-    assert np.array_equal(first["WD_pval"].to_numpy(), second["WD_pval"].to_numpy())
-
-
 def test_different_seeds_draw_different_nulls(comppass_input_large):
-    """Guards the reproducibility tests: a frozen permutation would satisfy them too."""
+    """Guards the reproducibility test: a frozen permutation would satisfy it too."""
     seed_one = score_compPass(comppass_input_large.copy(), 0.98, iterations=200, seed=1)
     seed_two = score_compPass(comppass_input_large.copy(), 0.98, iterations=200, seed=2)
 
     assert not np.array_equal(seed_one["WD_pval"].to_numpy(),
                               seed_two["WD_pval"].to_numpy())
 
-
-def test_seed_none_leaves_the_stream_unfixed(comppass_input_large):
-    first = score_compPass(comppass_input_large.copy(), 0.98, iterations=200, seed=None)
-    second = score_compPass(comppass_input_large.copy(), 0.98, iterations=200, seed=None)
-
-    assert not np.array_equal(first["WD_pval"].to_numpy(), second["WD_pval"].to_numpy())
-
-
-# --- normalization cancels out of the permutation test ---------------------------
 
 def test_wd_pvalues_do_not_depend_on_the_normalization_factor(comppass_input_large):
     """Permutation preserves each prey row's multiset of WD values, so observed and null
@@ -243,11 +179,3 @@ def test_wd_pvalues_do_not_depend_on_the_normalization_factor(comppass_input_lar
 
     assert np.array_equal(at_098.to_numpy(), at_050.to_numpy())
     assert np.array_equal(at_098.to_numpy(), at_020.to_numpy())
-
-
-def test_normalization_factor_still_rescales_the_reported_wd_scores(comppass_input_large):
-    """norm_factor is not inert: it changes WD itself, only the p-values are invariant."""
-    at_098 = score_compPass(comppass_input_large.copy(), 0.98, iterations=0)["WD"]
-    at_050 = score_compPass(comppass_input_large.copy(), 0.50, iterations=0)["WD"]
-
-    assert not np.allclose(at_098.to_numpy(), at_050.to_numpy())

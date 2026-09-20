@@ -45,22 +45,14 @@ def parse_intensity_string(intensity_str):
     Returns:
     --------
     list of float
-        Numeric intensity values (missing values excluded)
+        Numeric intensity values (missing values excluded).  An entry that is neither
+        a number nor a placeholder raises ValueError.
     """
     if pd.isnull(intensity_str):
         return []
 
-    values = str(intensity_str).split('|')
-    numeric_values = []
-    for v in values:
-        v = v.strip()
-        if v != '.' and v != '':
-            try:
-                numeric_values.append(float(v))
-            except ValueError:
-                continue
-
-    return numeric_values
+    values = [v.strip() for v in str(intensity_str).split('|')]
+    return [float(v) for v in values if v != '.' and v != '']
 
 
 def load_and_filter_bait_data(dataset_name, bait_name, thresholds, out_dir="/Outputs"):
@@ -295,6 +287,42 @@ def calculate_volcano_data(dataset_name, bait_a, bait_b, thresholds_a, threshold
     return volcano[columns]
 
 
+# Presence/absence strips flank the central volcano: positive log2 FC means higher
+# in bait A, so A-only preys sit on the right (panel 3) and B-only on the left (panel 1).
+SIDE_PANELS = ((1, 'b_only'), (3, 'a_only'))
+
+
+def volcano_panels(volcano_data, bait_a, bait_b):
+    """Yield ``(panel, category, points, x, y)`` for every non-empty category trace.
+
+    ``panel`` is 1 (only in bait B), 2 (shared, the central volcano) or 3 (only in
+    bait A).  Central traces take x = log2 fold change and y = -log10 adjusted p; side
+    traces take a fixed-seed jitter for x and -log10 BFDR for y, so the strip layout is
+    stable across redraws of the same data.  Categories come in draw order, background
+    first.
+    """
+    rng = np.random.default_rng(0)
+    shared = volcano_data[volcano_data['status'] == 'shared']
+    for category in CATEGORY_ORDER:
+        points = shared[shared['category'] == category]
+        if len(points):
+            yield 2, category, points, points['log2_fc_ratio'], points['neg_log10_pval']
+    for panel, status in SIDE_PANELS:
+        strip = volcano_data[volcano_data['status'] == status]
+        for category in CATEGORY_ORDER:
+            points = strip[strip['category'] == category]
+            if len(points):
+                yield (panel, category, points,
+                       rng.uniform(-0.4, 0.4, len(points)), points['neg_log10_bfdr'])
+
+
+def _hover_text(panel, points, bait_a, bait_b):
+    if panel == 2:
+        return [_shared_hover_text(row, bait_a, bait_b) for _, row in points.iterrows()]
+    bait, mean_column = (bait_b, 'mean_intensity_b') if panel == 1 else (bait_a, 'mean_intensity_a')
+    return [_side_hover_text(row, bait, mean_column) for _, row in points.iterrows()]
+
+
 def _shared_hover_text(row, bait_a, bait_b):
     return (
         f"<b>{row['First_Prey_Gene']}</b><br>"
@@ -323,8 +351,8 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
 
     Three panels: the central volcano holds preys quantified under both baits
     (x = log2 fold change of means, y = -log10 BH-adjusted p); narrow flanking
-    jitter strips hold the presence/absence preys (left = only in bait A,
-    right = only in bait B) with y = -log10(BFDR) under the bait where present.
+    jitter strips hold the presence/absence preys (left = only in bait B,
+    right = only in bait A) with y = -log10(BFDR) under the bait where present.
 
     Parameters:
     -----------
@@ -355,72 +383,29 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
         )
         return fig
 
-    # Strip sides follow the fold-change axis: positive log2 FC means higher in
-    # bait A, so A-only preys sit on the right and B-only preys on the left.
     fig = make_subplots(
         rows=1, cols=3, column_widths=[0.15, 0.7, 0.15],
         horizontal_spacing=0.06,
         subplot_titles=(f"Only in {bait_b}", "", f"Only in {bait_a}")
     )
 
-    # Fixed jitter seed: the strip layout is stable across redraws of the same data.
-    rng = np.random.default_rng(0)
     categories_in_legend = set()
-
-    # Central volcano: shared preys
-    shared = volcano_data[volcano_data['status'] == 'shared']
-    for category in CATEGORY_ORDER:
-        cat_data = shared[shared['category'] == category]
-        if len(cat_data) == 0:
-            continue
-
-        hover_text = [_shared_hover_text(row, bait_a, bait_b)
-                      for _, row in cat_data.iterrows()]
-        categories_in_legend.add(category)
+    for panel, category, points, x, y in volcano_panels(volcano_data, bait_a, bait_b):
         fig.add_trace(go.Scatter(
-            x=cat_data['log2_fc_ratio'],
-            y=cat_data['neg_log10_pval'],
+            x=x, y=y,
             mode='markers',
             marker=dict(
                 size=8,
                 color=CATEGORY_COLORS[category],
                 line=dict(width=0.5, color='white')
             ),
-            text=hover_text,
+            text=_hover_text(panel, points, bait_a, bait_b),
             hovertemplate='%{text}<extra></extra>',
             name=category,
-            legendgroup=category
-        ), row=1, col=2)
-
-    # Flanking presence/absence strips
-    side_panels = [(1, 'b_only', bait_b, 'mean_intensity_b'),
-                   (3, 'a_only', bait_a, 'mean_intensity_a')]
-    for col, status, bait, mean_column in side_panels:
-        panel = volcano_data[volcano_data['status'] == status]
-        for category in CATEGORY_ORDER:
-            cat_data = panel[panel['category'] == category]
-            if len(cat_data) == 0:
-                continue
-
-            hover_text = [_side_hover_text(row, bait, mean_column)
-                          for _, row in cat_data.iterrows()]
-            show_legend = category not in categories_in_legend
-            categories_in_legend.add(category)
-            fig.add_trace(go.Scatter(
-                x=rng.uniform(-0.4, 0.4, len(cat_data)),
-                y=cat_data['neg_log10_bfdr'],
-                mode='markers',
-                marker=dict(
-                    size=8,
-                    color=CATEGORY_COLORS[category],
-                    line=dict(width=0.5, color='white')
-                ),
-                text=hover_text,
-                hovertemplate='%{text}<extra></extra>',
-                name=category,
-                legendgroup=category,
-                showlegend=show_legend
-            ), row=1, col=col)
+            legendgroup=category,
+            showlegend=category not in categories_in_legend
+        ), row=1, col=panel)
+        categories_in_legend.add(category)
 
     # Reference lines on the central panel
     fig.add_vline(x=0, line_dash="dash", line_color="gray", line_width=1,
@@ -552,21 +537,12 @@ def create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b):
     ax_center = fig.add_subplot(grid[0, 1])
     ax_right = fig.add_subplot(grid[0, 2])
 
-    # Same fixed jitter seed as the interactive plot
-    rng = np.random.default_rng(0)
-
-    # Central volcano: shared preys
-    shared = volcano_data[volcano_data['status'] == 'shared']
-    for category in CATEGORY_ORDER:
-        cat_data = shared[shared['category'] == category]
-        if len(cat_data) == 0:
-            continue
-
-        zorder = CATEGORY_ORDER.index(category) + 1
-        ax_center.scatter(cat_data['log2_fc_ratio'], cat_data['neg_log10_pval'],
-                          c=CATEGORY_COLORS[category], s=50, alpha=0.7,
-                          edgecolors='white', linewidth=0.5,
-                          label=category, zorder=zorder)
+    axes = {1: ax_left, 2: ax_center, 3: ax_right}
+    for panel, category, points, x, y in volcano_panels(volcano_data, bait_a, bait_b):
+        axes[panel].scatter(x, y, c=CATEGORY_COLORS[category], s=50, alpha=0.7,
+                            edgecolors='white', linewidth=0.5,
+                            label=category if panel == 2 else None,
+                            zorder=CATEGORY_ORDER.index(category) + 1)
 
     ax_center.axvline(x=0, color='gray', linestyle='--', linewidth=1, zorder=0)
     ax_center.axhline(y=-np.log10(0.05), color='red', linestyle=':', linewidth=2, zorder=0)
@@ -580,22 +556,7 @@ def create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b):
     ax_center.legend(title="Category", loc='upper right', fontsize=9)
     ax_center.grid(True, alpha=0.3)
 
-    # Flanking presence/absence strips, sides matching the fold-change axis:
-    # positive log2 FC means higher in bait A, so A-only preys sit on the right.
-    side_panels = [(ax_left, 'b_only', bait_b), (ax_right, 'a_only', bait_a)]
-    for ax, status, bait in side_panels:
-        panel = volcano_data[volcano_data['status'] == status]
-        for category in CATEGORY_ORDER:
-            cat_data = panel[panel['category'] == category]
-            if len(cat_data) == 0:
-                continue
-
-            zorder = CATEGORY_ORDER.index(category) + 1
-            ax.scatter(rng.uniform(-0.4, 0.4, len(cat_data)),
-                       cat_data['neg_log10_bfdr'],
-                       c=CATEGORY_COLORS[category], s=50, alpha=0.7,
-                       edgecolors='white', linewidth=0.5, zorder=zorder)
-
+    for ax, bait in ((ax_left, bait_b), (ax_right, bait_a)):
         ax.set_xlim(-1, 1)
         ax.set_xticks([])
         ax.set_title(f"Only in {bait}", fontsize=11)

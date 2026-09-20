@@ -15,7 +15,8 @@ import numpy as np
 import pandas as pd
 
 from QC_plots import _load_biogrid_cached, apply_score_thresholds
-from download_presets import _CYTOSCAPE_ATTRS
+from cytoscape_p4c import edge_name
+from download_presets import CYTOSCAPE_ATTRS
 
 THRESHOLD_COLUMNS = ('SaintScore', 'BFDR', 'WD', 'WDFDR')
 LABEL_POLICIES = ('all', 'baits', 'none')
@@ -285,7 +286,7 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
     edges = pd.DataFrame({'source': passing[bait_col].astype(str).to_numpy(),
                           'target': passing['First_ID'].astype(str).to_numpy()})
     edges['interaction'] = 'proximity'
-    for col in (*_CYTOSCAPE_ATTRS, 'AvgSpec'):
+    for col in (*CYTOSCAPE_ATTRS, 'AvgSpec'):
         if col in passing.columns:
             edges[col] = passing[col].to_numpy()
     edges['color'] = EDGE_COLOR['proximity']
@@ -315,7 +316,7 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
 
     edges['width'] = edge_widths(edges, width_source, literature_weighted)
     edges['visible'] = True
-    edges['name'] = [f'{s} ({k}) {t}' for s, k, t in
+    edges['name'] = [edge_name(s, k, t) for s, k, t in
                      zip(edges['source'], edges['interaction'], edges['target'])]
     return nodes.reset_index(drop=True), edges
 

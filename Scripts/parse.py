@@ -9,12 +9,12 @@ from experimental_design import ExperimentalDesign
 from protein_groups import ProteinGroups
 import shutil
 import re
-import tempfile
 import provenance
 from ed_validation import (validate_maxquant_inputs, validate_diann_inputs, validate_fragpipe_inputs,
-                           validate_msstats_inputs, validate_pioneer_inputs, PIONEER_METADATA_COLUMNS)
-from ed_exceptions import ProxiMateError
-from log_config import get_logger, add_file_handler, dataset_log
+                           validate_msstats_inputs, validate_pioneer_inputs,
+                           DIANN_METADATA_COLUMNS, PIONEER_METADATA_COLUMNS, read_csv_any_encoding)
+from ed_exceptions import PGFileError
+from log_config import get_logger, dataset_log
 
 logger = get_logger(__name__)
 
@@ -59,9 +59,8 @@ def _parse_stage(fn):
             else:
                 params[name] = value
 
-        # Attach the dataset log around the whole call, not just the part after
-        # validation: an entry point that rejects its inputs never reaches its
-        # own add_file_handler, and that failure is the one most worth reading.
+        # The dataset log is attached around the whole call, validation included:
+        # a parse that rejects its inputs is the one most worth reading about.
         with dataset_log(output_path), \
                 provenance.stage(output_path, "parse",
                                  entrypoint=f"parse.{fn.__name__}",
@@ -99,6 +98,34 @@ def validate_name(s: str, datasets):
         return f"Error: Dataset name '{s}' already exists in the datasets"
     return 0
 
+
+def _write_scoring_inputs(experimentalDesign, outputPath, quant_type, source):
+    """Write the SAINT and CompPASS inputs for one dataset and return its counts.
+
+    `source` is either a path to a MaxQuant proteinGroups.txt, copied as is, or a
+    callable taking the parsed ExperimentalDesign and returning a MaxQuant-shaped
+    frame.  Either way the table the pipeline actually parsed is left in the output
+    directory as proteinGroups.txt, next to a copy of the design as ED.csv.
+    """
+    if not os.path.exists(outputPath):
+        logger.info("Creating output directory: %s", outputPath)
+        os.makedirs(outputPath)
+
+    shutil.copy(experimentalDesign, os.path.join(outputPath, "ED.csv"))
+    experimental_design = ExperimentalDesign(experimentalDesign)
+
+    pg_path = os.path.join(outputPath, "proteinGroups.txt")
+    if callable(source):
+        source(experimental_design).to_csv(pg_path, sep="\t", index=False)
+    else:
+        shutil.copy(source, pg_path)
+
+    protein_groups = ProteinGroups(experimental_design, pg_path, quant_type)
+    protein_groups.to_SAINT(outputPath)
+    protein_groups.to_CompPASS(outputPath)
+
+    return experimental_design.num_experiments, experimental_design.num_controls
+
 @_parse_stage
 def parse_ed_pg(proteinGroups, experimentalDesign, quantType, outputPath):
     """
@@ -111,40 +138,8 @@ def parse_ed_pg(proteinGroups, experimentalDesign, quantType, outputPath):
     :param outputPath: path for the output directory
     """
 
-    # VALIDATE INPUTS FIRST
-    try:
-        ed_df, pg_df = validate_maxquant_inputs(experimentalDesign, proteinGroups, quantType)
-    except ProxiMateError:
-        # Re-raise validation errors to be caught by app.py
-        raise
-
-    # Check to see if the output directory exists. If not, create it.
-    if not os.path.exists(outputPath):
-        logger.info("Creating output directory: %s", outputPath)
-        os.makedirs(outputPath)
-
-    add_file_handler(os.path.join(outputPath, "proximate.log"))
-
-    # Copy the experimental design file to the output directory
-    shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
-    shutil.copy(proteinGroups, f"{outputPath}/proteinGroups.txt")
-
-    # Parse experimental design
-    experimental_design = ExperimentalDesign(experimentalDesign)
-
-    num_expts = experimental_design.num_experiments
-    num_ctrls = experimental_design.num_controls
-
-    # num_baits, num_ctrls = experimental_design.get_num_baits(), experimental_design.get_num_ctrls()
-
-    # process MaxQuant proteinGroups
-    protein_groups = ProteinGroups(experimental_design, proteinGroups,
-                                   quantType, quantType)
-
-    protein_groups.to_SAINT(outputPath)
-    protein_groups.to_CompPASS(outputPath)
-
-    return num_expts, num_ctrls
+    validate_maxquant_inputs(experimentalDesign, proteinGroups, quantType)
+    return _write_scoring_inputs(experimentalDesign, outputPath, quantType, proteinGroups)
 
 @_parse_stage
 def parse_from_saint(bait_df, preyfile, interactionfile, outputPath):
@@ -153,11 +148,8 @@ def parse_from_saint(bait_df, preyfile, interactionfile, outputPath):
         logger.info("Creating output directory: %s", outputPath)
         os.makedirs(outputPath)
 
-    add_file_handler(os.path.join(outputPath, "proximate.log"))
-
     logger.info("Parsing SAINT inputs: prey=%s interaction=%s", preyfile, interactionfile)
 
-    # bait = pd.read_csv(baitfile, sep="\t", header=None, names=["Experiment Name", "Bait", "Type", ])
     prey = pd.read_csv(preyfile, sep="\t", header=None, names=["Prey", "Prey.Name"])
     interaction = pd.read_csv(interactionfile, sep="\t", header=None, names=["Experiment.ID", "Bait", "Prey", "Spectral.Count"])
     logger.info("Read %d preys and %d interaction rows across %d experiments",
@@ -166,11 +158,7 @@ def parse_from_saint(bait_df, preyfile, interactionfile, outputPath):
     new_ed = bait_df.copy()[["Experiment Name", "Type", "Bait", "Bait ID"]]
     # Add replicate numbers
     new_ed["Replicate"] = new_ed.groupby("Bait").cumcount() + 1
-    # new_ed["Bait ID"] = "None"
     new_ed.to_csv(os.path.join(outputPath, "ED.csv"), index=False)
-
-    # Recreate the proteinGroups file
-    # Apparently, I might not need to do this...
 
     # Recreate the to_compass file
     compass = interaction.copy()
@@ -230,9 +218,7 @@ def convert_diann_to_maxquant_format(diann_file, experimental_design):
     # Copy over the intensity columns - rename them to match MaxQuant format
     # DIA-NN columns are the raw file paths, need to add "Intensity " prefix
     for col in diann_data.columns:
-        # Skip the non-quantification columns
-        if col in ["Protein.Group", "Protein.Names", "Genes", "First.Protein.Description",
-                   "N.Sequences", "N.Proteotypic.Sequences"]:
+        if col in DIANN_METADATA_COLUMNS:
             continue
 
         # Check if this column is in the experimental design
@@ -253,54 +239,10 @@ def parse_diann(diannMatrix, experimentalDesign, quantType, outputPath):
     :param outputPath: path for the output directory
     :return: tuple of (num_experiments, num_controls)
     """
-    # VALIDATE INPUTS FIRST
-    try:
-        ed_df, diann_df = validate_diann_inputs(experimentalDesign, diannMatrix)
-    except ProxiMateError:
-        # Re-raise validation errors to be caught by app.py
-        raise
-
-    # Check to see if the output directory exists. If not, create it.
-    if not os.path.exists(outputPath):
-        logger.info("Creating output directory: %s", outputPath)
-        os.makedirs(outputPath)
-
-    add_file_handler(os.path.join(outputPath, "proximate.log"))
-
-    # Copy the experimental design file to the output directory
-    shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
-
-    # Parse experimental design
-    experimental_design = ExperimentalDesign(experimentalDesign)
-
-    num_expts = experimental_design.num_experiments
-    num_ctrls = experimental_design.num_controls
-
-    # Convert DIA-NN format to MaxQuant-like format
-    mq_format_data = convert_diann_to_maxquant_format(diannMatrix, experimental_design)
-
-    # Save converted data to a temporary file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, newline='') as tmp_file:
-        tmp_path = tmp_file.name
-        mq_format_data.to_csv(tmp_file, sep="\t", index=False)
-
-    # Copy the temporary file to the output directory as proteinGroups.txt
-    shutil.copy(tmp_path, f"{outputPath}/proteinGroups.txt")
-
-    try:
-        # Process using the standard ProteinGroups class
-        # For DIA-NN, we always use "Intensity" as the quantification type
-        protein_groups = ProteinGroups(experimental_design, tmp_path,
-                                       "Intensity", "Intensity")
-
-        protein_groups.to_SAINT(outputPath)
-        protein_groups.to_CompPASS(outputPath)
-    finally:
-        # Clean up temporary file
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-    return num_expts, num_ctrls
+    validate_diann_inputs(experimentalDesign, diannMatrix)
+    return _write_scoring_inputs(
+        experimentalDesign, outputPath, "Intensity",
+        lambda design: convert_diann_to_maxquant_format(diannMatrix, design))
 
 
 def convert_pioneer_to_maxquant_format(pioneer_file, experimental_design):
@@ -360,51 +302,9 @@ def parse_pioneer(pioneerMatrix, experimentalDesign, quantType, outputPath):
     :return: tuple of (num_experiments, num_controls)
     """
     validate_pioneer_inputs(experimentalDesign, pioneerMatrix)
-
-    if not os.path.exists(outputPath):
-        logger.info("Creating output directory: %s", outputPath)
-        os.makedirs(outputPath)
-
-    add_file_handler(os.path.join(outputPath, "proximate.log"))
-
-    shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
-
-    experimental_design = ExperimentalDesign(experimentalDesign)
-    num_expts = experimental_design.num_experiments
-    num_ctrls = experimental_design.num_controls
-
-    mq_format_data = convert_pioneer_to_maxquant_format(pioneerMatrix, experimental_design)
-
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, newline='') as tmp_file:
-        tmp_path = tmp_file.name
-        mq_format_data.to_csv(tmp_file, sep="\t", index=False)
-
-    shutil.copy(tmp_path, f"{outputPath}/proteinGroups.txt")
-
-    try:
-        protein_groups = ProteinGroups(experimental_design, tmp_path,
-                                       "Intensity", "Intensity")
-        protein_groups.to_SAINT(outputPath)
-        protein_groups.to_CompPASS(outputPath)
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-    return num_expts, num_ctrls
-
-
-def _read_msstats_csv(msstats_file):
-    """Read an MSstats ProteinLevelData.csv with the standard encoding fallback chain."""
-    last_err = None
-    for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
-        try:
-            df = pd.read_csv(msstats_file, encoding=encoding)
-            if not df.empty:
-                return df
-        except UnicodeDecodeError as e:
-            last_err = e
-            continue
-    raise ValueError(f"Could not read MSstats file {msstats_file}: {last_err}")
+    return _write_scoring_inputs(
+        experimentalDesign, outputPath, "Intensity",
+        lambda design: convert_pioneer_to_maxquant_format(pioneerMatrix, design))
 
 
 def convert_msstats_to_maxquant_format(msstats_file, experimental_design):
@@ -417,7 +317,7 @@ def convert_msstats_to_maxquant_format(msstats_file, experimental_design):
     intensities) sees a normalized intensity matrix. SAINT will re-log
     internally; that round-trip is a no-op but preserves the normalization.
     """
-    df = _read_msstats_csv(msstats_file)
+    df = read_csv_any_encoding(msstats_file)
 
     # Label-free filter
     n_heavy = int((df["LABEL"] == "H").sum())
@@ -476,25 +376,11 @@ def parse_msstats(msstatsFile, experimentalDesign, outputPath):
     and (optionally) imputed; we back-transform to linear intensities and feed
     the existing pipeline. Recommended: run scoring with --imputation 0.
     """
-    try:
-        ed_df, msstats_df = validate_msstats_inputs(experimentalDesign, msstatsFile)
-    except ProxiMateError:
-        raise
+    _, msstats_df = validate_msstats_inputs(experimentalDesign, msstatsFile)
 
     if not os.path.exists(outputPath):
-        logger.info("Creating output directory: %s", outputPath)
         os.makedirs(outputPath)
-
-    add_file_handler(os.path.join(outputPath, "proximate.log"))
-
-    shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
-    shutil.copy(msstatsFile, f"{outputPath}/ProteinLevelData.csv")
-
-    experimental_design = ExperimentalDesign(experimentalDesign)
-    num_expts = experimental_design.num_experiments
-    num_ctrls = experimental_design.num_controls
-
-    mq_format_data = convert_msstats_to_maxquant_format(msstatsFile, experimental_design)
+    shutil.copy(msstatsFile, os.path.join(outputPath, "ProteinLevelData.csv"))
 
     # QC sidecar: preserve MSstats-only columns for downstream inspection
     qc_cols = [c for c in ["Protein", "originalRUN", "GROUP", "SUBJECT",
@@ -504,23 +390,10 @@ def parse_msstats(msstatsFile, experimentalDesign, outputPath):
     if qc_cols:
         msstats_df[qc_cols].to_csv(os.path.join(outputPath, "msstats_qc.csv"), index=False)
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, newline='') as tmp_file:
-        tmp_path = tmp_file.name
-        mq_format_data.to_csv(tmp_file, sep="\t", index=False)
-
-    shutil.copy(tmp_path, f"{outputPath}/proteinGroups.txt")
-
-    try:
-        # MSstats output is always intensity-style; pin quant type accordingly.
-        protein_groups = ProteinGroups(experimental_design, tmp_path,
-                                       "Intensity", "Intensity")
-        protein_groups.to_SAINT(outputPath)
-        protein_groups.to_CompPASS(outputPath)
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-    return num_expts, num_ctrls
+    # MSstats output is always intensity-style.
+    return _write_scoring_inputs(
+        experimentalDesign, outputPath, "Intensity",
+        lambda design: convert_msstats_to_maxquant_format(msstatsFile, design))
 
 
 def convert_fragpipe_to_maxquant_format(fp_file, experimental_design, quant_type):
@@ -553,7 +426,7 @@ def convert_fragpipe_to_maxquant_format(fp_file, experimental_design, quant_type
     mq_data["Reverse"] = "-"
     mq_data["Only identified by site"] = "-"
     mq_data["Potential contaminant"] = np.where(
-        fp_data["Protein"].str.startswith("contam_"), "+", "-"
+        fp_data["Protein"].str.startswith("contam_", na=False), "+", "-"
     )
 
     # FragPipe has actual protein length (DIA-NN lacks this and sets to 1)
@@ -571,17 +444,18 @@ def convert_fragpipe_to_maxquant_format(fp_file, experimental_design, quant_type
                 mq_data[f"{mq_prefix}{sample_name}"] = fp_data[col].fillna(0)
                 matched.add(sample_name)
 
-    # A name that appears in the design but not in the file contributes no
-    # quantification at all, which is otherwise indistinguishable from a run of
-    # all-zero intensities.
-    unmatched = set(experimental_design.name2experiment) - matched
-    if unmatched:
-        logger.warning("No '%s' column in %s for %d experiment(s) in the design: %s",
-                       fp_suffix.strip(), os.path.basename(fp_file),
-                       len(unmatched), sorted(unmatched))
+    # A design experiment with no column would otherwise reach scoring as a run of
+    # all-zero intensities.  ProteinGroups rejects a partial match; the total miss,
+    # usually a quantType that does not match the export, is caught here.
     if not matched:
-        logger.error("No quantification columns matched the experimental design; "
-                     "check that quantType=%r matches the FragPipe export.", quant_type)
+        raise PGFileError(
+            message=f"No '{fp_suffix.strip()}' column in {os.path.basename(fp_file)} "
+                    f"matches any experiment in the design",
+            user_message=f"No {quant_type} columns in the FragPipe file match the "
+                         f"experimental design",
+            suggestions=[f"Check that the quantification type ({quant_type}) matches "
+                         f"what FragPipe exported",
+                         "Experiment names must match the FragPipe sample names exactly"])
     logger.info("Matched %d of %d design experiments to FragPipe columns",
                 len(matched), len(experimental_design.name2experiment))
 
@@ -598,48 +472,11 @@ def parse_fragpipe(fp_file, experimentalDesign, quantType, outputPath):
     :param outputPath: path for the output directory
     :return: tuple of (num_experiments, num_controls)
     """
-    # VALIDATE INPUTS FIRST
-    try:
-        ed_df, fp_df = validate_fragpipe_inputs(experimentalDesign, fp_file)
-    except ProxiMateError:
-        raise
-
-    if not os.path.exists(outputPath):
-        logger.info("Creating output directory: %s", outputPath)
-        os.makedirs(outputPath)
-
-    add_file_handler(os.path.join(outputPath, "proximate.log"))
-
+    validate_fragpipe_inputs(experimentalDesign, fp_file)
     logger.info("Parsing FragPipe file: %s (quantType=%s)", fp_file, quantType)
-    logger.info("FragPipe input: %d rows, %d columns", len(fp_df), len(fp_df.columns))
-
-    shutil.copy(experimentalDesign, f"{outputPath}/ED.csv")
-
-    experimental_design = ExperimentalDesign(experimentalDesign)
-    num_expts = experimental_design.num_experiments
-    num_ctrls = experimental_design.num_controls
-    logger.info("Experimental design: %d experiments (%d controls)", num_expts, num_ctrls)
-
-    mq_format_data = convert_fragpipe_to_maxquant_format(fp_file, experimental_design, quantType)
-    logger.info("Converted FragPipe to MaxQuant format: %d proteins x %d columns",
-                len(mq_format_data), len(mq_format_data.columns))
-
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, newline='') as tmp_file:
-        tmp_path = tmp_file.name
-        mq_format_data.to_csv(tmp_file, sep="\t", index=False)
-
-    shutil.copy(tmp_path, f"{outputPath}/proteinGroups.txt")
-
-    try:
-        protein_groups = ProteinGroups(experimental_design, tmp_path,
-                                       quantType, quantType)
-        protein_groups.to_SAINT(outputPath)
-        protein_groups.to_CompPASS(outputPath)
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-    return num_expts, num_ctrls
+    return _write_scoring_inputs(
+        experimentalDesign, outputPath, quantType,
+        lambda design: convert_fragpipe_to_maxquant_format(fp_file, design, quantType))
 
 def main():
 

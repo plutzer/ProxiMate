@@ -22,13 +22,14 @@ def _parse_group_cell(raw, row_context=None):
     Normalize a raw Group cell into a parsed spec.
 
     Returns one of:
-      - None: row has no group declared (empty/NaN/whitespace)
+      - None: row has no group declared (empty/whitespace)
       - "*": universal (control rows only; caller enforces)
       - frozenset({int, ...}): one or more explicit group numbers
 
     Raises EDInvalidGroupError on malformed content. `row_context` (a 1-based
     row number for user messages) is attached to the exception when provided.
     """
+    offenders = [row_context] if row_context is not None else []
     if raw is None:
         return None
     s = str(raw).strip()
@@ -42,26 +43,17 @@ def _parse_group_cell(raw, row_context=None):
     explicit = [t for t in tokens if t != GROUP_WILDCARD and t != ""]
 
     if has_wildcard and explicit:
-        raise EDInvalidGroupError(
-            "control_wildcard_with_explicit_groups",
-            [row_context] if row_context is not None else [],
-        )
+        raise EDInvalidGroupError("control_wildcard_with_explicit_groups", offenders)
 
     values = set()
     for t in explicit:
         if not _GROUP_INT_PATTERN.match(t):
-            raise EDInvalidGroupError(
-                "invalid_group_value",
-                [row_context] if row_context is not None else [],
-            )
+            raise EDInvalidGroupError("invalid_group_value", offenders)
         values.add(int(t))
 
     if not values:
         # Only whitespace/commas after stripping
-        raise EDInvalidGroupError(
-            "invalid_group_value",
-            [row_context] if row_context is not None else [],
-        )
+        raise EDInvalidGroupError("invalid_group_value", offenders)
 
     return frozenset(values)
 
