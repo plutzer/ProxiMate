@@ -10,3 +10,10 @@ CONTRIBUTING.md
 .gitignore
 .dockerignore
 .venv/
+SAINTexpress-custom/bin/
+*.o
+.github/
+SAINTexpress-custom/boost/
+SAINTexpress-custom/boostsrc/
+SAINTexpress-custom/nlopt/
+SAINTexpress-custom/nloptsrc/

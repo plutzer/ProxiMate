@@ -31,9 +31,9 @@ import requests
 #   4. If the organism has a species-specific database (like HPA for human),
 #      add a download function in setup_datasets.py and conditional logic in annotator.py
 ORGANISMS = {
-    "human": {"organism_id": 9606, "has_hpa": True, "has_corum": True},
-    "mouse": {"organism_id": 10090, "has_hpa": False, "has_corum": False},
-    "yeast": {"organism_id": 559292, "has_hpa": False, "has_corum": False},
+    "human": {"organism_id": 9606, "has_hpa": True, "has_corum": True, "has_hcm": True},
+    "mouse": {"organism_id": 10090, "has_hpa": False, "has_corum": False, "has_hcm": False},
+    "yeast": {"organism_id": 559292, "has_hpa": False, "has_corum": False, "has_hcm": False},
 }
 
 # ---------------------------------------------------------------------------
@@ -70,9 +70,14 @@ BIOGRID_MV_URL = (
 BIOGRID_ALL_FILENAME = "BIOGRID-ALL.tab3.txt"
 BIOGRID_MV_FILENAME = "BIOGRID-MV-Physical.tab3.txt"
 BIOGRID_SUMMARY_FILENAME = "biogrid_summary.csv"
+# The same summary with Human Cell Map (Go et al. 2021) evidence removed, built only for
+# organisms flagged has_hcm above.  HCM is itself a BioID screen, so proximity-labeling
+# runs scored against it look more "known" than they are.
+BIOGRID_NO_HCM_SUMMARY_FILENAME = "biogrid_summary_no_hcm.csv"
+HCM_PUBLICATION = "PUBMED:34079125"
 BIOGRID_REQUIRED_COLUMNS = {
     "Organism ID Interactor A", "Organism ID Interactor B",
-    "Experimental System Type", "SWISS-PROT Accessions Interactor A",
+    "Experimental System Type", "Publication Source", "SWISS-PROT Accessions Interactor A",
     "SWISS-PROT Accessions Interactor B",
 }
 
@@ -80,10 +85,7 @@ HPA_URL = "https://www.proteinatlas.org/download/tsv/subcellular_location.tsv.zi
 HPA_FILENAME = "subcellular_location.tsv"
 HPA_REQUIRED_COLUMNS = {"Gene name", "Main location"}
 
-CORUM_URLS = [
-    "https://mips.helmholtz-muenchen.de/corum/download/humanComplexes.txt.zip",
-    "https://mips.helmholtz-muenchen.de/corum/download/allComplexes.txt.zip",
-]
+CORUM_URL = "https://mips.helmholtz-muenchen.de/corum/download/humanComplexes.txt.zip"
 CORUM_FILENAME = "corum_humanComplexes.txt"
 CORUM_REQUIRED_COLUMNS = {"complex_name", "subunits_uniprot_id"}
 
@@ -105,19 +107,15 @@ def file_exists_and_nonempty(path: str) -> bool:
     return os.path.isfile(path) and os.path.getsize(path) > 0
 
 
-def verify_tsv_columns(
-    filepath: str,
-    required_columns: set,
-    sep: str = "\t",
-    encoding: str = "utf-8",
-) -> bool:
+def verify_tsv_columns(filepath: str, required_columns: set, encoding: str = "utf-8") -> bool:
+    """Whether the header line of a tab-separated file names every required column."""
     try:
         with open(filepath, "r", encoding=encoding) as f:
             header_line = f.readline().strip()
         if not header_line:
             log(f"  Verification: {filepath} is empty")
             return False
-        actual_columns = set(header_line.split(sep))
+        actual_columns = set(header_line.split("\t"))
         missing = required_columns - actual_columns
         if missing:
             log(f"  Verification FAILED for {os.path.basename(filepath)}")
@@ -126,7 +124,7 @@ def verify_tsv_columns(
         return True
     except UnicodeDecodeError:
         if encoding != "latin-1":
-            return verify_tsv_columns(filepath, required_columns, sep, "latin-1")
+            return verify_tsv_columns(filepath, required_columns, "latin-1")
         log(f"  Verification: Could not decode {filepath}")
         return False
     except Exception as e:
@@ -134,38 +132,11 @@ def verify_tsv_columns(
         return False
 
 
-def download_with_progress(url: str, description: str, verify_ssl: bool = True) -> bytes:
-    response = requests.get(
-        url,
-        headers={"User-Agent": USER_AGENT},
-        timeout=REQUEST_TIMEOUT,
-        stream=True,
-        verify=verify_ssl,
-    )
+def download(url: str, description: str) -> bytes:
+    response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
-
-    total = response.headers.get("Content-Length")
-    total = int(total) if total else None
-    if total:
-        log(f"  {description}: Downloading {total / 1024 / 1024:.1f} MB...")
-    else:
-        log(f"  {description}: Downloading (size unknown)...")
-
-    chunks = []
-    downloaded = 0
-    last_pct_reported = -10
-    for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
-        chunks.append(chunk)
-        downloaded += len(chunk)
-        if total:
-            pct = downloaded * 100 // total
-            if pct >= last_pct_reported + 10:
-                print(f"\r  {description}: {pct}%", end="", file=sys.stderr, flush=True)
-                last_pct_reported = pct
-    if total:
-        print(file=sys.stderr)
-
-    return b"".join(chunks)
+    log(f"  {description}: Downloaded {len(response.content) / 1024 / 1024:.1f} MB")
+    return response.content
 
 
 def extract_from_zip(content: bytes, suffix: str, target_path: str, label: str) -> bool:
@@ -211,7 +182,7 @@ def download_uniprot(organism_dir: str, force: bool, organism_name: str, organis
     url = UNIPROT_STREAM_URL_TEMPLATE.format(organism_id=organism_id)
     log(f"{label}: Downloading reviewed proteome annotations (organism_id={organism_id})...")
     try:
-        content = download_with_progress(url, label)
+        content = download(url, label)
         try:
             decompressed = gzip.decompress(content)
         except gzip.BadGzipFile:
@@ -246,7 +217,7 @@ def download_biogrid(output_dir: str, force: bool) -> bool:
             continue
         log(f"{label}: Downloading...")
         try:
-            content = download_with_progress(url, label)
+            content = download(url, label)
             if not extract_from_zip(content, ".tab3.txt", target, label):
                 log(f"{label}: Try downloading manually from https://downloads.thebiogrid.org/BioGRID")
                 all_ok = False
@@ -271,7 +242,7 @@ def download_hpa(organism_dir: str, force: bool) -> bool:
 
     log("HPA: Downloading subcellular location data...")
     try:
-        content = download_with_progress(HPA_URL, "HPA")
+        content = download(HPA_URL, "HPA")
         if not extract_from_zip(content, ".tsv", target, "HPA"):
             return False
         log(f"HPA: Written {os.path.getsize(target):,} bytes")
@@ -293,52 +264,33 @@ def download_corum(output_dir: str, force: bool) -> bool:
         return verify_tsv_columns(target, CORUM_REQUIRED_COLUMNS, encoding="latin-1")
 
     log("CORUM: Downloading human protein complexes...")
-    for url in CORUM_URLS:
-        for verify_ssl in (True, False):
-            ssl_note = "" if verify_ssl else " (without SSL verification)"
-            log(f"  Trying {url}{ssl_note}")
-            try:
-                content = download_with_progress(url, "CORUM", verify_ssl=verify_ssl)
-            except requests.exceptions.SSLError:
-                if verify_ssl:
-                    log("  CORUM: SSL error, retrying without verification...")
-                    continue
-                log("  CORUM: SSL error persists, trying next URL...")
-                break
-            except requests.RequestException as e:
-                log(f"  CORUM: Failed — {e}")
-                break  # Non-SSL error, skip to next URL
+    try:
+        content = download(CORUM_URL, "CORUM")
+    except requests.RequestException as e:
+        log(f"CORUM: Download failed — {e}")
+        log("CORUM: Please download manually from https://mips.helmholtz-muenchen.de/corum/")
+        log(f"CORUM: Save the 'Human Complexes' file as {target}")
+        return False
 
-            # Try ZIP first
-            if extract_from_zip(content, ".txt", target, "CORUM"):
-                pass
-            else:
-                log("  CORUM: Trying as plain text...")
-                with open(target, "wb") as f:
-                    f.write(content)
-
-            if file_exists_and_nonempty(target) and verify_tsv_columns(
-                target, CORUM_REQUIRED_COLUMNS, encoding="latin-1"
-            ):
-                log(f"CORUM: Written {os.path.getsize(target):,} bytes, verification passed")
-                return True
-            else:
-                log("  CORUM: Verification failed for this URL, trying next...")
-                if os.path.exists(target):
-                    os.remove(target)
-                break  # Move to next URL
-
-    log("CORUM: All download URLs failed.")
-    log("CORUM: Please download manually from https://mips.helmholtz-muenchen.de/corum/")
-    log(f"CORUM: Save the 'Human Complexes' file as {target}")
-    return False
+    if not extract_from_zip(content, ".txt", target, "CORUM"):
+        return False
+    if not verify_tsv_columns(target, CORUM_REQUIRED_COLUMNS, encoding="latin-1"):
+        log("CORUM: Column verification FAILED")
+        return False
+    log(f"CORUM: Written {os.path.getsize(target):,} bytes, verification passed")
+    return True
 
 # ---------------------------------------------------------------------------
 # Post-processing
 # ---------------------------------------------------------------------------
 
-def run_preprocess_biogrid(output_dir: str, organism_name: str, organism_id: int) -> bool:
-    """Run BioGRID preprocessing for a specific organism."""
+def run_preprocess_biogrid(output_dir: str, organism_name: str, organism_id: int,
+                           exclude_hcm: bool = False) -> bool:
+    """Run BioGRID preprocessing for a specific organism.
+
+    With ``exclude_hcm`` the summary is written under the no-HCM filename with every
+    Human Cell Map evidence row removed first.
+    """
     biogrid_all = os.path.join(output_dir, BIOGRID_ALL_FILENAME)
     biogrid_mv = os.path.join(output_dir, BIOGRID_MV_FILENAME)
 
@@ -355,17 +307,24 @@ def run_preprocess_biogrid(output_dir: str, organism_name: str, organism_id: int
     organism_dir = os.path.join(output_dir, organism_name)
     os.makedirs(organism_dir, exist_ok=True)
     label = f"BioGRID preprocessing ({organism_name})"
+    summary_filename = BIOGRID_SUMMARY_FILENAME
+    cmd = [
+        sys.executable, preprocess_script,
+        "--biogrid_all", biogrid_all,
+        "--biogrid_mv", biogrid_mv,
+        "--output_dir", organism_dir,
+        "--organism_id", str(organism_id),
+    ]
+    if exclude_hcm:
+        label = f"BioGRID preprocessing ({organism_name}, no HCM)"
+        summary_filename = BIOGRID_NO_HCM_SUMMARY_FILENAME
+        cmd += ["--exclude_publication", HCM_PUBLICATION,
+                "--output_filename", summary_filename]
 
-    log(f"{label}: Generating biogrid_summary.csv (organism_id={organism_id})...")
+    log(f"{label}: Generating {summary_filename} (organism_id={organism_id})...")
     try:
         result = subprocess.run(
-            [
-                sys.executable, preprocess_script,
-                "--biogrid_all", biogrid_all,
-                "--biogrid_mv", biogrid_mv,
-                "--output_dir", organism_dir,
-                "--organism_id", str(organism_id),
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=300,
@@ -376,11 +335,11 @@ def run_preprocess_biogrid(output_dir: str, organism_name: str, organism_id: int
                 log(f"  stderr: {result.stderr[:500]}")
             return False
 
-        summary = os.path.join(organism_dir, BIOGRID_SUMMARY_FILENAME)
+        summary = os.path.join(organism_dir, summary_filename)
         if not file_exists_and_nonempty(summary):
-            log(f"{label}: {BIOGRID_SUMMARY_FILENAME} was not created")
+            log(f"{label}: {summary_filename} was not created")
             return False
-        log(f"{label}: Generated {BIOGRID_SUMMARY_FILENAME} ({os.path.getsize(summary):,} bytes)")
+        log(f"{label}: Generated {summary_filename} ({os.path.getsize(summary):,} bytes)")
         return True
     except subprocess.TimeoutExpired:
         log(f"{label}: Timed out after 300 seconds")
@@ -391,23 +350,11 @@ def run_preprocess_biogrid(output_dir: str, organism_name: str, organism_id: int
 # ---------------------------------------------------------------------------
 
 def write_build_info(output_dir: str, results: dict) -> None:
-    """Write a build_info.txt file with download dates and status."""
+    """Write build_info.txt: the build date and each download's outcome."""
     target = os.path.join(output_dir, BUILD_INFO_FILENAME)
-    build_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    organisms_str = ", ".join(ORGANISMS.keys())
-
-    lines = [
-        "ProxiMate Dataset Build Info",
-        "=" * 40,
-        f"Build date: {build_time}",
-        f"Organisms: {organisms_str}",
-        "",
-        "Download results:",
-    ]
+    lines = [f"Build date: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}"]
     for name, success in results.items():
-        status = "OK" if success else "FAILED"
-        lines.append(f"  {name}: {status}")
-
+        lines.append(f"  {name}: {'OK' if success else 'FAILED'}")
     with open(target, "w") as f:
         f.write("\n".join(lines) + "\n")
     log(f"Build info written to {target}")
@@ -462,6 +409,10 @@ def main() -> int:
                 results[f"BioGRID preprocessing ({org_name})"] = run_preprocess_biogrid(
                     output_dir, org_name, org_config["organism_id"]
                 )
+                if org_config["has_hcm"]:
+                    results[f"BioGRID preprocessing ({org_name}, no HCM)"] = run_preprocess_biogrid(
+                        output_dir, org_name, org_config["organism_id"], exclude_hcm=True
+                    )
 
     # HPA: human only
     if "hpa" not in args.skip:

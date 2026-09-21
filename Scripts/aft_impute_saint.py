@@ -2,9 +2,11 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 import time
-from scipy.stats import lognorm
-import os
 import math
+from log_config import get_logger
+from interaction_filter import read_saint_inputs, write_filtered_interaction
+
+logger = get_logger(__name__)
 
 
 # Functions for lognormal distribution
@@ -51,20 +53,12 @@ def get_initial_params(prey_intensities):
 #### MAIN  function ####
 
 def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
-    # Read in interaction data
-    interaction = pd.read_csv(interaction_path, sep='\t',header=None)
-    # Create column names
-    interaction.columns = ['ExperimentID', 'Bait', 'Prey', 'Intensity']
+    logger.info("Prey-specific AFT %s: reading %s",
+                "imputation" if impute else "filtering (no imputation)", interaction_path)
 
-    # Read in ED data
-    ed = pd.read_csv(ed_path)
-
-    # Make a dictionary mapping all Baits to their BaitID
-    bait_dict = {}
-    baits = ed['Bait']
-    Bait_ids = ed['Bait ID']
-    for i in range(len(baits)):
-        bait_dict[baits[i]] = Bait_ids[i]
+    interaction, ed, bait_dict = read_saint_inputs(interaction_path, ed_path)
+    logger.info("Read %d interaction rows covering %d preys",
+                len(interaction), interaction['Prey'].nunique())
 
     if impute:
         # Read in prey data
@@ -200,12 +194,13 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
         if impute:
             output.to_csv(output_dir + 'imputed_params.csv', index=False)
 
-    # filter the interaction file to remove zero intensity values
-    interaction = interaction[interaction['Intensity'] > 0]
-
     if impute:
         prey_data.to_csv(output_dir + 'imputed_prey.txt', sep='\t', index=False, header=False)
-    interaction.to_csv(output_dir + 'filtered_interaction.txt', sep='\t', index=False, header=False)
+        logger.info("Wrote imputed_prey.txt (%d preys)", len(prey_data))
+
+    kept, before = write_filtered_interaction(interaction, output_dir)
+    logger.info("Wrote filtered_interaction.txt: %d of %d rows kept "
+                "(non-positive intensities dropped)", kept, before)
 
 if __name__ == '__main__':
     # This module is intended to be called from score.py via filter_impute()

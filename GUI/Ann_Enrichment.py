@@ -6,6 +6,7 @@ from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 import argparse
 from collections import Counter
+from QC_plots import apply_score_thresholds
 import matplotlib.ticker as ticker
 
 # import dash_bio
@@ -62,51 +63,86 @@ def split_and_clean(annotations):
     else:
         return set()
 
-def process_refactored(data, columns_for_analysis, threshold):
+RESULT_COLUMNS = ['Bait', 'Feature', 'Feature_type', 'k', 'n', 'K', 'M',
+                  'p_value', 'enrichment', 'adj_p']
+
+
+def _feature_map(data, column):
+    """Map each prey to its feature set for one annotation column.
+
+    A prey's annotation is a property of the protein and is repeated on every one of
+    its experiment rows; rows that disagree are corrupt input and raise.
+    """
+    features = data[column].apply(split_and_clean)
+    feature_map = {}
+    for prey, feats in zip(data['Prey.ID'], features):
+        if prey in feature_map and feature_map[prey] != feats:
+            raise ValueError(
+                f"Prey {prey!r} carries conflicting {column} annotations: "
+                f"{sorted(feature_map[prey])} vs {sorted(feats)}")
+        feature_map[prey] = feats
+    return feature_map
+
+
+def process_refactored(data, columns_for_analysis, thresholds):
+    """Test each bait's high-confidence preys for enrichment of each feature type.
+
+    ``thresholds`` names the four scores the rest of the application filters on, in the
+    form ``apply_score_thresholds`` takes; the foreground is the preys of one bait that
+    pass all of them, tested against every prey seen in the run.
+    """
     # Get the unique experiments from the data
     experiments = list(data['Experiment.ID'].unique())
-
-    # Initialize a dataframe for the results
-    results = pd.DataFrame(columns=['Bait', 'Feature', 'Feature_type', 'k','n','K','M','p_value','enrichment', 'adj_p'])
 
     # Get the unique proteins from the data
     all_proteins = set(data['Prey.ID'].unique())
 
-    for column in columns_for_analysis:
-        # Create a temporary dataframe to store results for this feature type
-        temp_df = pd.DataFrame(columns=['Bait', 'Feature', 'Feature_type', 'k','n','K','M','p_value','enrichment'])
+    # Results accumulate in a list and are concatenated once.  Concatenating onto an
+    # empty frame instead would leave the count columns as object dtype.
+    frames = []
 
+    for column in columns_for_analysis:
         # Create a feature map for this feature type
-        feature_map = {}
-        feature_df = data[['Prey.ID', column]].copy()
-        feature_df.loc[:, 'list'] = feature_df[column].apply(split_and_clean)
-        feature_map = dict(zip(feature_df['Prey.ID'], feature_df['list']))
+        feature_map = _feature_map(data, column)
 
         for experiment in experiments:
             foreground = data[data['Experiment.ID'] == experiment]
-            foreground = foreground[foreground['SaintScore'] >= threshold]
+            foreground = apply_score_thresholds(foreground, thresholds)
             foreground_ids = set(foreground['Prey.ID'].unique())
 
             result = enrich_foreground(foreground_ids, all_proteins, feature_map)
+            if result.empty:
+                continue
 
             # Add information about the bait and feature type
             result['Bait'] = experiment
             result['Feature_type'] = column
 
-            # calculate an adjusted p-value for the results
-            if len(result) > 0:
-                result['adj_p'] = multipletests(result['p_value'], method='fdr_bh')[1]
-            else:
-                continue
+            # Correction is within one bait and feature type, not across them.
+            result['adj_p'] = multipletests(result['p_value'], method='fdr_bh')[1]
 
-            # Concatenate the results to the temp_df
-            if not result.empty:
-                temp_df = pd.concat([temp_df, result], ignore_index=True)
-        
-        # Add the temp_df to the results dataframe
-        results = pd.concat([results, temp_df], ignore_index=True)
+            frames.append(result)
 
-    return results
+    if not frames:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
+
+    return pd.concat(frames, ignore_index=True)[RESULT_COLUMNS]
+
+
+MAX_LABEL_CHARS = 42
+
+
+def _truncate_label(label):
+    """Shorten a feature name to something a heatmap row can carry.
+
+    Feature names run to hundreds of characters; drawn in full they take the width the
+    map itself needs.
+    """
+    label = str(label)
+    if len(label) <= MAX_LABEL_CHARS:
+        return label
+    return label[:MAX_LABEL_CHARS - 3] + '...'
+
 
 def plot_results(results, feature_type, num_features=30):
     # Filter the results for the specific feature type
@@ -137,35 +173,48 @@ def plot_results(results, feature_type, num_features=30):
     # Convert the enrichment to log2 scale
     filtered_results = np.log2(filtered_results)
 
-    # Initialize the plot with custom size
-    # plt.figure(figsize=(10, 28))
+    # Hierarchical clustering needs at least two items on an axis; a single-bait
+    # dataset or a single passing feature otherwise makes scipy raise on an empty
+    # distance matrix.
+    grid = sns.clustermap(filtered_results, cmap='viridis', figsize=(12, 8),
+                          row_cluster=filtered_results.shape[0] > 1,
+                          col_cluster=filtered_results.shape[1] > 1,
+                          dendrogram_ratio=(0.18, 0.18), cbar_pos=None)
 
-    heatmap = sns.clustermap(filtered_results, cmap='viridis', cbar_kws={'label': 'Enrichment Score'}, figsize =  (12, 8))
-    # plt.title(f"Enrichment Analysis for {feature_type}")
-    plt.xlabel("Bait")
-    plt.ylabel("Feature")
-    heatmap.cax.set_ylabel('log2 Enrichment Score', rotation=270, labelpad=15)
+    ax = grid.ax_heatmap
+    ax.set_xlabel("Bait")
+    ax.set_ylabel("Feature")
 
-    ax = heatmap.ax_heatmap
+    # data2d holds the data in the order the clustering put it in.
+    ordered_columns = grid.data2d.columns
+    ordered_rows = grid.data2d.index
 
-    # Use the reordered DataFrame from the clustermap (data2d holds the data with proper ordering)
-    ordered_columns = heatmap.data2d.columns
-    ordered_rows = heatmap.data2d.index
-
-    # Set tick positions and labels for x-axis (baits)
     ax.set_xticks(np.arange(len(ordered_columns)) + 0.5)
     ax.set_xticklabels(ordered_columns, rotation=45, ha='right', fontsize=8)
 
-    # Set tick positions and labels for y-axis (features) with truncation
     ax.set_yticks(np.arange(len(ordered_rows)) + 0.5)
-    # Truncate long feature names to prevent cutoff
-    truncated_rows = [label[:60] + '...' if len(label) > 60 else label for label in ordered_rows]
-    ax.set_yticklabels(truncated_rows, fontsize=7)
+    ax.set_yticklabels([_truncate_label(label) for label in ordered_rows], fontsize=7)
 
-    # Adjust layout to give more space for labels
-    plt.subplots_adjust(left=0.25, bottom=0.15, right=0.95, top=0.95)
+    # The colorbar goes in the corner the two dendrograms leave empty, as a cell of the
+    # clustermap's own grid rather than as a free-floating inset: only an axes the grid
+    # owns is moved when the layout below is recomputed.
+    corner = grid.gs[0, 0].subgridspec(2, 1, height_ratios=[2, 1])
+    grid.ax_cbar = grid.cax = grid.figure.add_subplot(corner[1])
+    grid.figure.colorbar(ax.collections[0], cax=grid.cax, orientation='horizontal')
+    grid.cax.xaxis.set_ticks_position('bottom')
+    grid.cax.tick_params(labelsize=7)
+    # Anchored to the left edge of the bar rather than centered on it: the corner is
+    # narrower than the caption, and a centered caption overhangs the canvas.
+    grid.cax.set_title('log2 enrichment', loc='left', fontsize=8)
 
-    return heatmap.fig
+    # seaborn leaves a placeholder engine behind, which freezes the positions it computed
+    # for figsize above.  Shiny resizes the figure to the browser card before drawing it
+    # and only substitutes an engine of its own when there is none, so without a real one
+    # here the margins stay sized for a figure the plot is never drawn at and the labels
+    # fall off the canvas.
+    grid.figure.set_layout_engine("tight")
+
+    return grid
 
 
 def main():   
@@ -174,13 +223,21 @@ def main():
 
     parser.add_argument("--input", help="Path to the input file", required=True)
     parser.add_argument("--output", help="Path to the output directory", required=True)
-    parser.add_argument("--threshold", help="Threshold for enrichment analysis", type=float, default=0.9)
+    parser.add_argument("--threshold", help="Minimum SAINT score for the foreground",
+                        type=float, default=0.9)
+    parser.add_argument("--bfdr", help="Maximum BFDR for the foreground",
+                        type=float, default=1.0)
+    parser.add_argument("--wd", help="Minimum WD score for the foreground",
+                        type=float, default=0.0)
+    parser.add_argument("--wdfdr", help="Maximum WDFDR for the foreground",
+                        type=float, default=1.0)
 
     # Parse the arguments
     args = parser.parse_args()
     input_file = args.input
     output_dir = args.output
-    threshold = args.threshold
+    thresholds = {'SaintScore': args.threshold, 'BFDR': args.bfdr,
+                  'WD': args.wd, 'WDFDR': args.wdfdr}
 
     columns_for_analysis = ['GO_CC', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains']
 
@@ -189,7 +246,7 @@ def main():
     data = pd.read_csv(input_file, sep=",")
 
     # feature_df, results = process_data(data, columns_for_analysis, threshold)
-    results = process_refactored(data, columns_for_analysis, threshold)
+    results = process_refactored(data, columns_for_analysis, thresholds)
 
     # test = plot_results(results, 'Domains', num_features=30)
     for feature in columns_for_analysis:

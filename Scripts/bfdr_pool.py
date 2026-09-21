@@ -11,6 +11,10 @@ merged network.
 import numpy as np
 import pandas as pd
 
+from log_config import get_logger
+
+logger = get_logger(__name__)
+
 
 def recompute_bfdr(df):
     """Recompute BFDR globally across all rows using SAINT's formula.
@@ -63,4 +67,6 @@ def recompute_bfdr(df):
     bfdr = np.empty(n, dtype=float)
     bfdr[order] = bfdr_sorted
     out["BFDR"] = bfdr
+    logger.info("Re-pooled BFDR across %d merged interactions (%d at BFDR <= 0.05)",
+                n, int((bfdr <= 0.05).sum()))
     return out

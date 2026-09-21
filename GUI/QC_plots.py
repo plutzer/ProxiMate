@@ -1,3 +1,5 @@
+import os
+
 import plotly.express as px
 import pandas as pd
 import numpy as np
@@ -5,6 +7,10 @@ from sklearn.decomposition import PCA
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.metrics import roc_curve, auc
+from log_config import get_logger
+import provenance
+
+logger = get_logger(__name__)
 
 
 def apply_score_thresholds(df, thresholds):
@@ -41,7 +47,7 @@ _biogrid_cache = None
 _biogrid_cache_path = None
 
 
-def _load_biogrid_cached(biogrid_path="/Datasets/biogrid_summary.csv"):
+def _load_biogrid_cached(biogrid_path):
     """
     Load BioGRID data with caching to avoid repeated I/O.
 
@@ -65,63 +71,142 @@ def _load_biogrid_cached(biogrid_path="/Datasets/biogrid_summary.csv"):
 
         return _biogrid_cache
     except FileNotFoundError:
-        print(f"Warning: BioGRID file not found at {biogrid_path}")
+        logger.warning("BioGRID file not found at %s; known-interaction plots "
+                       "will have no reference set.", biogrid_path)
         return None
 
 
-def pca_plot(interaction, experimentalDesign):
+def read_interactions(interaction):
+    """The SAINT interaction file as a frame of Experiment, BaitName, Prey, Intensity."""
+    df = pd.read_csv(interaction, sep="\t", header=0)
+    df.columns = ['Experiment', 'BaitName', 'Prey', 'Intensity']
+    return df
 
-    int = pd.read_csv(interaction, sep="\t", header=0)
-    int.columns = ['Experiment', 'BaitName', 'Prey', 'Intensity']
-    ed = pd.read_csv(experimentalDesign, sep=",")
 
-    # ed['shared_id'] = ed['Experiment Name'] + '_' + ed['Replicate'].astype(str)
+def interaction_matrix(interaction):
+    """Prey x experiment intensity matrix from a SAINT interaction file; a prey not
+    listed under an experiment is NaN."""
+    return read_interactions(interaction).pivot(index='Prey', columns='Experiment',
+                                                values='Intensity')
 
-    # Make the int table wide
-    data = int.pivot(index='Prey', columns='Experiment', values='Intensity')
 
-    metadata = int[['Experiment', 'BaitName']].drop_duplicates()
+def prepare_pca_matrix(interaction, min_detection_frac=0.5,
+                       imputation="row_min", normalization="zscore"):
+    """Load a SAINT interaction file and return the prey x experiment matrix
+    both PCA plots run on.
 
-    metadata = metadata.merge(ed[['Experiment Name', 'Type']], left_on='Experiment', right_on='Experiment Name', how='left')
+    Zeros are treated as non-detections. Preys detected in fewer than
+    ``min_detection_frac`` of experiments are removed before imputation.
 
-    ### Now make the PCA plot....
+    imputation: 'row_min' (fill with the prey's minimum observed value),
+    'zero' (fill with 0), or 'drop' (keep only fully detected preys).
 
-    # Clean up the data
+    normalization: 'zscore' (per-prey), 'log2_zscore' (log2(x + 1) then
+    per-prey z-score; the pseudocount keeps zero-imputed values finite),
+    or 'none'. Preys with zero variance are dropped by the z-score options.
 
-    # Convert all 0 values to NaN
+    A prey still missing a value after imputation (one never detected, which 'row_min'
+    has nothing to fill from) is dropped whatever the normalization: PCA cannot take NaN.
+    """
+    data = interaction_matrix(interaction)
+
+    if len(data.columns) < 2:
+        raise ValueError(
+            f"Only {len(data.columns)} experiments in the interaction data; "
+            "PCA needs at least 2.")
+
     data = data.replace(0, np.nan)
+    data = data.dropna(thresh=len(data.columns) * min_detection_frac)
 
-    # Remove rows with more than 75% NaN values
-    data = data.dropna(thresh=len(data.columns) * 0.5)
+    if imputation == "row_min":
+        data = data.apply(lambda row: row.fillna(row.min()), axis=1)
+    elif imputation == "zero":
+        data = data.fillna(0)
+    elif imputation == "drop":
+        data = data.dropna()
+    else:
+        raise ValueError(f"Unknown imputation option: {imputation!r}")
+    data = data.dropna(how='any')
 
-    # Replace NaN values with the minimum of the row
-    data = data.apply(lambda row: row.fillna(row.min()), axis=1)    
-    
-    # Now z-score normalize the data by row
-    data = data.apply(lambda row: (row - row.mean()) / row.std(), axis=1)
+    if normalization == "log2_zscore":
+        data = np.log2(data + 1)
+    if normalization in ("zscore", "log2_zscore"):
+        data = data.apply(lambda row: (row - row.mean()) / row.std(), axis=1)
+        data = data.dropna(how='any')
+    elif normalization != "none":
+        raise ValueError(f"Unknown normalization option: {normalization!r}")
 
-    # Now make a PCA plot
+    if len(data) < 3:
+        raise ValueError(
+            f"Only {len(data)} preys remain after filtering "
+            f"(min_detection_frac={min_detection_frac}, imputation={imputation!r}); "
+            "PCA needs at least 3. Relax the detection or imputation settings.")
+    return data
+
+
+def detection_counts(interaction):
+    """Per-prey count of experiments with a nonzero, non-missing intensity."""
+    return interaction_matrix(interaction).replace(0, np.nan).notna().sum(axis=1)
+
+
+def reduce_categorical(series, top_n=12, missing_label="Unknown"):
+    """Reduce a possibly multi-valued annotation column to plottable categories.
+
+    Multi-valued entries (semicolon-joined, e.g. HPA 'Main location') are
+    reduced to their first value; the top_n most frequent labels are kept and
+    the rest collapsed to 'Other'; missing values become ``missing_label``.
+    """
+    s = series.astype("string").str.split(";").str[0].str.strip()
+    top = s.value_counts().head(top_n).index
+    s = s.where(s.isin(top) | s.isna(), other="Other")
+    return s.fillna(missing_label).astype(str)
+
+
+def load_pca_metadata(interaction, experimentalDesign):
+    """Experiment-level metadata (BaitName from the interaction file, Type from
+    the ED file) for labeling PCA points."""
+    df = read_interactions(interaction)
+    ed = pd.read_csv(experimentalDesign, sep=",")
+    metadata = df[['Experiment', 'BaitName']].drop_duplicates()
+    return metadata.merge(ed[['Experiment Name', 'Type']],
+                          left_on='Experiment', right_on='Experiment Name',
+                          how='left')
+
+
+def experiment_pca(interaction, experimentalDesign, matrix=None):
+    """Experiment-level PCA coordinates, one row per experiment.
+
+    Returns ``(frame, explained_variance_ratio)``; the frame carries PC1, PC2,
+    Experiment, BaitName and Type.  ``matrix``, if given, is a prepare_pca_matrix
+    result; otherwise it is computed with default settings.
+    """
+    if matrix is None:
+        matrix = prepare_pca_matrix(interaction)
+    metadata = load_pca_metadata(interaction, experimentalDesign)
+
     pca = PCA(n_components=2)
-    pca_result = pca.fit_transform(data.T)
+    pca_df = pd.DataFrame(data=pca.fit_transform(matrix.T), columns=['PC1', 'PC2'])
+    pca_df['Experiment'] = matrix.columns
+    pca_df = pca_df.merge(metadata, on='Experiment', how='left')
+    return pca_df, pca.explained_variance_ratio_
 
-    pca_df = pd.DataFrame(data=pca_result, columns=['PC1', 'PC2'])
 
-    # Add the original column names to the PCA dataframe
-    pca_df['Experiment'] = data.columns
+def prey_pca(matrix):
+    """Prey-level PCA coordinates: preys as samples, experiments as features -- an
+    independent embedding, not the loadings of the experiment PCA.
 
-    # Merge with the metadata to get the BaitName and Type
-    pca_df = pca_df.merge(metadata, left_on='Experiment', right_on='Experiment', how='left')
+    Returns ``(frame, explained_variance_ratio)``; the frame carries PC1, PC2, Prey.
+    """
+    pca = PCA(n_components=2)
+    prey_df = pd.DataFrame(data=pca.fit_transform(matrix), columns=['PC1', 'PC2'])
+    prey_df['Prey'] = matrix.index
+    return prey_df, pca.explained_variance_ratio_
 
-    # pca_df['PC1'] = pd.to_numeric(pca_df['PC1'], errors='coerce')
-    # pca_df['PC2'] = pd.to_numeric(pca_df['PC2'], errors='coerce')
 
-    # Calculate the explained variance for each component
-    explained_variance = pca.explained_variance_ratio_
-    
+def pca_plot(interaction, experimentalDesign, matrix=None):
+    """Experiment-level PCA (one point per experiment); see ``experiment_pca``."""
+    pca_df, explained_variance = experiment_pca(interaction, experimentalDesign, matrix)
 
-    # Make a plotly scatterplot of the PCA results
-    pc1_var = round(explained_variance[0] * 100, 2)
-    pc2_var = round(explained_variance[1] * 100, 2)
     fig = px.scatter(
         pca_df,
         x='PC1',
@@ -147,10 +232,69 @@ def pca_plot(interaction, experimentalDesign):
         )
     )
 
-    # fig_widget = go.FigureWidget(fig)
-
     return fig
 
+
+def prey_pca_plot(matrix, color_values=None, color_label=None,
+                  color_mode="none", color_threshold=None):
+    """Prey-level PCA figure; see ``prey_pca`` for the embedding.
+
+    color_values: pd.Series indexed by prey (numeric for 'continuous',
+    labels for 'categorical'), or None with color_mode 'none'.
+
+    color_threshold: for 'continuous' only -- preys with a value below it are
+    drawn grey so the color scale is spent on the informative range.
+    """
+    prey_df, explained_variance = prey_pca(matrix)
+
+    labels = {
+        'PC1': f'PC1 ({explained_variance[0]*100:.2f}% variance)',
+        'PC2': f'PC2 ({explained_variance[1]*100:.2f}% variance)'
+    }
+    kwargs = dict(x='PC1', y='PC2', hover_name='Prey',
+                  title="Prey PCA", labels=labels)
+
+    if color_mode == "continuous":
+        prey_df[color_label] = prey_df['Prey'].map(color_values)
+        if color_threshold is not None:
+            below = prey_df[prey_df[color_label] < color_threshold]
+            above = prey_df[~(prey_df[color_label] < color_threshold)]
+            fig = px.scatter(above, color=color_label,
+                             color_continuous_scale='Viridis', **kwargs)
+            fig.add_trace(go.Scatter(
+                x=below['PC1'], y=below['PC2'], mode='markers',
+                name=f"{color_label} < {color_threshold:g}",
+                marker=dict(color='lightgrey'),
+                text=below['Prey'],
+                hovertemplate="<b>%{text}</b><br>PC1=%{x}<br>PC2=%{y}<extra></extra>",
+            ))
+            # grey first so scoring preys draw on top of it
+            fig.data = fig.data[-1:] + fig.data[:-1]
+            fig.update_layout(showlegend=True)
+        else:
+            fig = px.scatter(prey_df, color=color_label,
+                             color_continuous_scale='Viridis', **kwargs)
+    elif color_mode == "categorical":
+        prey_df[color_label] = prey_df['Prey'].map(color_values)
+        categories = [c for c in prey_df[color_label].dropna().unique()
+                      if c not in ("Other", "Unknown")]
+        categories = sorted(categories) + ["Other", "Unknown"]
+        fig = px.scatter(prey_df, color=color_label,
+                         category_orders={color_label: categories}, **kwargs)
+    else:
+        fig = px.scatter(prey_df, **kwargs)
+
+    fig.update_traces(marker=dict(size=5, opacity=0.7))
+    fig.update_layout(
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.4,
+            xanchor="center",
+            x=0.5
+        )
+    )
+    return fig
 def saint_known_retention(results_path, ctrl_experiments=None):
 
     results = pd.read_csv(results_path, sep=",")
@@ -223,23 +367,6 @@ def roc_plot(results_path, known_type, ctrl_experiments=None):
         else:
             fpr, tpr, thresholds = roc_curve(truth, list(scores[score]))
 
-        # For arrays (e.g., fpr, tpr, thresholds in ROC)
-        mask = ~(np.isnan(fpr) | np.isnan(tpr) | np.isnan(thresholds) |
-                np.isinf(fpr) | np.isinf(tpr) | np.isinf(thresholds))
-        fpr = fpr[mask]
-        tpr = tpr[mask]
-        thresholds = thresholds[mask]
-
-        # Prepend (0,0) and append (1,1) if not already present
-        if fpr[0] != 0 or tpr[0] != 0:
-            fpr = np.insert(fpr, 0, 0.0)
-            tpr = np.insert(tpr, 0, 0.0)
-            thresholds = np.insert(thresholds, 0, thresholds[0] if len(thresholds) > 0 else 0.0)
-        if fpr[-1] != 1 or tpr[-1] != 1:
-            fpr = np.append(fpr, 1.0)
-            tpr = np.append(tpr, 1.0)
-            thresholds = np.append(thresholds, thresholds[-1] if len(thresholds) > 0 else 1.0)
-
         roc_auc = auc(fpr, tpr)
         # axs.plot(fpr, tpr, label=f'{score} (AUC = {roc_auc:.2f})')
         # Plot the ROC curve for plotly
@@ -280,7 +407,7 @@ def roc_plot(results_path, known_type, ctrl_experiments=None):
     return fig
 
 
-def calculate_network_degrees(passing_interactions, biogrid_path="/Datasets/biogrid_summary.csv"):
+def calculate_network_degrees(passing_interactions, biogrid_path):
     """
     Calculate prey-prey network degree for each prey protein from BioGRID.
 
@@ -292,12 +419,14 @@ def calculate_network_degrees(passing_interactions, biogrid_path="/Datasets/biog
     passing_interactions : pd.DataFrame
         Filtered interactions with columns: First_ID (prey), Bait.ID (bait)
     biogrid_path : str
-        Path to biogrid_summary.csv file
+        Path to the biogrid_summary.csv built for the relevant organism
 
     Returns:
     --------
-    list of int
-        Network degrees for each unique prey (prey-prey interactions only)
+    list of int, or None
+        Network degrees for each unique prey (prey-prey interactions only).  None when
+        the reference set could not be read: a degree of zero is a real result for a
+        prey with no published partners, so absent data must not be reported as one.
     """
 
     # Handle edge cases
@@ -307,13 +436,16 @@ def calculate_network_degrees(passing_interactions, biogrid_path="/Datasets/biog
     # Load BioGRID data using cache
     biogrid = _load_biogrid_cached(biogrid_path)
     if biogrid is None:
-        return [0] * len(passing_interactions)
+        return None
 
     # Get unique prey and bait IDs from the passing interactions
     # Use set for O(1) lookup performance in filtering
     prey_ids = set(str(pid) for pid in passing_interactions['First_ID'].unique()
                    if pd.notna(pid) and str(pid) != 'nan')
-    bait_ids = set(str(bid) for bid in passing_interactions['Bait.ID'].unique()
+    # Baits are excluded by accession, the form BioGRID uses; results annotated before
+    # symbols were resolved carry only the supplied Bait.ID.
+    bait_col = 'Bait_Accession' if 'Bait_Accession' in passing_interactions.columns else 'Bait.ID'
+    bait_ids = set(str(bid) for bid in passing_interactions[bait_col].unique()
                    if pd.notna(bid) and str(bid) != 'nan')
 
     if len(prey_ids) == 0:
@@ -347,7 +479,8 @@ def calculate_network_degrees(passing_interactions, biogrid_path="/Datasets/biog
     return degrees
 
 
-def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None):
+def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None,
+                                biogrid_path=None):
     """
     Calculate metrics for interactions passing thresholds.
 
@@ -360,6 +493,9 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None)
                                            'WD': float, 'WDFDR': float}
     ctrl_experiments : list, optional
         List of control experiment IDs to filter by
+    biogrid_path : str, optional
+        Reference set for the network degree.  Defaults to the summary built for the
+        organism the dataset was annotated against.
 
     Returns:
     --------
@@ -368,7 +504,8 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None)
         - median_network_size: Median number of interactions per bait after filtering
         - enrichment_ratio: Average enrichment of known interactions
         - mean_degree: Mean prey-prey network degree (average number of other
-                      passing prey proteins each prey interacts with in BioGRID)
+                      passing prey proteins each prey interacts with in BioGRID),
+                      or None when the organism's BioGRID summary is unavailable
         - total_before: Total interactions before filtering
         - total_after: Total interactions after filtering
     """
@@ -413,8 +550,14 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None)
 
     # Calculate mean prey-prey network degree from BioGRID
     if total_after > 0:
-        degrees = calculate_network_degrees(passing_all)
-        mean_degree = np.mean(degrees) if len(degrees) > 0 else 0
+        if biogrid_path is None:
+            biogrid_path = provenance.biogrid_summary_path(
+                **provenance.annotation_settings(os.path.dirname(results_path)))
+        degrees = calculate_network_degrees(passing_all, biogrid_path)
+        if degrees is None:
+            mean_degree = None
+        else:
+            mean_degree = np.mean(degrees) if len(degrees) > 0 else 0
     else:
         mean_degree = 0
 
@@ -427,6 +570,42 @@ def calculate_threshold_metrics(results_path, thresholds, ctrl_experiments=None)
         'known_before': known_before,
         'known_after': known_after
     }
+
+
+def bait_scores(results_path, bait_name):
+    """The annotated-score rows of one bait."""
+    results = pd.read_csv(results_path, sep=",")
+    return results[results['Experiment.ID'] == bait_name].copy()
+
+
+def known_status_split(bait_data):
+    """Split a bait's rows into ``(not_in_biogrid, in_biogrid, multivalidated)``.
+
+    Multivalidated rows are left out of the BioGRID group so each row lands in one
+    group.  Without a Multivalidated column that group is empty; without an In.BioGRID
+    column every row is "not in BioGRID".
+    """
+    if 'Multivalidated' in bait_data.columns:
+        multivalidated = bait_data[bait_data['Multivalidated'] == True].copy()
+        in_biogrid = bait_data[(bait_data['In.BioGRID'] == True)
+                               & (bait_data['Multivalidated'] != True)].copy()
+        not_in_biogrid = bait_data[bait_data['In.BioGRID'] != True].copy()
+    elif 'In.BioGRID' in bait_data.columns:
+        multivalidated = pd.DataFrame()
+        in_biogrid = bait_data[bait_data['In.BioGRID'] == True].copy()
+        not_in_biogrid = bait_data[bait_data['In.BioGRID'] != True].copy()
+    else:
+        multivalidated = pd.DataFrame()
+        in_biogrid = pd.DataFrame()
+        not_in_biogrid = bait_data.copy()
+    return not_in_biogrid, in_biogrid, multivalidated
+
+
+# Legend name and colour of each known-status group, in draw order: the common group
+# goes down first so the rarer groups sit on top.
+KNOWN_STATUS_STYLE = (('Not in BioGRID', '#1f77b4'),
+                      ('In BioGRID', '#ff7f0e'),
+                      ('Multivalidated', '#d62728'))
 
 
 def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
@@ -448,11 +627,7 @@ def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
         Interactive scatter plot
     """
 
-    # Load data
-    results = pd.read_csv(results_path, sep=",")
-
-    # Filter for specific bait
-    bait_data = results[results['Experiment.ID'] == bait_name].copy()
+    bait_data = bait_scores(results_path, bait_name)
 
     if len(bait_data) == 0:
         # Return empty figure with message
@@ -465,149 +640,54 @@ def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
         )
         return fig
 
-    # Helper function to calculate average control intensity
-    def calculate_avg_ctrl_intensity(ctrl_intensity_str):
-        """
-        Parse control intensity string, filter out missing values ('.'),
-        and calculate average.
-        """
-        if pd.isnull(ctrl_intensity_str):
+    # SAINTexpress names the quantity columns by input type: its intensity build writes
+    # AvgIntensity/ctrlIntensity, its spectral-count build AvgSpec/ctrlCounts.
+    if 'AvgIntensity' in bait_data.columns:
+        avg_col, ctrl_col, label, fmt = 'AvgIntensity', 'ctrlIntensity', 'Intensity', '.2e'
+    elif 'AvgSpec' in bait_data.columns:
+        avg_col, ctrl_col, label, fmt = 'AvgSpec', 'ctrlCounts', 'Spec', '.1f'
+    else:
+        raise KeyError("annotated scores carry neither AvgIntensity nor AvgSpec")
+
+    def calculate_avg_ctrl(ctrl_str):
+        """Mean of SAINT's '|'-separated control values, ignoring '.' placeholders."""
+        if pd.isnull(ctrl_str):
             return np.nan
-
-        # Split by '|' and filter out '.' values
-        values = [v.strip() for v in str(ctrl_intensity_str).split('|') if v.strip() != '.']
-
+        values = [v.strip() for v in str(ctrl_str).split('|') if v.strip() != '.']
         if len(values) == 0:
             return np.nan
-
         try:
-            # Convert to float and calculate mean
-            numeric_values = [float(v) for v in values]
-            return np.mean(numeric_values)
+            return np.mean([float(v) for v in values])
         except (ValueError, TypeError):
             return np.nan
 
-    # Separate data by BioGRID status
-    # Handle missing columns gracefully
-    has_biogrid = 'In.BioGRID' in bait_data.columns
-    has_multivalidated = 'Multivalidated' in bait_data.columns
+    def hover_text(frame):
+        texts = []
+        for _, row in frame.iterrows():
+            avg_ctrl = calculate_avg_ctrl(row[ctrl_col])
+            ctrl_text = "NaN" if np.isnan(avg_ctrl) else f"{avg_ctrl:{fmt}}"
+            texts.append(
+                f"<b>{row['First_Prey_Gene']}</b><br>"
+                f"SAINT Score: {row['SaintScore']:.3f}<br>"
+                f"BFDR: {row['BFDR']:.3f}<br>"
+                f"Fold Change: {row['FoldChange']:.3f}<br>"
+                f"Avg {label}: {row[avg_col]:{fmt}}<br>"
+                f"Avg Ctrl {label}: {ctrl_text}"
+            )
+        return texts
 
-    if has_multivalidated:
-        multivalidated = bait_data[bait_data['Multivalidated'] == True].copy()
-        in_biogrid = bait_data[(bait_data['In.BioGRID'] == True) & (bait_data['Multivalidated'] != True)].copy()
-        not_in_biogrid = bait_data[bait_data['In.BioGRID'] != True].copy()
-    elif has_biogrid:
-        multivalidated = pd.DataFrame()
-        in_biogrid = bait_data[bait_data['In.BioGRID'] == True].copy()
-        not_in_biogrid = bait_data[bait_data['In.BioGRID'] != True].copy()
-    else:
-        multivalidated = pd.DataFrame()
-        in_biogrid = pd.DataFrame()
-        not_in_biogrid = bait_data.copy()
-
-    # Create scatter plot
     fig = go.Figure()
-
-    # Add not in BioGRID (blue) - plot first so it's in the background
-    if len(not_in_biogrid) > 0:
-        hover_text = []
-        for idx, row in not_in_biogrid.iterrows():
-            avg_ctrl = calculate_avg_ctrl_intensity(row['ctrlIntensity'])
-            if np.isnan(avg_ctrl):
-                ctrl_text = "NaN"
-            else:
-                ctrl_text = f"{avg_ctrl:.2e}"
-
-            text = (
-                f"<b>{row['First_Prey_Gene']}</b><br>"
-                f"SAINT Score: {row['SaintScore']:.3f}<br>"
-                f"BFDR: {row['BFDR']:.3f}<br>"
-                f"Fold Change: {row['FoldChange']:.3f}<br>"
-                f"Avg Intensity: {row['AvgIntensity']:.2e}<br>"
-                f"Avg Ctrl Intensity: {ctrl_text}"
-            )
-            hover_text.append(text)
-
+    for group, (name, color) in zip(known_status_split(bait_data), KNOWN_STATUS_STYLE):
+        if len(group) == 0:
+            continue
         fig.add_trace(go.Scatter(
-            x=not_in_biogrid['FoldChange'],
-            y=not_in_biogrid['SaintScore'],
+            x=group['FoldChange'],
+            y=group['SaintScore'],
             mode='markers',
-            marker=dict(
-                size=8,
-                color='#1f77b4',  # Blue
-                line=dict(width=0.5, color='white')
-            ),
-            text=hover_text,
+            marker=dict(size=8, color=color, line=dict(width=0.5, color='white')),
+            text=hover_text(group),
             hovertemplate='%{text}<extra></extra>',
-            name='Not in BioGRID'
-        ))
-
-    # Add in BioGRID (orange)
-    if len(in_biogrid) > 0:
-        hover_text = []
-        for idx, row in in_biogrid.iterrows():
-            avg_ctrl = calculate_avg_ctrl_intensity(row['ctrlIntensity'])
-            if np.isnan(avg_ctrl):
-                ctrl_text = "NaN"
-            else:
-                ctrl_text = f"{avg_ctrl:.2e}"
-
-            text = (
-                f"<b>{row['First_Prey_Gene']}</b><br>"
-                f"SAINT Score: {row['SaintScore']:.3f}<br>"
-                f"BFDR: {row['BFDR']:.3f}<br>"
-                f"Fold Change: {row['FoldChange']:.3f}<br>"
-                f"Avg Intensity: {row['AvgIntensity']:.2e}<br>"
-                f"Avg Ctrl Intensity: {ctrl_text}"
-            )
-            hover_text.append(text)
-
-        fig.add_trace(go.Scatter(
-            x=in_biogrid['FoldChange'],
-            y=in_biogrid['SaintScore'],
-            mode='markers',
-            marker=dict(
-                size=8,
-                color='#ff7f0e',  # Orange
-                line=dict(width=0.5, color='white')
-            ),
-            text=hover_text,
-            hovertemplate='%{text}<extra></extra>',
-            name='In BioGRID'
-        ))
-
-    # Add multivalidated (red) - plot last so it's on top
-    if len(multivalidated) > 0:
-        hover_text = []
-        for idx, row in multivalidated.iterrows():
-            avg_ctrl = calculate_avg_ctrl_intensity(row['ctrlIntensity'])
-            if np.isnan(avg_ctrl):
-                ctrl_text = "NaN"
-            else:
-                ctrl_text = f"{avg_ctrl:.2e}"
-
-            text = (
-                f"<b>{row['First_Prey_Gene']}</b><br>"
-                f"SAINT Score: {row['SaintScore']:.3f}<br>"
-                f"BFDR: {row['BFDR']:.3f}<br>"
-                f"Fold Change: {row['FoldChange']:.3f}<br>"
-                f"Avg Intensity: {row['AvgIntensity']:.2e}<br>"
-                f"Avg Ctrl Intensity: {ctrl_text}"
-            )
-            hover_text.append(text)
-
-        fig.add_trace(go.Scatter(
-            x=multivalidated['FoldChange'],
-            y=multivalidated['SaintScore'],
-            mode='markers',
-            marker=dict(
-                size=8,
-                color='#d62728',  # Red
-                line=dict(width=0.5, color='white')
-            ),
-            text=hover_text,
-            hovertemplate='%{text}<extra></extra>',
-            name='Multivalidated'
+            name=name
         ))
 
     # Add horizontal threshold line
