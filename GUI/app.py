@@ -44,8 +44,11 @@ out_dir = os.environ.get("PROXIMATE_OUTPUT_DIR", "/Outputs")
 backend.configure(out_dir)
 # Shown in the sidebar.  The browser reaches the MCP port on the same host as the GUI,
 # so "localhost" is right whenever the port is published alongside 3838.
-MCP_ADD_COMMAND = ("claude mcp add --transport http proximate "
-                   f"http://localhost:{os.environ.get('PROXIMATE_MCP_PORT', '3839')}/mcp")
+MCP_URL = f"http://localhost:{os.environ.get('PROXIMATE_MCP_PORT', '3839')}/mcp"
+MCP_ADD_COMMANDS = {
+    'Claude Code': f"claude mcp add --transport http proximate {MCP_URL}",
+    'Codex CLI': f"codex mcp add proximate --url {MCP_URL}",
+}
 
 app_ui = ui.page_navbar(
     ui.nav_spacer(),
@@ -681,8 +684,9 @@ app_ui = ui.page_navbar(
         ),
         ui.hr(),
         ui.p(ui.strong("Agent access:"), style="margin-bottom: 5px;"),
-        ui.p("Connect Claude Code to this server with:", class_="small", style="margin-bottom: 5px;"),
-        ui.tags.pre(MCP_ADD_COMMAND, style="white-space: pre-wrap; word-break: break-all; font-size: 0.75em;"),
+        *[ui.div(ui.p(f"Connect {agent} to this server with:", class_="small", style="margin-bottom: 5px;"),
+                 ui.tags.pre(command, style="white-space: pre-wrap; word-break: break-all; font-size: 0.75em;"))
+          for agent, command in MCP_ADD_COMMANDS.items()],
         ui.p("Agent actions show as toasts here and as [mcp] in the Cytoscape activity panel.",
              class_="text-muted small"),
         ui.hr(),

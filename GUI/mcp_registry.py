@@ -163,7 +163,7 @@ def call(name, arguments, actor='mcp'):
     global _SEQ
     arguments = validate(name, arguments)
     op = _get(name)
-    target = str(arguments.get('name') or arguments.get('dataset') or '')
+    target = str(arguments.get('dataset', ''))
     entry = {'ts': datetime.datetime.now().isoformat(timespec='seconds'), 'actor': actor,
              'op': name, 'mode': op.mode, 'ok': None, 'detail': target}
     try:

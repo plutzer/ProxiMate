@@ -76,11 +76,11 @@ def _corum(tmp_path, complexes):
 # cytoscape_net: nodes
 # =============================================================================================
 
-def test_nodes_are_keyed_on_accession(scores):
+def test_preys_are_keyed_on_accession_and_baits_on_name(scores):
     nodes, _ = cn.build(scores, PASSING, prey_prey=False)
 
     by_id = nodes.set_index('id')
-    assert by_id.loc['PA', 'role'] == 'bait'
+    assert by_id.loc['BaitA', 'role'] == 'bait' and by_id.loc['BaitA', 'accession'] == 'PA'
     assert by_id.loc['P1', 'role'] == 'prey' and by_id.loc['P1', 'symbol'] == 'G1'
     assert 'P3' not in by_id.index
 
@@ -88,15 +88,29 @@ def test_nodes_are_keyed_on_accession(scores):
 def test_a_prey_that_is_also_a_bait_keeps_one_bait_node(scores):
     nodes, _ = cn.build(scores, PASSING, prey_prey=False)
 
-    assert (nodes['id'] == 'PA').sum() == 1
-    assert nodes.set_index('id').loc['PA', 'symbol'] == 'BaitA'
+    assert (nodes['accession'] == 'PA').sum() == 1
+    assert nodes.set_index('id').loc['BaitA', 'symbol'] == 'BaitA'
+
+
+def test_two_constructs_of_one_protein_stay_separate_baits(scores):
+    scores['Bait_Accession'] = 'PA'                     # BaitB is a second tag on the same protein
+    scores.loc[len(scores)] = _row('BaitA', 'PA', 'PA', 'GA')   # each bait detects itself
+
+    nodes, edges = cn.build(scores, PASSING, prey_prey=False)
+
+    baits = nodes[nodes['role'] == 'bait'].set_index('id')
+    assert list(baits.index) == ['BaitA', 'BaitB'] and set(baits['accession']) == {'PA'}
+    assert 'PA' not in set(nodes['id'])
+    # neither self-detection draws an edge, and P2 gets one edge per bait
+    assert not (edges['target'].isin(['BaitA', 'BaitB'])).any()
+    assert sorted(edges.loc[edges['target'] == 'P2', 'source']) == ['BaitA', 'BaitB']
 
 
 def test_the_bait_filter_restricts_both_tables(scores):
     nodes, edges = cn.build(scores, PASSING, baits=['BaitB'], prey_prey=False)
 
-    assert set(nodes['id']) == {'PB', 'P2', 'PA'}
-    assert set(edges['source']) == {'PB'}
+    assert set(nodes['id']) == {'BaitB', 'P2', 'PA'}
+    assert set(edges['source']) == {'BaitB'}
 
 
 def test_bait_id_is_used_when_no_accession_column_exists(scores):
@@ -104,7 +118,7 @@ def test_bait_id_is_used_when_no_accession_column_exists(scores):
 
     nodes, _ = cn.build(df, PASSING, prey_prey=False)
 
-    assert 'PA' in set(nodes['id'])
+    assert 'PA' in set(nodes['accession'])
 
 
 @pytest.mark.parametrize('policy, expected', [
@@ -133,14 +147,14 @@ def test_only_passing_interactions_become_edges_and_carry_their_scores(scores):
     assert set(edges['interaction']) == {'proximity'}
     assert {'SaintScore', 'BFDR', 'FoldChange', 'WD', 'WDFDR', 'AvgIntensity', 'In.BioGRID'} <= set(edges.columns)
     assert edges['visible'].all()
-    assert edges['name'].iloc[0] == 'PA (proximity) P1'
+    assert edges['name'].iloc[0] == 'BaitA (proximity) P1'
 
 
 def test_widths_follow_log_abundance(scores):
     _, edges = cn.build(scores, PASSING, prey_prey=False)
 
     by_target = edges.set_index(['source', 'target'])['width']
-    assert by_target[('PA', 'P1')] < by_target[('PB', 'P2')] < by_target[('PA', 'P2')]
+    assert by_target[('BaitA', 'P1')] < by_target[('BaitB', 'P2')] < by_target[('BaitA', 'P2')]
 
 
 def test_spectral_counts_drive_widths_when_intensity_is_absent(scores):
@@ -160,15 +174,15 @@ def test_a_uniform_width_or_no_abundance_column_gives_one_width(scores):
 
 
 @pytest.mark.parametrize('source, thinner, thicker', [
-    ('SaintScore', ('PB', 'PA'), ('PA', 'P1')),
-    ('WD', ('PA', 'P1'), ('PB', 'P2')),
-    ('FoldChange', ('PA', 'P1'), ('PB', 'P2')),
+    ('SaintScore', ('BaitB', 'BaitA'), ('BaitA', 'P1')),
+    ('WD', ('BaitA', 'P1'), ('BaitB', 'P2')),
+    ('FoldChange', ('BaitA', 'P1'), ('BaitB', 'P2')),
 ])
 def test_other_width_sources_follow_their_column(scores, source, thinner, thicker):
     scores.loc[scores['First_ID'] == 'P2', 'WD'] = 9.0
     scores.loc[scores['First_ID'] == 'P2', 'FoldChange'] = 30.0
     scores.loc[scores['First_ID'] == 'P1', 'SaintScore'] = 1.0
-    scores.loc[scores['First_ID'] == 'PA', 'SaintScore'] = 0.7
+    scores.loc[scores['First_ID'] == 'BaitA', 'SaintScore'] = 0.7
 
     _, edges = cn.build(scores, PASSING, prey_prey=False, width_source=source)
 
@@ -203,7 +217,7 @@ def test_an_unreadable_biogrid_summary_yields_no_literature_edges(scores, tmp_pa
 def test_pairs_carry_the_larger_publication_count_and_any_multivalidation(scores, tmp_path):
     biogrid = _biogrid(tmp_path, [('P1', 'P2', 3, False), ('P2', 'P1', 1, True)])
 
-    pairs = cn.prey_prey_pairs({'P1', 'P2'}, {'PA', 'PB'}, biogrid)
+    pairs = cn.prey_prey_pairs({'P1', 'P2'}, {'BaitA', 'BaitB'}, biogrid)
 
     assert len(pairs) == 1
     assert pairs['n_publications'].iloc[0] == 3 and bool(pairs['multivalidated'].iloc[0])
@@ -255,7 +269,7 @@ def test_only_recovered_complexes_draw_and_link_every_drawn_pair(scores, complex
     complex_edges = edges[edges['interaction'] == 'complex']
     # Mine qualifies; PA-P1 and PA-P2 are proximity edges and are left out; P4 is BaitB's
     # prey but a subunit all the same.
-    assert set(complex_edges['name']) == {'P1 (complex) P2', 'P1 (complex) P4', 'P2 (complex) P4', 'P4 (complex) PA'}
+    assert set(complex_edges['name']) == {'P1 (complex) P2', 'P1 (complex) P4', 'P2 (complex) P4', 'P4 (complex) BaitA'}
     assert set(complex_edges['complex_names']) == {'Mine'}
     assert nodes.set_index('id').loc['P4', 'complexes'] == 'Mine'
 
@@ -286,7 +300,7 @@ def test_tightening_hides_edges_and_literature_edges_follow_their_preys(scores, 
 
     assert not visible.any()
     edges['visible'] = visible
-    faded = cn.node_alpha(pd.DataFrame({'id': ['PA', 'P1']}), edges)
+    faded = cn.node_alpha(pd.DataFrame({'id': ['BaitA', 'P1']}), edges)
     assert list(faded) == [cn.NODE_ALPHA['faded']] * 2
 
 
@@ -328,24 +342,24 @@ def test_a_loner_has_the_bait_as_its_only_neighbour(scores, tmp_path):
     nodes, edges = cn.build(scores, PASSING, biogrid_path=_biogrid(tmp_path, [('P1', 'P2')]))
 
     # P1 has a literature partner, P2 a second bait, P4 nothing else.
-    assert cn.loners(nodes, edges, 'PA') == ['P4']
+    assert cn.loners(nodes, edges, 'BaitA') == ['P4']
     edges.loc[edges['interaction'] == 'literature', 'visible'] = False
-    assert cn.loners(nodes, edges, 'PA') == ['P1', 'P4']
+    assert cn.loners(nodes, edges, 'BaitA') == ['P1', 'P4']
 
 
 def test_satellites_are_only_baits_preys_plus_nearer_shared_ones(drawn):
     nodes, edges = drawn
-    near_a = {'PA': (0, 0), 'PB': (100, 0), 'P1': (0, 10), 'P2': (10, 0)}
+    near_a = {'BaitA': (0, 0), 'BaitB': (100, 0), 'P1': (0, 10), 'P2': (10, 0)}
     near_b = {**near_a, 'P2': (90, 0)}
 
-    assert cn.satellites(nodes, edges, 'PA', near_a) == (['P1'], ['P2'])
-    assert cn.satellites(nodes, edges, 'PA', near_b) == (['P1'], [])
+    assert cn.satellites(nodes, edges, 'BaitA', near_a) == (['P1'], ['P2'])
+    assert cn.satellites(nodes, edges, 'BaitA', near_b) == (['P1'], [])
 
 
 def test_a_seed_resolves_by_symbol_or_accession_case_insensitively(drawn):
     nodes, _ = drawn
 
-    assert cn.resolve_node(nodes, 'baita')['id'] == 'PA'
+    assert cn.resolve_node(nodes, 'baita')['id'] == 'BaitA'
     assert cn.resolve_node(nodes, 'p1')['symbol'] == 'G1'
     with pytest.raises(ValueError):
         cn.resolve_node(nodes, 'nobody')
@@ -363,7 +377,7 @@ def test_singletons_are_the_preys_with_no_other_bait(drawn):
     nodes, edges = drawn
 
     assert cn.related(nodes, edges, 'BaitA', 'singletons') == ['P1']
-    assert cn.related(nodes, edges, 'BaitB', 'singletons') == ['PA']
+    assert cn.related(nodes, edges, 'BaitB', 'singletons') == ['BaitA']
 
 
 def test_partners_are_reference_neighbours_above_the_publication_floor(drawn):
@@ -376,7 +390,7 @@ def test_partners_are_reference_neighbours_above_the_publication_floor(drawn):
 def test_cocomplex_follows_the_complex_layer(scores, complexes):
     nodes, edges = cn.build(scores, PASSING, prey_prey=False, corum_path=complexes)
 
-    assert cn.related(nodes, edges, 'G1', 'cocomplex') == ['P2', 'PA']
+    assert cn.related(nodes, edges, 'G1', 'cocomplex') == ['BaitA', 'P2']
 
 
 # --- clustering ------------------------------------------------------------------------------
@@ -497,19 +511,19 @@ def test_rethresholding_keeps_the_drawn_biogrid_scope(controlled, cytoscape):
 
 
 def test_loners_are_selected_with_their_bait(controlled, cytoscape):
-    cytoscape['selected'] = ['PA', 'P2']
+    cytoscape['selected'] = ['BaitA', 'P2']
 
     chosen = ctl.select_loners()
 
-    assert chosen == ['PA', 'P4']
-    assert _last(cytoscape['calls'], 'select') == [['PA', 'P4'], False]
+    assert chosen == ['BaitA', 'P4']
+    assert _last(cytoscape['calls'], 'select') == [['BaitA', 'P4'], False]
 
 
 def test_related_selection_can_add_to_the_current_one(controlled, cytoscape):
     chosen = ctl.select_related('BaitB', 'interactors', add=True, min_saint=0.5)
 
-    assert chosen == ['P2', 'PA']
-    assert _last(cytoscape['calls'], 'select') == [['P2', 'PA'], True]
+    assert chosen == ['BaitA', 'P2']
+    assert _last(cytoscape['calls'], 'select') == [['BaitA', 'P2'], True]
 
 
 def test_an_empty_relation_is_an_error_not_a_silent_deselect(controlled, cytoscape):
@@ -519,33 +533,33 @@ def test_an_empty_relation_is_an_error_not_a_silent_deselect(controlled, cytosca
 
 
 def test_clustering_recolours_numbers_and_moves_only_the_selection(controlled, cytoscape):
-    cytoscape['selected'] = ['PA', 'P1', 'P2', 'P4']
-    cytoscape['positions'] = {i: (10.0 * k, 50.0) for k, i in enumerate(['PA', 'P1', 'P2', 'P4', 'PB'])}
+    cytoscape['selected'] = ['BaitA', 'P1', 'P2', 'P4']
+    cytoscape['positions'] = {i: (10.0 * k, 50.0) for k, i in enumerate(['BaitA', 'P1', 'P2', 'P4', 'BaitB'])}
 
     result = ctl.cluster_selection(resolution=1.0, seed=1)
 
     assert result['n'] == 4 and sum(result['sizes']) == 4
     frame = _last(cytoscape['calls'], 'nodes')[0]
-    assert set(frame['name']) == {'PA', 'P1', 'P2', 'P4'}
+    assert set(frame['name']) == {'BaitA', 'P1', 'P2', 'P4'}
     assert set(frame.columns) == {'name', 'community', 'fill'}
     moved = _last(cytoscape['calls'], 'positions')[0]
-    assert set(moved) == {'PA', 'P1', 'P2', 'P4'}
+    assert set(moved) == {'BaitA', 'P1', 'P2', 'P4'}
     assert all(x >= 0 and y >= 50 for x, y in moved.values())
     nodes = ctl.STATE['nodes'].set_index('id')
-    assert np.isnan(nodes.loc['PB', 'community'])   # untouched
-    assert nodes.loc['PA', 'fill'] in cn.COMMUNITY_FILL
+    assert np.isnan(nodes.loc['BaitB', 'community'])   # untouched
+    assert nodes.loc['BaitA', 'fill'] in cn.COMMUNITY_FILL
 
 
 def test_a_second_clustering_numbers_above_the_first(controlled, cytoscape):
-    cytoscape['positions'] = {i: (10.0 * k, 0.0) for k, i in enumerate(['PA', 'P1', 'P2', 'P4', 'PB'])}
-    cytoscape['selected'] = ['PA', 'P1', 'P2', 'P4']
+    cytoscape['positions'] = {i: (10.0 * k, 0.0) for k, i in enumerate(['BaitA', 'P1', 'P2', 'P4', 'BaitB'])}
+    cytoscape['selected'] = ['BaitA', 'P1', 'P2', 'P4']
     ctl.cluster_selection()
-    first = ctl.STATE['nodes'].set_index('id').loc[['PA', 'P1', 'P2', 'P4'], 'community'].max()
+    first = ctl.STATE['nodes'].set_index('id').loc[['BaitA', 'P1', 'P2', 'P4'], 'community'].max()
 
-    cytoscape['selected'] = ['PB', 'PA', 'P2', 'P4']
+    cytoscape['selected'] = ['BaitB', 'BaitA', 'P2', 'P4']
     ctl.cluster_selection()
 
-    second = ctl.STATE['nodes'].set_index('id').loc[['PB', 'PA'], 'community'].min()
+    second = ctl.STATE['nodes'].set_index('id').loc[['BaitB', 'BaitA'], 'community'].min()
     assert second > first
 
 
@@ -644,9 +658,9 @@ def test_get_positions_reads_cytoscape_for_the_drawn_nodes(controlled, cytoscape
     cytoscape['positions'].update({'P2': (3.0, 4.0), 'stray': (9.0, 9.0)})
     assert set(ctl.get_positions()) == set(nodes['id'])
     assert ctl.get_positions(['G2']) == {'P2': [3.0, 4.0]}
-    del cytoscape['positions']['PA']
-    with pytest.raises(ValueError, match='PA'):
-        ctl.get_positions(['PA'])       # drawn, but Cytoscape reported no position
+    del cytoscape['positions']['BaitA']
+    with pytest.raises(ValueError, match='BaitA'):
+        ctl.get_positions(['BaitA'])       # drawn, but Cytoscape reported no position
 
 
 def test_move_nodes_writes_positions_and_keeps_them_in_the_state(controlled, cytoscape):

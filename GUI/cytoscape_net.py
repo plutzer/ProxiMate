@@ -178,8 +178,8 @@ _corum_cache = {}
 def _load_corum_cached(path):
     """One row per CORUM complex: ``complex_name`` and its ``subunits`` accessions.
 
-    Isoform suffixes (``P05067-4``) are dropped so subunits match the accessions
-    ProxiMate keys nodes on.  The file is read once per path.
+    Isoform suffixes (``P05067-4``) are dropped so subunits match the node
+    ``accession`` column.  The file is read once per path.
     """
     if path not in _corum_cache:
         raw = pd.read_table(path, encoding='latin-1', usecols=['complex_name', 'subunits_uniprot_id'])
@@ -197,7 +197,8 @@ def complex_pairs(node_ids, bait_preys, corum_path, min_members=3, min_fraction=
     membership.  Every drawn pair of a qualifying complex is returned, including
     subunits recovered only under other baits.  Returns ``(pairs, membership)``:
     pairs with ``source < target``, ``complex_names`` and ``n_complexes``; membership
-    maps each drawn id to the semicolon-joined names of its qualifying complexes.
+    maps each drawn accession to the semicolon-joined names of its qualifying complexes.
+    ``node_ids`` and ``bait_preys`` are accessions.
     """
     ids = set(node_ids)
     complexes = _load_corum_cached(corum_path)
@@ -237,8 +238,10 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
           corum_min_members=3, corum_min_fraction=0.5):
     """(nodes, edges) for the interactions passing ``thresholds``.
 
-    Nodes are keyed on UniProt accession (``id``); a prey that is also a bait keeps
-    one node with the bait role.  Bait-prey edges carry every score column present
+    Prey nodes are keyed on UniProt accession and bait nodes on bait name (``id``), so
+    two constructs of one protein stay separate baits; ``accession`` holds the protein
+    of every node.  A prey that is also a bait keeps only its bait node(s) and a bait
+    never draws its own protein.  Bait-prey edges carry every score column present
     and their thresholds; literature edges are BioGRID pairs among the passing preys;
     complex edges are CORUM pairs among the drawn proteins when ``corum_path`` is given,
     and the node table then carries each protein's qualifying ``complexes``.
@@ -256,10 +259,13 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
         raise ValueError("no interactions pass the thresholds for the selected bait(s)")
 
     baits_tbl = (passing[['Experiment.ID', bait_col]].drop_duplicates()
-                 .rename(columns={bait_col: 'id', 'Experiment.ID': 'symbol'}))
-    baits_tbl['id'] = baits_tbl['id'].astype(str)
+                 .rename(columns={'Experiment.ID': 'id', bait_col: 'accession'}).astype(str))
+    baits_tbl['symbol'] = baits_tbl['id']
     baits_tbl['role'] = 'bait'
-    bait_ids = set(baits_tbl['id'])
+    bait_accessions = set(baits_tbl['accession'])
+    # accession -> the node ids carrying it: a prey is its own accession, a bait
+    # accession names every bait construct of that protein
+    bait_nodes = baits_tbl.groupby('accession')['id'].agg(list)
 
     prey_cols = {'First_ID': 'id', symbol_col: 'symbol'}
     for extra in ('first_SCL', 'Main location', 'Human_Complex', 'GO_CC', 'In.BioGRID'):
@@ -267,7 +273,8 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
             prey_cols[extra] = extra
     preys_tbl = passing[list(prey_cols)].rename(columns=prey_cols).drop_duplicates('id')
     preys_tbl['id'] = preys_tbl['id'].astype(str)
-    preys_tbl = preys_tbl[~preys_tbl['id'].isin(bait_ids)]
+    preys_tbl = preys_tbl[~preys_tbl['id'].isin(bait_accessions)]
+    preys_tbl['accession'] = preys_tbl['id']
     preys_tbl['role'] = 'prey'
 
     nodes = pd.concat([baits_tbl, preys_tbl], ignore_index=True)
@@ -283,17 +290,23 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
     if 'In.BioGRID' in nodes.columns:
         nodes['In.BioGRID'] = nodes['In.BioGRID'].eq(True)
 
-    edges = pd.DataFrame({'source': passing[bait_col].astype(str).to_numpy(),
-                          'target': passing['First_ID'].astype(str).to_numpy()})
+    # A bait detecting its own accession is a self-interaction and draws nothing; a bait
+    # detecting another bait's protein connects to every construct of that bait.
+    edges = pd.DataFrame({'source': passing['Experiment.ID'].astype(str).to_numpy(),
+                          'target': passing['First_ID'].astype(str).to_numpy(),
+                          'accession': passing[bait_col].astype(str).to_numpy()})
     edges['interaction'] = 'proximity'
     for col in (*CYTOSCAPE_ATTRS, 'AvgSpec'):
         if col in passing.columns:
             edges[col] = passing[col].to_numpy()
     edges['color'] = EDGE_COLOR['proximity']
     edges['alpha'] = EDGE_ALPHA['proximity']
+    edges = edges[edges['target'] != edges['accession']].drop(columns='accession')
+    edges['target'] = edges['target'].map(lambda t: bait_nodes.get(t, [t]))
+    edges = edges.explode('target', ignore_index=True)
 
     if prey_prey:
-        pairs = prey_prey_pairs(set(preys_tbl['id']), bait_ids, biogrid_path)
+        pairs = prey_prey_pairs(set(preys_tbl['id']), bait_accessions, biogrid_path)
         if len(pairs):
             pairs['interaction'] = 'literature'
             pairs['color'] = EDGE_COLOR['literature']
@@ -301,13 +314,17 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
             edges = pd.concat([edges, pairs], ignore_index=True)
 
     if corum_path:
-        proximity = edges[edges['interaction'] == 'proximity']
-        preys_of = {b: set(t) | {b} for b, t in proximity.groupby('source')['target']}
-        pairs, membership = complex_pairs(set(nodes['id']), preys_of, corum_path,
+        preys_of = {str(b): set(t.astype(str)) | {str(b)}
+                    for b, t in passing.groupby(bait_col)['First_ID']}
+        pairs, membership = complex_pairs(set(nodes['accession']), preys_of, corum_path,
                                           corum_min_members, corum_min_fraction)
+        for end in ('source', 'target'):
+            pairs[end] = pairs[end].map(lambda a: bait_nodes.get(a, [a]))
+            pairs = pairs.explode(end, ignore_index=True)
+        proximity = edges[edges['interaction'] == 'proximity']
         drawn = {frozenset(p) for p in zip(proximity['source'], proximity['target'])}
         pairs = pairs[[frozenset((s, t)) not in drawn for s, t in zip(pairs['source'], pairs['target'])]]
-        nodes['complexes'] = nodes['id'].map(membership).fillna('')
+        nodes['complexes'] = nodes['accession'].map(membership).fillna('')
         if len(pairs):
             pairs['interaction'] = 'complex'
             pairs['color'] = EDGE_COLOR['complex']

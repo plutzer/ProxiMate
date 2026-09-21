@@ -12,8 +12,10 @@ All-in-one GUI and scripts for analyzing proximity labelling data.
       plutzer/proximate
     ```
    Without the mount, everything the tool writes — datasets, logs and run manifests —
-   lives inside the container and is lost when it is removed.
-3. Access the GUI through a web browswer at localhost:3838
+   lives inside the container and is lost when it is removed. Add
+   `-p 127.0.0.1:3839:3839` to let an agent such as Claude Code or Codex drive the
+   session too; see [Agent access (MCP)](#agent-access-mcp).
+3. Access the GUI through a web browser at localhost:3838
 
 ### Running the docker container interactively (experienced users)
 The backend of the application can be accessed interactively by overriding the command to start the shiny app:
@@ -138,17 +140,33 @@ agent such as Claude Code and a person at the browser share one session. Publish
 port on the loopback interface only; it carries no authentication:
 
 ```
-docker run -p 3838:3838 -p 127.0.0.1:3839:3839   --mount type=bind,source=<native_path_to_output_directory>,target=/Outputs   plutzer/proximate
+docker run -p 3838:3838 -p 127.0.0.1:3839:3839 \
+  --mount type=bind,source=<native_path_to_output_directory>,target=/Outputs \
+  plutzer/proximate
 ```
 
-The repository's `.mcp.json` points Claude Code at that address; from any other
-directory, register it once with
+Register the endpoint once with the agent you use; the GUI's sidebar shows the same
+commands. Claude Code (the repository's `.mcp.json` already points it there, so this
+is only needed from another directory):
 
 ```
 claude mcp add --transport http proximate http://localhost:3839/mcp
 ```
 
-(the GUI's sidebar shows the same command). The agent sees four
+Codex CLI, or the equivalent entry in `~/.codex/config.toml`:
+
+```
+codex mcp add proximate --url http://localhost:3839/mcp
+```
+
+```toml
+[mcp_servers.proximate]
+url = "http://localhost:3839/mcp"
+```
+
+Any other MCP client that speaks streamable HTTP connects to the same URL. Then ask
+the agent to help with a dataset; `curl localhost:3839/api/health` confirms the
+endpoint is up before you do. The agent sees four
 tools: `search_tools` and `get_tool_details` describe the operations, `call_tool` runs
 one, and `get_gui_documentation` explains the GUI tab by tab so the agent can help a
 person use it. Every operation takes its thresholds and settings as explicit arguments;

@@ -63,7 +63,7 @@ def test_details_carry_the_parameters_with_types_and_defaults():
     assert props['imputation']['type'] == 'integer'
     assert props['exclude_hcm']['type'] == 'boolean'
     assert props['pi_bait']['default'] is None
-    assert 'name' in d['schema']['required'] and 'seed' not in d['schema']['required']
+    assert 'dataset' in d['schema']['required'] and 'seed' not in d['schema']['required']
     assert d['mode'] == 'dataset' and 'GUI' in d['effects']
     with pytest.raises(KeyError, match='nope'):
         registry.details('nope')
@@ -72,10 +72,10 @@ def test_details_carry_the_parameters_with_types_and_defaults():
 def test_call_validates_arguments_before_running():
     with pytest.raises(ValueError, match='unexpected'):
         registry.call('list_datasets', {'bogus': 1})
-    with pytest.raises(ValueError, match='name'):
+    with pytest.raises(ValueError, match='dataset'):
         registry.call('get_dataset_info', {})
     with pytest.raises(ValueError, match='integer'):
-        registry.call('score_dataset', {'name': 'x', 'imputation': 'two', 'wdfdr_iterations': 0,
+        registry.call('score_dataset', {'dataset': 'x', 'imputation': 'two', 'wdfdr_iterations': 0,
                                         'organism': 'human', 'exclude_hcm': False})
     with pytest.raises(KeyError):
         registry.call('nope', {})
@@ -117,7 +117,7 @@ def scored(out_dir):
 
 def test_read_ops_describe_the_session(scored):
     assert registry.call('list_datasets', {})['datasets'][0]['Dataset Name'] == 'ds'
-    info = registry.call('get_dataset_info', {'name': 'ds'})
+    info = registry.call('get_dataset_info', {'dataset': 'ds'})
     assert info['baits'] == ['BaitA', 'BaitB']
     status = registry.call('server_status', {})
     assert status['datasets'] == ['ds'] and status['jobs'] == {}
@@ -158,7 +158,7 @@ def test_parse_dataset_lands_in_the_store_and_records_the_actor(out_dir):
     files['prey'].write_text("P1\tG1\n")
     files['interaction'].write_text("t1\tBaitA\tP1\t10\nc1\tCtrl\tP1\t4\n")
     before = store.version()
-    result = registry.call('parse_dataset', {'name': 'new', 'input_format': 'SAINT',
+    result = registry.call('parse_dataset', {'dataset': 'new', 'input_format': 'SAINT',
                                              'files': {k: str(v) for k, v in files.items()},
                                              'quant_type': 'Spectral Counts'})
     assert result['Dataset Name'] == 'new' and store.version() > before
@@ -186,7 +186,7 @@ def drawn(monkeypatch):
     monkeypatch.setattr(ctl.cy, 'set_positions', lambda net, pos: calls.append(('positions', dict(pos))))
     monkeypatch.setattr(ctl.cy, 'update_edge_columns', lambda net, frame: calls.append(('edges', frame)))
     monkeypatch.setattr(ctl.cy, 'update_node_columns', lambda net, frame: calls.append(('nodes', frame)))
-    nodes = pd.DataFrame({'id': ['BA', 'P1', 'P2'], 'symbol': ['GA', 'G1', 'G2'],
+    nodes = pd.DataFrame({'id': ['BA', 'P1', 'P2'], 'symbol': ['GA', 'G1', 'G2'], 'accession': ['QA', 'P1', 'P2'],
                           'role': ['bait', 'prey', 'prey'], 'x': [0.0] * 3, 'y': [0.0] * 3})
     edges = pd.DataFrame({'name': ['e1', 'e2'], 'source': ['BA', 'BA'], 'target': ['P1', 'P2'],
                           'interaction': ['bait-prey'] * 2, 'visible': [True, True],
@@ -240,7 +240,7 @@ def test_tool_wrappers_return_json_envelopes(scored):
     assert mcp_tools.get_tool_details('list_datasets')['name'] == 'list_datasets'
     ok = mcp_tools.call_tool('list_datasets', {})
     assert ok['ok'] is True and ok['result']['datasets'][0]['Dataset Name'] == 'ds' and ok['run_id']
-    bad = mcp_tools.call_tool('get_dataset_info', {'name': 'missing'})
+    bad = mcp_tools.call_tool('get_dataset_info', {'dataset': 'missing'})
     assert bad['ok'] is False and 'missing' in bad['error'] and bad['error_type'] == 'KeyError'
 
 
@@ -328,9 +328,9 @@ def test_the_four_tools_answer_over_http(mcp_url):
 
 def test_activity_entries_are_sequenced_and_name_their_target(scored):
     start = registry.last_seq()
-    registry.call('get_dataset_info', {'name': 'ds'})
+    registry.call('get_dataset_info', {'dataset': 'ds'})
     with pytest.raises(KeyError):
-        registry.call('get_dataset_info', {'name': 'nope'})
+        registry.call('get_dataset_info', {'dataset': 'nope'})
     new = registry.activity_since(start)
     assert [e['seq'] for e in new] == [start + 1, start + 2]
     assert new[0]['detail'] == 'ds' and new[0]['ok']

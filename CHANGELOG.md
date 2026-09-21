@@ -12,6 +12,10 @@ section to the version and date and starts a fresh Unreleased section above it.
 ## [Unreleased]
 
 ### Added
+- Cytoscape bait nodes are keyed on bait name, so two constructs of one protein draw as
+  separate baits; every MCP dataset operation names its dataset with `dataset`.
+- README, CLAUDE.md and the GUI sidebar give the Claude Code and Codex CLI commands
+  that connect an agent to the MCP endpoint.
 - Cytoscape tab with live link to a Cytoscape desktop: send a thresholded network,
   read the selection back with scores, hide and show edges, re-threshold without
   disturbing a hand layout, export a PNG.

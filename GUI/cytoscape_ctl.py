@@ -175,7 +175,7 @@ def read_selection():
     if not selected:
         raise ValueError("nothing is selected in Cytoscape")
     nodes, edges = STATE['nodes'], STATE['edges']
-    chosen = nodes[nodes['id'].isin(selected)][['id', 'symbol', 'role']]
+    chosen = nodes[nodes['id'].isin(selected)][['id', 'symbol', 'accession', 'role']]
     touching = edges[edges['source'].isin(selected) | edges['target'].isin(selected)]
     score_cols = [c for c in ('SaintScore', 'BFDR', 'FoldChange', 'WD', 'WDFDR') if c in edges.columns]
     detail = touching[['source', 'target', 'interaction', 'visible', *score_cols]]

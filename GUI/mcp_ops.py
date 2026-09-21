@@ -54,12 +54,12 @@ def list_datasets() -> dict:
 
 @register('read', "One dataset: its row, which result files exist, its baits, annotation settings.",
           tags=('dataset', 'baits', 'info'))
-def get_dataset_info(name: str) -> dict:
+def get_dataset_info(dataset: str) -> dict:
     """The session row, presence of ED.csv / merged.csv / annotated_scores.csv /
     Feature_enrichment.csv / run.json, the bait names (from annotated_scores.csv), the
     organism and Human Cell Map setting it was annotated with, and whether a job is
     running on it."""
-    return _json(backend.dataset_info(name))
+    return _json(backend.dataset_info(dataset))
 
 
 @register('read', "Server state: output directory, datasets, running jobs, drawn Cytoscape network, recent MCP activity.",
@@ -127,20 +127,20 @@ def compare_networks(dataset: str, bait_a: str, bait_b: str, thresholds_a: dict,
 
 @register('dataset', "Parse raw quantification files into a new dataset (MaxQuant, DIA-NN, Pioneer, FragPipe, MSstats or SAINT).",
           tags=('parse', 'import', 'upload', 'maxquant', 'diann', 'saint', 'experimental design'))
-def parse_dataset(name: str, input_format: str, files: dict, quant_type: str = 'Intensity') -> dict:
-    """Creates ``<out_dir>/<name>/`` with the SAINT and CompPASS inputs and adds the
+def parse_dataset(dataset: str, input_format: str, files: dict, quant_type: str = 'Intensity') -> dict:
+    """Creates ``<out_dir>/<dataset>/`` with the SAINT and CompPASS inputs and adds the
     dataset to the session.  ``files`` maps file keys to paths readable by the server:
     MaxQuant {pg, ed}; DIA-NN and Pioneer {matrix, ed}; FragPipe {fp, ed}; MSstats
     {msstats, ed}; SAINT {bait, prey, interaction}.  ``ed`` is the experimental design
     CSV (Experiment Name, Type, Bait, Replicate, Bait ID).  ``quant_type`` is
     Intensity, LFQ or Spectral Counts; DIA-NN, Pioneer and MSstats always use
     Intensity.  The name must be new and use letters, digits and underscores only."""
-    return _json(backend.run_parse(name, input_format, files, quant_type, actor=ACTOR))
+    return _json(backend.run_parse(dataset, input_format, files, quant_type, actor=ACTOR))
 
 
 @register('dataset', "Score a parsed dataset with SAINTexpress and CompPASS, then annotate it.",
           tags=('score', 'saint', 'comppass', 'annotate', 'imputation', 'wdfdr'))
-def score_dataset(name: str, imputation: int, wdfdr_iterations: int, organism: str,
+def score_dataset(dataset: str, imputation: int, wdfdr_iterations: int, organism: str,
                   exclude_hcm: bool, pi_method: str = None, pi_bait: str = None,
                   seed: int = None) -> dict:
     """Runs score.py and annotator.py on the dataset, as the Scoring card does.
@@ -151,7 +151,7 @@ def score_dataset(name: str, imputation: int, wdfdr_iterations: int, organism: s
     single_bait, with ``pi_bait``) applies to imputation 2.  ``seed`` fixes the
     CompPASS permutations.  Blocks until both stages finish (minutes); refused while
     the GUI or another call is working on the dataset."""
-    return _json(backend.run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm,
+    return _json(backend.run_score(dataset, imputation, wdfdr_iterations, organism, exclude_hcm,
                                    pi_method=pi_method, pi_bait=pi_bait, seed=seed, actor=ACTOR))
 
 
