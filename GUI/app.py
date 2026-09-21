@@ -8,7 +8,7 @@ import platform
 import pandas as pd
 import os
 import sys
-sys.path.append('/Scripts')
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Scripts'))
 from ed_exceptions import ProxiMateError
 import parse
 import subprocess
@@ -30,6 +30,9 @@ import download_presets as dp
 from download_presets import DEFAULT_CUSTOM_COLUMNS
 from help_text import tip, TOOLTIPS
 import session_archive
+import backend
+import dataset_store
+import mcp_registry
 import cytoscape_ctl
 import log_config
 import provenance
@@ -38,6 +41,14 @@ from log_config import get_logger
 logger = get_logger(__name__)
 
 out_dir = os.environ.get("PROXIMATE_OUTPUT_DIR", "/Outputs")
+backend.configure(out_dir)
+# Shown in the sidebar.  The browser reaches the MCP port on the same host as the GUI,
+# so "localhost" is right whenever the port is published alongside 3838.
+MCP_URL = f"http://localhost:{os.environ.get('PROXIMATE_MCP_PORT', '3839')}/mcp"
+MCP_ADD_COMMANDS = {
+    'Claude Code': f"claude mcp add --transport http proximate {MCP_URL}",
+    'Codex CLI': f"codex mcp add proximate --url {MCP_URL}",
+}
 
 app_ui = ui.page_navbar(
     ui.nav_spacer(),
@@ -647,21 +658,14 @@ app_ui = ui.page_navbar(
                     )
     ),
     sidebar=ui.sidebar(
-        ui.h4("ProxiMate Beta"),
+        ui.h4("ProxiMate"),
         # Resolved once: the build cannot change while the server is running, and this
         # is the identifier a bug report has to quote to be reproducible.
         ui.div(provenance.version_label(), class_="text-muted small"),
         ui.hr(),
         ui.p(
-            "Welcome! This is a ",
-            ui.strong("pre-release beta version"),
-            " of ProxiMate.",
-        ),
-        ui.p(
-            "Features may change, and you may encounter bugs. "
             "Your feedback is invaluable in helping us improve the tool."
         ),
-        ui.hr(),
         ui.p(ui.strong("Get in touch:"), style="margin-bottom: 5px;"),
         ui.tags.ul(
             ui.tags.li(
@@ -672,88 +676,16 @@ app_ui = ui.page_navbar(
             ),
         ),
         ui.hr(),
-        ui.p(
-            "Thank you for testing ProxiMate!",
-            style="font-style: italic; color: #666;"
-        ),
+        ui.p(ui.strong("Agent access:"), style="margin-bottom: 5px;"),
+        *[ui.div(ui.p(f"Connect {agent} to this server with:", class_="small", style="margin-bottom: 5px;"),
+                 ui.tags.pre(command, style="white-space: pre-wrap; word-break: break-all; font-size: 0.75em;"))
+          for agent, command in MCP_ADD_COMMANDS.items()],
+        ui.hr(),
     ),
     title="ProxiMate",
+    header=ui.output_ui("agent_banner"),
 )
 
-
-
-def _edited_ed_file(grid, uploaded_path):
-    """Write the experimental design grid to a temp file and return its path.
-
-    The grid is the design the user actually intends, and it is what ends up in
-    ED.csv.  Parsing must read the same table: otherwise an edit to Bait, Type
-    or Bait ID reaches scoring, which reads ED.csv, but not the SAINT inputs,
-    which are built during parsing.
-
-    Falls back to the uploaded file if the grid is empty, so a design that never
-    reached the table cannot silently parse as no experiments at all.
-    """
-    frame = grid.data_view()
-    if frame is None or frame.empty:
-        logger.warning("Experimental design table is empty; parsing the uploaded "
-                       "file instead of the edited table.")
-        return uploaded_path, None
-
-    handle = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
-                                         newline="", encoding="utf-8")
-    with handle:
-        frame.to_csv(handle, index=False)
-    logger.info("Parsing the edited experimental design table (%d rows)", len(frame))
-    return handle.name, handle.name
-
-
-def _log_size(dataset_path):
-    """Current size of a dataset's log, for use as a read offset."""
-    try:
-        return os.path.getsize(os.path.join(dataset_path, "proximate.log"))
-    except OSError:
-        return 0
-
-
-def _log_tail_since(dataset_path, offset, max_chars=1500):
-    """Return the log text a child process appended after `offset`.
-
-    Reading from an offset rather than from the end of the file matters when the
-    child fails before it attaches its own handler — argparse rejecting a flag,
-    say.  The tail of the file would then be the *previous* run's output, which
-    reads as a plausible but wrong explanation of this failure.
-    """
-    try:
-        with open(os.path.join(dataset_path, "proximate.log"), encoding="utf-8") as handle:
-            handle.seek(offset)
-            new_text = handle.read().strip()
-    except OSError:
-        return ""
-    if len(new_text) > max_chars:
-        new_text = "..." + new_text[-max_chars:]
-    return new_text
-
-
-def _run_stage_subprocess(command, dataset_path, run_id):
-    """Run a pipeline stage, streaming its output to this process's terminal.
-
-    The child configures logging the same way this process does, so letting it
-    inherit stdout and stderr gives correctly formatted output that appears
-    while the stage runs, instead of one silent wait followed by a burst.  It
-    also writes to the dataset's own log, so nothing needs re-logging here.
-
-    Returns (returncode, text the child appended to the dataset log).
-    """
-    child_env = dict(os.environ, PROXIMATE_RUN_ID=run_id)
-    logger.info("Running: %s", " ".join(command))
-
-    # Take the offset after logging the command, so the returned text is the
-    # child's alone.  A child that dies before attaching its handler — a bad
-    # flag, a failed import — must yield nothing here, or the caller cannot
-    # tell that apart from a child that explained itself.
-    offset = _log_size(dataset_path)
-    result = subprocess.run(command, env=child_env)
-    return result.returncode, _log_tail_since(dataset_path, offset)
 
 
 def notify(message, type="message", duration=5, exc_info=False):
@@ -785,18 +717,58 @@ def format_error_notification(error):
 
 
 def server(input: Inputs, output: Outputs, session: Session):
-    # The table is read back from disk so a session outlives the server process, and
-    # written back on every change so the copy on disk is never stale.
-    datasets = reactive.Value(session_archive.load_datasets_table(out_dir))
+    # The table lives in dataset_store, shared by every browser session and the MCP
+    # server; the session learns about changes by polling its version counter.
+    @reactive.poll(lambda: dataset_store.version(), 1.0)
+    def datasets():
+        return dataset_store.table()
+
+    # Agent activity.  The MCP server shares this process, so its running jobs and
+    # finished operations are polled and surfaced here: a banner while a job runs and a
+    # notification when a dataset or Cytoscape operation starts, finishes or fails.
+    @reactive.poll(lambda: backend.running_jobs(), 1.0)
+    def agent_jobs():
+        return {name: job for name, job in backend.running_jobs().items() if job['actor'] == 'mcp'}
+
+    @reactive.poll(lambda: mcp_registry.last_seq(), 1.0)
+    def agent_seq():
+        return mcp_registry.last_seq()
+
+    announced = {'jobs': set(), 'seq': mcp_registry.last_seq()}
 
     @reactive.effect
-    def persist_datasets():
-        session_archive.save_datasets_table(out_dir, datasets.get())
+    def announce_agent_jobs():
+        jobs = agent_jobs()
+        for name in set(jobs) - announced['jobs']:
+            notify(f"Agent started {jobs[name]['what']} of '{name}'.", type="message", duration=8)
+        announced['jobs'] = set(jobs)
+
+    @reactive.effect
+    def announce_agent_operations():
+        seq = agent_seq()
+        for entry in mcp_registry.activity_since(announced['seq']):
+            if entry['mode'] in ('dataset', 'cytoscape'):
+                if entry['ok']:
+                    notify(f"Agent finished {entry['op']} {entry['detail']}.".replace(' .', '.'),
+                           type="message", duration=8)
+                else:
+                    notify(f"Agent {entry['op']} failed: {entry['detail']}", type="error", duration=None)
+        announced['seq'] = seq
+
+    @render.ui
+    def agent_banner():
+        jobs = agent_jobs()
+        if not jobs:
+            return None
+        lines = [f"{job['what']} of '{name}' (since {job['since'][11:]})" for name, job in jobs.items()]
+        return ui.div("Agent working: " + "; ".join(lines) + ". The dataset is locked until it finishes.",
+                      style="background: #fff3cd; color: #664d03; padding: 8px 16px; "
+                            "border-bottom: 1px solid #ffe69c;")
 
     # Function to render the datasets table
     @render.data_frame
     def render_datasets():
-        return render.DataGrid(datasets.get())
+        return render.DataGrid(datasets())
     
     saint_baits = reactive.Value(pd.DataFrame(
         columns=["Experiment Name", "Bait", "Type", "Bait ID"]
@@ -920,337 +892,61 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.parse_data)
     def parse_data():
-        # Check if the dataset name is valid
         dataset_name = input.dataset_name.get()
-        # A directory left by a failed run counts as taken, or its leftovers would be
-        # mixed into the new dataset's results.
-        taken = set(datasets.get()['Dataset Name'].tolist()) | set(session_archive.dataset_directories(out_dir))
-        check_result = parse.validate_name(dataset_name, taken)
-        if check_result != 0:
-            notify(
-                    f"Parser: {check_result}",
-                    type="error",
-                )
-            return "Error: " + check_result
-
-        # Get the input format (MaxQuant, DIA-NN, or SAINT)
         input_format = input.input_format.get()
-        output_path = out_dir + '/' + dataset_name
 
-        # The parse entry points run in this process, so scope the dataset's log
-        # to this action: attached permanently, every later line about any other
-        # dataset would also be written here.
+        def uploaded(field):
+            files = getattr(input, field).get()
+            return files[0]['datapath'] if files else None
+
+        grids = {'MaxQuant': ed_table_mq, 'DIA-NN': ed_table_diann, 'Pioneer': ed_table_pioneer,
+                 'FragPipe': ed_table_fragpipe, 'MSstats': ed_table_msstats}
+        if input_format == 'SAINT':
+            files = {'bait': uploaded('bait'), 'prey': uploaded('prey'),
+                     'interaction': uploaded('interaction')}
+            bait_frame, ed_frame = bait_table.data_view(), None
+        else:
+            main = {'MaxQuant': 'pg_file', 'DIA-NN': 'diann_matrix_file', 'Pioneer': 'pioneer_matrix_file',
+                    'FragPipe': 'fragpipe_file', 'MSstats': 'msstats_file'}[input_format]
+            key = backend.INPUT_FORMATS[input_format][0][0]
+            files = {key: uploaded(main), 'ed': uploaded('ed_file')}
+            bait_frame, ed_frame = None, grids[input_format].data_view()
+
         run_id = log_config.new_run_id()
-
         try:
-            with ui.Progress(min=0, max=1) as progress, \
-                    log_config.run_context(run_id), \
-                    log_config.dataset_log(output_path):
-                logger.info("Parsing dataset '%s' (format=%s)", dataset_name, input_format)
-                if input_format == "MaxQuant":
-                    progress.set(message="Parsing MaxQuant inputs", value=0.25)
-
-                    # Check if files are uploaded
-                    if not input.pg_file.get() or not input.ed_file.get():
-                        notify(
-                            "Please upload both proteinGroups.txt and Experimental Design files",
-                            type="error"
-                        )
-                        return "Error: Missing files"
-
-                    progress.set(0.45)
-
-                    ed_path, ed_tmp = _edited_ed_file(
-                        ed_table_mq, input.ed_file.get()[0]['datapath'])
-                    try:
-                        n_exp, n_ctrl = parse.parse_ed_pg(
-                            input.pg_file.get()[0]['datapath'],
-                            ed_path,
-                            input.quant_type.get(),
-                            output_path
-                        )
-                    finally:
-                        if ed_tmp:
-                            os.unlink(ed_tmp)
-
-                    progress.set(0.85)
-
-                    # Update the datasets dataframe
-                    new_row = pd.DataFrame(
-                        [[dataset_name, 'MaxQuant', input.quant_type.get(), n_exp, n_ctrl, '', '', '']],
-                        columns=datasets.get().columns
-                    )
-                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-                    datasets.set(updated_datasets)
-                    progress.set(1.0)
-
-                elif input_format == "DIA-NN":
-                    progress.set(message="Parsing DIA-NN inputs", value=0.25)
-
-                    # Check if files are uploaded
-                    if not input.diann_matrix_file.get() or not input.ed_file.get():
-                        notify(
-                            "Please upload both DIA-NN matrix and Experimental Design files",
-                            type="error"
-                        )
-                        return "Error: Missing files"
-
-                    progress.set(0.45)
-
-                    ed_path, ed_tmp = _edited_ed_file(
-                        ed_table_diann, input.ed_file.get()[0]['datapath'])
-                    try:
-                        n_exp, n_ctrl = parse.parse_diann(
-                            input.diann_matrix_file.get()[0]['datapath'],
-                            ed_path,
-                            "Intensity",  # DIA-NN always uses intensity
-                            output_path
-                        )
-                    finally:
-                        if ed_tmp:
-                            os.unlink(ed_tmp)
-
-                    progress.set(0.85)
-
-                    # Update the datasets dataframe
-                    new_row = pd.DataFrame(
-                        [[dataset_name, 'DIA-NN', 'Intensity', n_exp, n_ctrl, '', '', '']],
-                        columns=datasets.get().columns
-                    )
-                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-                    datasets.set(updated_datasets)
-                    progress.set(1.0)
-
-                elif input_format == "Pioneer":
-                    progress.set(message="Parsing Pioneer inputs", value=0.25)
-
-                    if not input.pioneer_matrix_file.get() or not input.ed_file.get():
-                        notify(
-                            "Please upload both Pioneer protein_groups_wide.tsv and Experimental Design files",
-                            type="error"
-                        )
-                        return "Error: Missing files"
-
-                    progress.set(0.45)
-
-                    ed_path, ed_tmp = _edited_ed_file(
-                        ed_table_pioneer, input.ed_file.get()[0]['datapath'])
-                    try:
-                        n_exp, n_ctrl = parse.parse_pioneer(
-                            input.pioneer_matrix_file.get()[0]['datapath'],
-                            ed_path,
-                            "Intensity",
-                            output_path
-                        )
-                    finally:
-                        if ed_tmp:
-                            os.unlink(ed_tmp)
-
-                    progress.set(0.85)
-
-                    new_row = pd.DataFrame(
-                        [[dataset_name, 'Pioneer', 'Intensity', n_exp, n_ctrl, '', '', '']],
-                        columns=datasets.get().columns
-                    )
-                    datasets.set(pd.concat([datasets.get(), new_row], ignore_index=True))
-                    progress.set(1.0)
-
-                elif input_format == "FragPipe":
-                    progress.set(message="Parsing FragPipe inputs", value=0.25)
-
-                    if not input.fragpipe_file.get() or not input.ed_file.get():
-                        notify(
-                            "Please upload both combined_protein.tsv and Experimental Design files",
-                            type="error"
-                        )
-                        return "Error: Missing files"
-
-                    progress.set(0.45)
-
-                    ed_path, ed_tmp = _edited_ed_file(
-                        ed_table_fragpipe, input.ed_file.get()[0]['datapath'])
-                    try:
-                        n_exp, n_ctrl = parse.parse_fragpipe(
-                            input.fragpipe_file.get()[0]['datapath'],
-                            ed_path,
-                            input.quant_type.get(),
-                            output_path
-                        )
-                    finally:
-                        if ed_tmp:
-                            os.unlink(ed_tmp)
-
-                    progress.set(0.85)
-
-                    new_row = pd.DataFrame(
-                        [[dataset_name, 'FragPipe', input.quant_type.get(), n_exp, n_ctrl, '', '', '']],
-                        columns=datasets.get().columns
-                    )
-                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-                    datasets.set(updated_datasets)
-                    progress.set(1.0)
-
-                elif input_format == "MSstats":
-                    progress.set(message="Parsing MSstats inputs", value=0.25)
-
-                    if not input.msstats_file.get() or not input.ed_file.get():
-                        notify(
-                            "Please upload both ProteinLevelData.csv and Experimental Design files",
-                            type="error"
-                        )
-                        return "Error: Missing files"
-
-                    progress.set(0.45)
-
-                    ed_path, ed_tmp = _edited_ed_file(
-                        ed_table_msstats, input.ed_file.get()[0]['datapath'])
-                    try:
-                        n_exp, n_ctrl = parse.parse_msstats(
-                            input.msstats_file.get()[0]['datapath'],
-                            ed_path,
-                            output_path
-                        )
-                    finally:
-                        if ed_tmp:
-                            os.unlink(ed_tmp)
-
-                    progress.set(0.85)
-
-                    new_row = pd.DataFrame(
-                        [[dataset_name, 'MSstats', 'Intensity', n_exp, n_ctrl, '', '', '']],
-                        columns=datasets.get().columns
-                    )
-                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-                    datasets.set(updated_datasets)
-                    progress.set(1.0)
-
-                elif input_format == "SAINT":
-                    progress.set(message="Parsing SAINT inputs", value=0.25)
-
-                    # Check if files are uploaded
-                    if not input.bait.get() or not input.prey.get() or not input.interaction.get():
-                        notify(
-                            "Please upload all three SAINT files (bait, prey, interaction)",
-                            type="error"
-                        )
-                        return "Error: Missing files"
-
-                    progress.set(0.45)
-
-                    # Create the output directory if it doesn't exist
-                    if not os.path.exists(output_path):
-                        os.makedirs(output_path)
-
-                    n_expts, n_ctrls = parse.parse_from_saint(
-                        bait_table.data_view(),
-                        input.prey.get()[0]['datapath'],
-                        input.interaction.get()[0]['datapath'],
-                        output_path
-                    )
-
-                    # Copy the bait, prey, and interaction files to the output directory
-                    shutil.copy(input.bait.get()[0]['datapath'], output_path + '/bait.txt')
-                    shutil.copy(input.prey.get()[0]['datapath'], output_path + '/prey.txt')
-                    shutil.copy(input.interaction.get()[0]['datapath'], output_path + '/interaction.txt')
-
-                    progress.set(0.85)
-
-                    # Update the datasets dataframe
-                    new_row = pd.DataFrame([[dataset_name, 'SAINT', input.quant_type.get(), n_expts, n_ctrls, '', '', '']], columns=datasets.get().columns)
-
-                    updated_datasets = pd.concat([datasets.get(), new_row], ignore_index=True)
-                    datasets.set(updated_datasets)
-                    progress.set(1.0)
-
-            # Success notification
-            notify(
-                f"Successfully parsed dataset '{dataset_name}'",
-                type="message",
-                duration=5
-            )
-
+            with ui.Progress(min=0, max=1) as progress:
+                backend.run_parse(dataset_name, input_format, files, input.quant_type.get(),
+                                  actor='gui', ed_frame=ed_frame, bait_frame=bait_frame,
+                                  run_id=run_id,
+                                  progress=lambda message, value: progress.set(value, message=message))
+            notify(f"Successfully parsed dataset '{dataset_name}'", type="message", duration=5)
         except ProxiMateError as e:
-            # Handle our custom exceptions with user-friendly messages
-            error_msg = format_error_notification(e)
-            notify(
-                error_msg,
-                type="error",
-                duration=None  # Keep error visible until dismissed
-            )
-            return f"Error: {e.user_message}"
-
+            notify(format_error_notification(e), type="error", duration=None)
+        except (ValueError, backend.BusyError) as e:
+            notify(f"Parser: {e}", type="error", duration=None)
         except FileNotFoundError as e:
-            notify(
-                f"File not found: {str(e)}",
-                type="error",
-                duration=10,
-                exc_info=True
-            )
-            return "Error: File not found"
-
+            notify(f"File not found: {e}", type="error", duration=10, exc_info=True)
         except PermissionError as e:
-            notify(
-                f"Permission denied accessing file: {str(e)}",
-                type="error",
-                duration=10,
-                exc_info=True
-            )
-            return "Error: Permission denied"
-
+            notify(f"Permission denied accessing file: {e}", type="error", duration=10, exc_info=True)
         except pd.errors.ParserError as e:
-            notify(
-                f"Error parsing file: {str(e)}\n\nEnsure files are in correct format.",
-                type="error",
-                duration=10,
-                exc_info=True
-            )
-            return "Error: File parsing failed"
-
+            notify(f"Error parsing file: {e}\n\nEnsure files are in correct format.",
+                   type="error", duration=10, exc_info=True)
         except Exception as e:
-            # Catch-all for unexpected errors
             logger.exception("Unexpected error parsing dataset '%s'", dataset_name)
             notify(
-                f"An unexpected error occurred while parsing '{dataset_name}':\n{str(e)}\n\n"
+                f"An unexpected error occurred while parsing '{dataset_name}':\n{e}\n\n"
                 f"The full error was written to {dataset_name}/proximate.log (run {run_id}).",
-                type="error",
-                duration=None
-            )
-            return f"Error: {str(e)}"
-
-        return "Parsed!"
+                type="error", duration=None)
 
 
-
-    def do_clear_datasets():
-        datasets.set(session_archive.empty_datasets_table())
-        logger.info("Clearing all datasets under %s", out_dir)
-
-        # The operational log lives here too and must outlive the datasets it
-        # describes; deleting it would also leave its handler writing to a
-        # removed file.
-        keep = {log_config.SERVER_LOG_FILENAME}
-
-        # Clear the output folder
-        for root, dirs, files in os.walk(out_dir):
-            for file in files:
-                if root == out_dir and file.startswith(tuple(keep)):
-                    continue
-                abs_file = os.path.join(root, file)
-                try:
-                    os.remove(abs_file)
-                except OSError:
-                    logger.exception("Could not remove %s", abs_file)
-            for dir in dirs:
-                abs_dir = os.path.join(root, dir)
-                try:
-                    shutil.rmtree(abs_dir)
-                except OSError:
-                    logger.exception("Could not remove %s", abs_dir)
 
     @reactive.effect
     @reactive.event(input.clear_datasets)
     def clear_datasets():
-        do_clear_datasets()
+        try:
+            backend.clear_datasets()
+        except backend.BusyError as e:
+            notify(f"Cannot clear the session: {e}", type="error", duration=None)
 
     @render.download_button(
         filename=lambda: f"ProxiMateSession_{datetime.datetime.now().strftime('%Y%m%d')}.zip")
@@ -1259,7 +955,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             # One fixed path, overwritten per download, so archives do not accumulate.
             zip_path = os.path.join(tempfile.gettempdir(), "ProxiMateSession.zip")
             session_archive.write_session_archive(
-                out_dir, datasets.get()['Dataset Name'].tolist(), zip_path)
+                out_dir, dataset_store.names(), zip_path)
             logger.info("Session archive written to %s", zip_path)
             return zip_path
         except Exception as e:
@@ -1276,20 +972,11 @@ def server(input: Inputs, output: Outputs, session: Session):
             return
         zip_path = uploaded[0]['datapath']
 
-        # The archive is checked before the current session is cleared, so a wrong
-        # file leaves the session as it was.
         try:
-            session_archive.inspect_session_archive(zip_path)
-        except session_archive.SessionArchiveError as e:
+            table = backend.load_session(zip_path, actor='gui')
+            notify(f"Session restored: {len(table)} dataset(s).", type="message")
+        except (session_archive.SessionArchiveError, backend.BusyError) as e:
             notify(str(e), type="error", duration=None)
-            return
-
-        do_clear_datasets()
-        try:
-            logger.info("Restoring session from uploaded archive %s", zip_path)
-            datasets.set(session_archive.extract_session_archive(zip_path, out_dir))
-            logger.info("Session restored: %d datasets", len(datasets.get()))
-            notify(f"Session restored: {len(datasets.get())} dataset(s).", type="message")
         except Exception as e:
             logger.exception("Failed to restore session from %s", zip_path)
             notify(f"Could not restore the session archive: {e}", type="error",
@@ -1331,123 +1018,23 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.event(input.score_data)
     def score_data():
         dataset_name = input.score_dataset.get()
-        dataset_path = out_dir + '/' + dataset_name
-
-        # One ID for this scoring run, inherited by score.py and annotator.py, so
-        # the four processes' log lines and manifest entries tie together.
-        run_id = log_config.new_run_id()
-
+        imputation = int(input.imputation_method.get())
+        pi_method = input.pi_method.get() if imputation == 2 else None
+        pi_bait = input.pi_bait.get() if pi_method == 'single_bait' else None
         try:
-            with ui.Progress(min=0, max=100) as progress, \
-                    log_config.run_context(run_id), \
-                    log_config.dataset_log(dataset_path):
-                progress.set(message="Scoring data", detail="Gathering inputs...", value=0)
-
-                # Get the quant type from the datasets dataframe
-                quant_type = datasets.get().loc[datasets.get()['Dataset Name'] == dataset_name, 'Quant Type'].values[0]
-
-                progress.set(message="Scoring data", detail="Running SAINT...", value=25)
-                logger.info("Starting scoring for dataset '%s' (quant=%s)", dataset_name, quant_type)
-
-                score_cmd = [
-                    "python3",
-                    "/Scripts/score.py",
-                    "--experimentalDesign",
-                    dataset_path + "/ED.csv",
-                    "--scoreInputs",
-                    dataset_path,
-                    "--outputPath",
-                    dataset_path,
-                    "--n-iterations",
-                    str(input.wdfdr_iterations.get()),
-                    "--imputation",
-                    input.imputation_method.get(),
-                    "--quantType",
-                    quant_type,
-                ]
-                if str(input.imputation_method.get()) == "2":
-                    score_cmd += ["--pi-method", input.pi_method.get()]
-                    if input.pi_method.get() == "single_bait":
-                        score_cmd += ["--pi-bait", input.pi_bait.get()]
-
-                returncode, log_tail = _run_stage_subprocess(score_cmd, dataset_path, run_id)
-
-                if returncode != 0:
-                    logger.error("score.py failed (exit code %d)", returncode)
-                    notify(
-                        f"Scoring failed for '{dataset_name}' (exit code {returncode}):\n"
-                        f"{log_tail or 'No output was logged; check the container logs.'}",
-                        type="error",
-                        duration=None
-                    )
-                    return
-
-                # Verify merged.csv was produced before running annotation
-                merged_path = dataset_path + "/merged.csv"
-                if not os.path.exists(merged_path):
-                    logger.error("Scoring did not produce merged.csv at %s", merged_path)
-                    notify(
-                        f"Scoring failed for '{dataset_name}': merged.csv was not produced",
-                        type="error",
-                        duration=None
-                    )
-                    return
-
-                progress.set(message="Scoring data", detail="Adding protein annotation...", value=65)
-                logger.info("Starting annotation for dataset '%s'", dataset_name)
-
-                ann_cmd = [
-                    "python3",
-                    "/Scripts/annotator.py",
-                    "--organism",
-                    input.organism.get(),
-                    "--scoreFile",
-                    merged_path,
-                    "--outputDir",
-                    dataset_path,
-                ]
-                # The checkbox is hidden for other organisms but keeps its value.
-                if input.organism.get() == "human" and input.exclude_hcm.get():
-                    ann_cmd.append("--excludeHCM")
-                returncode, log_tail = _run_stage_subprocess(ann_cmd, dataset_path, run_id)
-
-                if returncode != 0:
-                    logger.error("annotator.py failed (exit code %d)", returncode)
-                    notify(
-                        f"Annotation failed for '{dataset_name}' (exit code {returncode}):\n"
-                        f"{log_tail or 'No output was logged; check the container logs.'}",
-                        type="error",
-                        duration=None
-                    )
-                    return
-
-                progress.set(message="Scoring data", detail="Updating datasets...", value=90)
-
-                # Update the datasets dataframe only on success
-                curr_dataset = datasets.get().copy()
-
-                imp_mapping = {0: 'Default', 1: 'Prey-specific', 2: 'Refactored AFT', 3: 'One-component AFT'}
-
-                curr_dataset.loc[curr_dataset['Dataset Name'] == dataset_name, 'Scored'] = 'Yes'
-                curr_dataset.loc[curr_dataset['Dataset Name'] == dataset_name, 'Imputation'] = imp_mapping[int(input.imputation_method.get())]
-                curr_dataset.loc[curr_dataset['Dataset Name'] == dataset_name, 'WDFDR iterations'] = input.wdfdr_iterations.get()
-                datasets.set(curr_dataset)
-                progress.set(message="Scoring data", detail="Done!", value=100)
-
-                logger.info("Scoring and annotation completed successfully for '%s'", dataset_name)
-                notify(
-                    f"Successfully scored and annotated dataset '{dataset_name}'",
-                    type="message",
-                    duration=5
-                )
-
+            with ui.Progress(min=0, max=1) as progress:
+                backend.run_score(dataset_name, imputation, input.wdfdr_iterations.get(),
+                                  input.organism.get(), input.exclude_hcm.get(),
+                                  pi_method=pi_method, pi_bait=pi_bait, actor='gui',
+                                  progress=lambda message, value: progress.set(
+                                      value, message="Scoring data", detail=message))
+            notify(f"Successfully scored and annotated dataset '{dataset_name}'",
+                   type="message", duration=5)
+        except (backend.StageError, backend.BusyError, ValueError, KeyError) as e:
+            notify(str(e), type="error", duration=None)
         except Exception as e:
             logger.exception("Unexpected error during scoring of '%s'", dataset_name)
-            notify(
-                f"Unexpected error during scoring: {str(e)}",
-                type="error",
-                duration=None
-            )
+            notify(f"Unexpected error during scoring: {e}", type="error", duration=None)
 
     # Quality controls tab
     @reactive.Calc
@@ -2173,11 +1760,13 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @reactive.Calc
     def available_datasets():
-        return datasets.get()["Dataset Name"].tolist()
+        datasets()
+        return dataset_store.names()
 
     @reactive.Calc
     def scored_datasets():
-        return datasets.get()[datasets.get()['Scored'] == 'Yes']["Dataset Name"].tolist()
+        datasets()
+        return dataset_store.scored_names()
 
     @reactive.Effect
     @reactive.event(datasets)
@@ -2247,7 +1836,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         dataset_name = input.qc_dataset()
         if not dataset_name:
             return
-        df = datasets.get()
+        df = datasets()
         quant = df.loc[df['Dataset Name'] == dataset_name, 'Quant Type']
         if quant.empty:
             return
@@ -2460,98 +2049,28 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         return fig
 
+    def _gene_list(region, label, empty):
+        if not all([input.comp_dataset_a(), input.comp_dataset_b(), input.comp_bait_a(), input.comp_bait_b()]):
+            return "Select datasets and baits to view gene lists"
+        genes = backend.compare_sets(comp_filtered_data_a_cached(), comp_filtered_data_b_cached())[region]
+        if not genes:
+            return empty
+        return f"{label} ({len(genes)} genes):\n\n" + "\n".join(genes)
+
     @render.text
     @reactive.event(input.compare_networks)
     def genes_a_only():
-        """Render list of genes only in network A."""
-        # Get selections
-        dataset_a = input.comp_dataset_a()
-        dataset_b = input.comp_dataset_b()
-        bait_a = input.comp_bait_a()
-        bait_b = input.comp_bait_b()
-
-        if not all([dataset_a, dataset_b, bait_a, bait_b]):
-            return "Select datasets and baits to view gene lists"
-
-        # Get cached filtered data
-        data_a = comp_filtered_data_a_cached()
-        data_b = comp_filtered_data_b_cached()
-
-        # Get sets
-        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
-        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
-        only_a = set_a - set_b
-
-        if len(only_a) == 0:
-            return "No unique genes in Network A"
-
-        # Get gene names
-        genes_only_a = data_a[data_a['Prey.ID'].isin(only_a)]['First_Prey_Gene'].unique()
-        genes_sorted = sorted(genes_only_a)
-
-        return f"Network A only ({len(genes_sorted)} genes):\n\n" + "\n".join(genes_sorted)
+        return _gene_list('a_only', "Network A only", "No unique genes in Network A")
 
     @render.text
     @reactive.event(input.compare_networks)
     def genes_b_only():
-        """Render list of genes only in network B."""
-        # Get selections
-        dataset_a = input.comp_dataset_a()
-        dataset_b = input.comp_dataset_b()
-        bait_a = input.comp_bait_a()
-        bait_b = input.comp_bait_b()
-
-        if not all([dataset_a, dataset_b, bait_a, bait_b]):
-            return "Select datasets and baits to view gene lists"
-
-        # Get cached filtered data
-        data_a = comp_filtered_data_a_cached()
-        data_b = comp_filtered_data_b_cached()
-
-        # Get sets
-        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
-        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
-        only_b = set_b - set_a
-
-        if len(only_b) == 0:
-            return "No unique genes in Network B"
-
-        # Get gene names
-        genes_only_b = data_b[data_b['Prey.ID'].isin(only_b)]['First_Prey_Gene'].unique()
-        genes_sorted = sorted(genes_only_b)
-
-        return f"Network B only ({len(genes_sorted)} genes):\n\n" + "\n".join(genes_sorted)
+        return _gene_list('b_only', "Network B only", "No unique genes in Network B")
 
     @render.text
     @reactive.event(input.compare_networks)
     def genes_both():
-        """Render list of genes in both networks."""
-        # Get selections
-        dataset_a = input.comp_dataset_a()
-        dataset_b = input.comp_dataset_b()
-        bait_a = input.comp_bait_a()
-        bait_b = input.comp_bait_b()
-
-        if not all([dataset_a, dataset_b, bait_a, bait_b]):
-            return "Select datasets and baits to view gene lists"
-
-        # Get cached filtered data
-        data_a = comp_filtered_data_a_cached()
-        data_b = comp_filtered_data_b_cached()
-
-        # Get sets
-        set_a = set(data_a['Prey.ID'].unique()) if len(data_a) > 0 else set()
-        set_b = set(data_b['Prey.ID'].unique()) if len(data_b) > 0 else set()
-        both = set_a & set_b
-
-        if len(both) == 0:
-            return "No shared genes between networks"
-
-        # Get gene names (use data_a arbitrarily since they're in both)
-        genes_both = data_a[data_a['Prey.ID'].isin(both)]['First_Prey_Gene'].unique()
-        genes_sorted = sorted(genes_both)
-
-        return f"Both networks ({len(genes_sorted)} genes):\n\n" + "\n".join(genes_sorted)
+        return _gene_list('both', "Both networks", "No shared genes between networks")
 
     @reactive.Effect
     @reactive.event(input.download_dataset, datasets)
@@ -3066,7 +2585,8 @@ def server(input: Inputs, output: Outputs, session: Session):
         entries = cytoscape_ctl.snapshot()['log']
         if not entries:
             return "No Cytoscape activity yet."
-        return "\n".join(f"{e['ts'][11:]}  {e['op']}: {e['detail']}" for e in reversed(entries))
+        return "\n".join(f"{e['ts'][11:]}  [{e['actor']}] {e['op']}: {e['detail']}"
+                         for e in reversed(entries))
 
 def log_startup():
     """Record the configuration the server came up with.
@@ -3095,4 +2615,5 @@ log_startup()
 app = App(app_ui, server)
 
 if __name__ == "__main__":
-    run_app(app, host="0.0.0.0", port=3838)
+    run_app(app, host=os.environ.get("PROXIMATE_GUI_HOST", "0.0.0.0"),
+            port=int(os.environ.get("PROXIMATE_GUI_PORT", "3838")))

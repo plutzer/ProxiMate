@@ -192,6 +192,10 @@ def score_compPass(input, norm_factor=DEFAULT_NORM_FACTOR, iterations=None, seed
     ave_psm["N_Saw"] = n_saw_values[row_index, col_index]
     ave_psm["N_Exp_With_Prey"] = n_exp_with_prey[row_index]
 
+    # The p-value columns are always present: downstream filters read WDFDR from
+    # every scored table and treat NaN as failing the cutoff.
+    ave_psm["WD_pval"] = np.nan
+    ave_psm["WDFDR"] = np.nan
     if iterations:
         wd_pvals = calculate_wd_pvals_matrix(normalized_wd_scores, ave_psm_values, prey_means_matrix, prey_sd_matrix, n_exp_with_prey, n_saw_values, n_experiments, iterations, norm_factor, rng)
         wd_pvals_list = wd_pvals[row_index, col_index]

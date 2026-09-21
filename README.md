@@ -12,8 +12,10 @@ All-in-one GUI and scripts for analyzing proximity labelling data.
       plutzer/proximate
     ```
    Without the mount, everything the tool writes — datasets, logs and run manifests —
-   lives inside the container and is lost when it is removed.
-3. Access the GUI through a web browswer at localhost:3838
+   lives inside the container and is lost when it is removed. Add
+   `-p 127.0.0.1:3839:3839` to let an agent such as Claude Code or Codex drive the
+   session too; see [Agent access (MCP)](#agent-access-mcp).
+3. Access the GUI through a web browser at localhost:3838
 
 ### Running the docker container interactively (experienced users)
 The backend of the application can be accessed interactively by overriding the command to start the shiny app:
@@ -129,6 +131,58 @@ version recorded in `run.json` comes from a build argument:
 docker build --build-arg PROXIMATE_VERSION=$(git rev-parse --short HEAD) \
   -t plutzer/proximate:latest .
 ```
+
+## Agent access (MCP)
+
+The container also serves an [MCP](https://modelcontextprotocol.io) endpoint at
+`http://localhost:3839/mcp` (streamable HTTP) from the same process as the GUI, so an
+agent such as Claude Code and a person at the browser share one session. Publish the
+port on the loopback interface only; it carries no authentication:
+
+```
+docker run -p 3838:3838 -p 127.0.0.1:3839:3839 \
+  --mount type=bind,source=<native_path_to_output_directory>,target=/Outputs \
+  plutzer/proximate
+```
+
+Register the endpoint once with the agent you use; the GUI's sidebar shows the same
+commands. Claude Code (the repository's `.mcp.json` already points it there, so this
+is only needed from another directory):
+
+```
+claude mcp add --transport http proximate http://localhost:3839/mcp
+```
+
+Codex CLI, or the equivalent entry in `~/.codex/config.toml`:
+
+```
+codex mcp add proximate --url http://localhost:3839/mcp
+```
+
+```toml
+[mcp_servers.proximate]
+url = "http://localhost:3839/mcp"
+```
+
+Any other MCP client that speaks streamable HTTP connects to the same URL. Then ask
+the agent to help with a dataset; `curl localhost:3839/api/health` confirms the
+endpoint is up before you do. The agent sees four
+tools: `search_tools` and `get_tool_details` describe the operations, `call_tool` runs
+one, and `get_gui_documentation` explains the GUI tab by tab so the agent can help a
+person use it. Every operation takes its thresholds and settings as explicit arguments;
+none reads what the GUI's sliders show. Operations are classed by what they touch:
+
+| Mode | Operations | Effect on a person at the GUI |
+| --- | --- | --- |
+| read | `list_datasets`, `get_dataset_info`, `server_status`, `cytoscape_status`, `cytoscape_read_selection`, `cytoscape_get_positions` | none |
+| sandbox | `threshold_metrics`, `feature_analysis`, `compare_networks` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
+| dataset | `parse_dataset`, `score_dataset`, `load_session` | the dataset table and dropdowns update within a second; a dataset being scored by either side refuses a second job; `load_session` is destructive and needs `confirm` |
+| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_*`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_sync_positions`, `cytoscape_export_image`, `cytoscape_unlock` | the drawn network changes under the mouse; the Cytoscape tab's status shows the thresholds it was drawn at and the activity panel lists each operation as `[mcp]` |
+
+Sends and exports from MCP are recorded in the dataset's `run.json` with their full
+argument set. `curl localhost:3839/api/health` reports the datasets, running jobs and
+drawn network without touching Cytoscape. `PROXIMATE_MCP_PORT`, `PROXIMATE_MCP_HOST`,
+`PROXIMATE_GUI_PORT` and `PROXIMATE_GUI_HOST` move the ports.
 
 ## Annotations and Databases:
 Every release ships the BioGRID, UniProt and Human Protein Atlas snapshot downloaded

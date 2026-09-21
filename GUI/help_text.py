@@ -121,3 +121,33 @@ def tip(label, key):
         " ",
         ui.tooltip(ui.span("ⓘ", style=INFO_STYLE), TOOLTIPS[key]),
     )
+
+
+# Which tab each tooltip belongs to, for documentation served outside the page.  The
+# shared threshold and preset entries sit with the Data Thresholding tab, where the
+# thresholds are explained first.
+SECTIONS = {
+    "Network Scoring": [
+        "dataset_name", "input_format", "quant_type", "pg_file", "diann_matrix_file",
+        "pioneer_matrix_file", "fragpipe_file", "msstats_file", "ed_file", "ed_file_msstats",
+        "saint_bait", "saint_prey", "saint_interaction", "organism", "exclude_hcm",
+        "imputation_method", "pi_method", "pi_bait", "wdfdr_iterations", "clear_datasets",
+        "download_session", "session_file",
+    ],
+    "Data Thresholding": [
+        "saintscore", "bfdr", "wd", "wdfdr", "preset_stringent", "preset_moderate",
+        "preset_relaxed", "preset_none", "pca_imputation", "pca_normalization",
+        "pca_min_detection", "experiment_pca", "prey_pca", "prey_pca_color", "qc_bait",
+        "metric_network_size", "metric_enrichment", "metric_degree",
+    ],
+    "Protein Feature Analysis": [
+        "feature_analysis", "feature_type", "num_features", "download_pvalue_threshold",
+        "download_enrichment_threshold",
+    ],
+    "Network Comparison": ["comp_bait", "volcano_plot", "venn", "gene_lists"],
+    "Cytoscape": [key for key in TOOLTIPS if key.startswith("cy_")],
+    "Downloads": [
+        "dl_filter_card", "dl_preset", "dl_groups", "custom_columns", "dl_genelist_mode",
+        "dl_prohits_abundance", "batch_export",
+    ],
+}
