@@ -112,10 +112,15 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.arch }},mode=max
 
+      # The file is named by the bare hex digest: upload-artifact rejects a colon
+      # in a path, so the sha256: prefix is added back in the manifest job.
       - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          [ -n "$DIGEST" ] || { echo "::error::build produced no digest"; exit 1; }
           mkdir -p digests
-          touch "digests/${{ steps.build.outputs.digest }}"
+          touch "digests/${DIGEST#sha256:}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -164,7 +169,7 @@ jobs:
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
           DIGESTS=()
-          for d in digests/*; do DIGESTS+=("$HUB_IMAGE@$(basename "$d")"); done
+          for d in digests/*; do DIGESTS+=("$HUB_IMAGE@sha256:$(basename "$d")"); done
           docker buildx imagetools create \
             -t "$HUB_IMAGE:$TAG" -t "$HUB_IMAGE:latest" \
             -t "$GHCR_IMAGE:$TAG" -t "$GHCR_IMAGE:latest" \
