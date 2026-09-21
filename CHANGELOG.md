@@ -11,6 +11,9 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+### Fixed
+- Release builds no longer fail while preprocessing BioGRID; the download step now installs pandas.
+
 ## [0.2.0] - 2026-09-21
 
 ### Added
