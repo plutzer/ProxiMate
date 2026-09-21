@@ -38,7 +38,7 @@ git rev-parse -q --verify "refs/tags/$tag" >/dev/null || { echo "tag $tag does n
 if [ ! -s Datasets/build_info.txt ]; then
     echo "downloading annotation databases into Datasets/"
     docker run --rm -v "$(pwd -W 2>/dev/null || pwd):/work" -w /work python:3.12-slim \
-        sh -c "pip install -q requests && python3 Scripts/setup_datasets.py --output-dir Datasets --skip corum"
+        sh -c "grep -E '^(requests|pandas|numpy)==' requirements.txt | xargs pip install -q && python3 Scripts/setup_datasets.py --output-dir Datasets --skip corum"
 fi
 grep -q FAILED Datasets/build_info.txt && { echo "a database download failed; see Datasets/build_info.txt" >&2; exit 1; }
 
