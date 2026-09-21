@@ -60,7 +60,6 @@ def clean_motif(s):
     # Join the extracted motif names with a semicolon and space
     return '; '.join(motif_names)
 
-# TODO: Add an annotation for if it is a self-interaction
 def self_inter(prey_id, bait_id):
     prey_id=prey_id.split(';')
     for prey in prey_id:
@@ -68,7 +67,6 @@ def self_inter(prey_id, bait_id):
                 return True
     return False
 
-# TODO: Add an annotation for if the prey is a bait
 def prey_is_bait(prey_id, bait_values):
     prey_id=prey_id.split(';')
     for prey in prey_id:
@@ -76,7 +74,6 @@ def prey_is_bait(prey_id, bait_values):
             return True
     return False
 
-# TODO: Add an annotation for the main location
 #Get first prey-gene -> new column
 def get_first_pg(item):
     return item.split(';')[0]

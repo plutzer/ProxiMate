@@ -128,7 +128,7 @@ def filter_impute(prey_path,interaction_path,output_dir,ed_path,impute=False):
             # Calculate the mean and sd of the log10 intensities excluding zeros
             log_prey_intensities = [np.log10(x) for x in prey_intensities if x != 0]
             obs_mu = np.mean(log_prey_intensities)
-            obs_sigma = np.std(log_prey_intensities) # TODO: What happens if this is 0?
+            obs_sigma = np.std(log_prey_intensities)
             if obs_sigma == 0:
                 obs_sigma = 0.5
 

@@ -1,7 +1,7 @@
 """Global BFDR recomputation for merged per-group SAINT outputs.
 
 SAINT's own BFDR is computed globally across all (Bait, Prey) pairs in one run
-(verified in SAINTexpress-custom/SAINT-MRF-int/main.hpp:491-499, which iterates
+(verified in saint/patches/SAINT-MRF-int/main.hpp:491-499, which iterates
 Fastmat.mat flat via average_score.size()).  When we fan SAINT out per group,
 each per-group list.txt carries a BFDR calibrated against only that group's
 pairs.  Re-pooling restores the global posterior-FDR calibration across the

@@ -11,8 +11,19 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+### Changed
+- Example datasets live in `examples/` (TIP49 spectral counts from the SAINTexpress
+  distribution and the Human Cell Map LFQ set), each with a README; the SAINTexpress
+  sources live under `saint/` as `upstream/` and `patches/`.
+- `THIRD_PARTY_LICENSES.md` lists the licenses of the bundled SAINTexpress, Boost,
+  NLopt, GOGO and CORUM.
+
 ### Fixed
 - Release builds no longer fail while preprocessing BioGRID; the download step now installs pandas.
+
+### Removed
+- The SAINTexpress precompiled binaries, its demo input files and an unused copy of its
+  spectral-count sources are no longer tracked; the image builds both binaries from source.
 
 ## [0.2.0] - 2026-09-21
 
@@ -56,5 +67,6 @@ section to the version and date and starts a fresh Unreleased section above it.
 Last version published to Docker Hub by hand, before this changelog existed. Older
 versions are listed at https://hub.docker.com/r/plutzer/proximate/tags.
 
-[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.1.11...HEAD
+[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.2.0
 [0.1.11]: https://hub.docker.com/r/plutzer/proximate/tags
