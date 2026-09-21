@@ -11,6 +11,8 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-21
+
 ### Added
 - Cytoscape bait nodes are keyed on bait name, so two constructs of one protein draw as
   separate baits; every MCP dataset operation names its dataset with `dataset`.
