@@ -658,21 +658,14 @@ app_ui = ui.page_navbar(
                     )
     ),
     sidebar=ui.sidebar(
-        ui.h4("ProxiMate Beta"),
+        ui.h4("ProxiMate"),
         # Resolved once: the build cannot change while the server is running, and this
         # is the identifier a bug report has to quote to be reproducible.
         ui.div(provenance.version_label(), class_="text-muted small"),
         ui.hr(),
         ui.p(
-            "Welcome! This is a ",
-            ui.strong("pre-release beta version"),
-            " of ProxiMate.",
-        ),
-        ui.p(
-            "Features may change, and you may encounter bugs. "
             "Your feedback is invaluable in helping us improve the tool."
         ),
-        ui.hr(),
         ui.p(ui.strong("Get in touch:"), style="margin-bottom: 5px;"),
         ui.tags.ul(
             ui.tags.li(
@@ -687,13 +680,7 @@ app_ui = ui.page_navbar(
         *[ui.div(ui.p(f"Connect {agent} to this server with:", class_="small", style="margin-bottom: 5px;"),
                  ui.tags.pre(command, style="white-space: pre-wrap; word-break: break-all; font-size: 0.75em;"))
           for agent, command in MCP_ADD_COMMANDS.items()],
-        ui.p("Agent actions show as toasts here and as [mcp] in the Cytoscape activity panel.",
-             class_="text-muted small"),
         ui.hr(),
-        ui.p(
-            "Thank you for testing ProxiMate!",
-            style="font-style: italic; color: #666;"
-        ),
     ),
     title="ProxiMate",
     header=ui.output_ui("agent_banner"),
