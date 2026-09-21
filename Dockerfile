@@ -102,7 +102,9 @@ ENV PYTHONUNBUFFERED=1
 # Create a directory for output files
 RUN mkdir -p /Outputs
 
-# When the container starts, start the GUI
-EXPOSE 3838
-CMD ["python3", "-u", "/GUI/app.py"]
+# When the container starts, serve the GUI (3838) and the MCP tools (3839) from one
+# process.  The MCP port carries no authentication: publish it on the loopback
+# interface only, e.g. -p 127.0.0.1:3839:3839.
+EXPOSE 3838 3839
+CMD ["python3", "-u", "/GUI/server.py"]
 

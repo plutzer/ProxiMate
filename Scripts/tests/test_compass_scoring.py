@@ -179,3 +179,11 @@ def test_wd_pvalues_do_not_depend_on_the_normalization_factor(comppass_input_lar
 
     assert np.array_equal(at_098.to_numpy(), at_050.to_numpy())
     assert np.array_equal(at_098.to_numpy(), at_020.to_numpy())
+
+
+def test_zero_iterations_still_writes_the_pvalue_columns_as_nan(comppass_input):
+    """Downstream filters read WDFDR from every scored table; without permutations
+    the column exists and is all NaN, which the filters treat as failing."""
+    result = score_compPass(comppass_input.copy(), 0.98, iterations=0)
+    assert result["WD_pval"].isna().all()
+    assert result["WDFDR"].isna().all()

@@ -23,6 +23,12 @@ section to the version and date and starts a fresh Unreleased section above it.
 - Cytoscape selection tools: loners and satellites of one bait, select by relation
   (interactors, singletons, partners, co-complex members), Leiden clustering of the
   selection with re-packing by community.
+- MCP server on port 3839, served from the same process as the GUI: four tools
+  (`search_tools`, `get_tool_details`, `call_tool`, `get_gui_documentation`) give an
+  agent parsing, scoring, threshold metrics, feature analysis, network comparison and
+  the Cytoscape controls, with every threshold passed explicitly and every action
+  labeled `mcp` in the Cytoscape activity panel. The datasets table is shared across
+  browser sessions and updates within a second of a change from either side.
 - Pioneer input format.
 - Tooltips on every control.
 - Tests and logging for the scoring and annotation functions.

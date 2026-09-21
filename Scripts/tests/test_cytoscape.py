@@ -616,3 +616,44 @@ def test_unlock_clears_only_the_locks_that_are_held(monkeypatch):
         raise AssertionError("cleared a lock that was not held")
     monkeypatch.setattr(cy.p4c, 'clear_network_property_bypass', boom)
     assert cy.unlock(3) == []
+
+
+# --- actor, explicit selection and positions (the MCP surface) --------------------------
+
+def test_mutations_record_their_actor(controlled, cytoscape):
+    ctl.select_nodes(['P1', 'P2'], actor='mcp')
+    ctl.set_edge_visibility('show_all')
+    log = ctl.snapshot()['log']
+    assert [e['actor'] for e in log[-2:]] == ['mcp', 'gui']
+    assert log[-2]['op'] == 'select_nodes'
+
+
+def test_select_nodes_resolves_symbols_and_refuses_unknown_ones(controlled, cytoscape):
+    chosen = ctl.select_nodes(['G1', 'P2'], add=True)
+    assert chosen == ['P1', 'P2']
+    assert cytoscape['calls'][-1] == ('select', ['P1', 'P2'], True)
+    with pytest.raises(ValueError, match='ZZ'):
+        ctl.select_nodes(['P1', 'ZZ'])
+    with pytest.raises(ValueError):
+        ctl.select_nodes([])
+
+
+def test_get_positions_reads_cytoscape_for_the_drawn_nodes(controlled, cytoscape):
+    nodes, _ = controlled
+    cytoscape['positions'] = {i: (1.0, 2.0) for i in nodes['id']}
+    cytoscape['positions'].update({'P2': (3.0, 4.0), 'stray': (9.0, 9.0)})
+    assert set(ctl.get_positions()) == set(nodes['id'])
+    assert ctl.get_positions(['G2']) == {'P2': [3.0, 4.0]}
+    del cytoscape['positions']['PA']
+    with pytest.raises(ValueError, match='PA'):
+        ctl.get_positions(['PA'])       # drawn, but Cytoscape reported no position
+
+
+def test_move_nodes_writes_positions_and_keeps_them_in_the_state(controlled, cytoscape):
+    nodes, _ = controlled
+    n = ctl.move_nodes({'G1': [10, 20], 'P2': (30, 40)}, actor='mcp')
+    assert n == 2
+    assert cytoscape['calls'][-1] == ('positions', {'P1': (10.0, 20.0), 'P2': (30.0, 40.0)})
+    assert nodes.set_index('id').loc['P1', ['x', 'y']].tolist() == [10.0, 20.0]
+    with pytest.raises(ValueError):
+        ctl.move_nodes({'P1': [1]})
