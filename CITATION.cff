@@ -8,10 +8,10 @@ title: "ProxiMate"
 abstract: "All-in-one GUI and scripts for analyzing proximity labeling proteomics data."
 authors:
   - family-names: Plutzer
-    given-names: "FILL IN"   # given name(s)
+    given-names: "Isaac"
     email: plutzer@wustl.edu
     affiliation: "Washington University in St. Louis"
-    # orcid: "https://orcid.org/0000-0000-0000-0000"   # fill in
+    orcid: "https://orcid.org/0000-0002-9370-7763"
 repository-code: "https://github.com/plutzer/ProxiMate"
 license: MIT
 version: 0.2.0
