@@ -113,14 +113,15 @@ def _fake_stages(monkeypatch, calls, fail=None):
     monkeypatch.setattr(backend, '_run_stage_subprocess', run)
 
 
-def test_score_runs_both_stages_with_the_given_settings_and_marks_the_row(parsed, monkeypatch):
+def test_score_runs_both_stages_with_the_given_settings_and_marks_the_row(out_dir, monkeypatch):
+    backend.run_parse('ds1', 'SAINT', _saint_files(out_dir), 'Intensity')
     calls = []
     _fake_stages(monkeypatch, calls)
     result = backend.run_score('ds1', imputation=2, wdfdr_iterations=5, organism='human',
                                exclude_hcm=True, pi_method='single_bait', pi_bait='Ctrl', seed=7)
     score_cmd, ann_cmd = calls
     assert score_cmd[1].endswith('score.py')
-    assert score_cmd[score_cmd.index('--quantType') + 1] == 'Spectral Counts'
+    assert score_cmd[score_cmd.index('--quantType') + 1] == 'Intensity'
     assert score_cmd[score_cmd.index('--imputation') + 1] == '2'
     assert score_cmd[score_cmd.index('--n-iterations') + 1] == '5'
     assert score_cmd[score_cmd.index('--pi-bait') + 1] == 'Ctrl'
@@ -146,6 +147,19 @@ def test_score_refuses_an_unknown_dataset_or_bad_settings(parsed, monkeypatch):
         backend.run_score('ds1', imputation=9, wdfdr_iterations=0, organism='human', exclude_hcm=False)
     with pytest.raises(ValueError, match='organism'):
         backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='cat', exclude_hcm=False)
+
+
+@pytest.mark.parametrize("imputation", [1, 2, 3])
+def test_score_refuses_imputation_for_spectral_counts(parsed, monkeypatch, imputation):
+    """The AFT imputations model missing intensities; the spectral-count SAINT build
+    cannot use their output, so the request is refused before any stage runs."""
+    calls = []
+    _fake_stages(monkeypatch, calls)
+    with pytest.raises(ValueError, match='spectral counts'):
+        backend.run_score('ds1', imputation=imputation, wdfdr_iterations=0, organism='human',
+                          exclude_hcm=False)
+    assert calls == []
+    assert store.row('ds1')['Scored'] != 'Yes'
 
 
 def test_a_dataset_being_worked_on_refuses_a_second_job(parsed, monkeypatch):

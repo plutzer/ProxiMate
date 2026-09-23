@@ -18,6 +18,10 @@ section to the version and date and starts a fresh Unreleased section above it.
 - `THIRD_PARTY_LICENSES.md` lists the licenses of the bundled SAINTexpress, Boost,
   NLopt, GOGO and CORUM.
 - Hovering a point in the prey PCA shows the gene name in bold above the accession.
+- The Protein Feature Analysis parameters card takes a quarter of the row, leaving the
+  heatmap three quarters.
+- Scoring a spectral-count dataset with AFT imputation is refused up front with a
+  message naming the reason; the GUI offers only Default for such datasets.
 
 ### Fixed
 - Release builds no longer fail while preprocessing BioGRID; the download step now installs pandas.

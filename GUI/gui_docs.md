@@ -23,7 +23,8 @@ is editable before parsing and the edited table is what gets parsed. *Parse Data
 the SAINT and CompPASS inputs and adds a row to the session table.
 
 **Scoring** picks a parsed dataset, the organism, the imputation method for missing
-control values, how π is estimated (imputation 2 only), the number of WDFDR
+control values (AFT imputation applies to intensity data; a spectral-count dataset
+offers Default only), how π is estimated (imputation 2 only), the number of WDFDR
 permutations, and for human data whether Human Cell Map evidence is excluded from
 BioGRID. *Score Data* runs SAINTexpress and CompPASS, then annotates the result; the
 row's Scored column flips to Yes. Scoring blocks the page until it finishes.

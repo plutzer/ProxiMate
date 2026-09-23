@@ -295,6 +295,10 @@ def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_meth
     imputation = int(imputation)
     if imputation not in IMPUTATION_LABELS:
         raise ValueError(f"imputation must be one of {sorted(IMPUTATION_LABELS)}, got {imputation}")
+    if row['Quant Type'] == 'Spectral Counts' and imputation != 0:
+        raise ValueError(
+            f"dataset {name!r} holds spectral counts, and AFT imputation applies to "
+            "intensity data only; score it with imputation 0 (Default)")
     if organism not in ORGANISMS:
         raise ValueError(f"organism must be one of {sorted(ORGANISMS)}, got {organism!r}")
     if pi_method is not None and pi_method not in PI_METHODS:

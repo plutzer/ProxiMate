@@ -29,12 +29,9 @@ def _select_saint(quant_type, imputation):
     Three SAINTexpress builds are installed.  Intensity runs with AFT imputation
     (--imputation 1, 2 or 3) use the custom build, which reads the imputed prey file;
     unimputed intensity runs use the stock intensity build with prey.txt.  Spectral
-    counts always use the spc build with prey.txt: imputation is not implemented for
-    them, so a request for it is reported and ignored.
+    counts use the spc build with prey.txt; `main` rejects imputation for them.
     """
     if quant_type == "Spectral Counts":
-        if imputation in ("1", "2", "3"):
-            logger.warning("Imputation for spectral counts not yet implemented. Running SPC SAINT without imputation...")
         return SAINT_EXPRESS_SPC_DIR, "prey.txt"
     if imputation in ("1", "2", "3"):
         return SAINT_EXPRESS_INT_DIR, "imputed_prey.txt"
@@ -228,6 +225,13 @@ def _score(args, record):
             sys.exit(1)
     if args.experimentalDesign:
         record.add_input(args.experimentalDesign, role="experimentalDesign")
+
+    # The AFT imputations model missing intensities; the spectral-count SAINT build
+    # cannot read their output, so refuse before any of them runs.
+    if args.quantType == "Spectral Counts" and args.imputation != "0":
+        logger.error("--imputation %s: AFT imputation applies to intensity data only; "
+                     "score spectral counts with --imputation 0", args.imputation)
+        sys.exit(1)
 
     # Run the imputation
     try:

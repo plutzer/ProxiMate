@@ -27,13 +27,10 @@ import score
     ("LFQ", "0", score.SAINT_EXPRESS_INT_DEFAULT_DIR, "prey.txt"),
     ("LFQ", "1", score.SAINT_EXPRESS_INT_DIR, "imputed_prey.txt"),
     ("Spectral Counts", "0", score.SAINT_EXPRESS_SPC_DIR, "prey.txt"),
-    ("Spectral Counts", "1", score.SAINT_EXPRESS_SPC_DIR, "prey.txt"),
 ])
 def test_quant_type_and_imputation_select_the_build_and_prey_file(
         quant_type, imputation, binary, prey_file):
-    """Which build ran is not recoverable from list.txt, so the selection is pinned.
-    Imputation is not implemented for spectral counts, so that build never reads an
-    imputed prey file whatever was asked for."""
+    """Which build ran is not recoverable from list.txt, so the selection is pinned."""
     assert score._select_saint(quant_type, imputation) == (binary, prey_file)
 
 

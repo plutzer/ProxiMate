@@ -373,6 +373,7 @@ app_ui = ui.page_navbar(
                         ),
                         ui.download_button("download_enrichment", "Download Filtered Enrichment Results"),
                     ),
+                    col_widths=(3, 9),
                 ),
     ),
     ui.nav_panel("Network Comparison",
@@ -982,6 +983,24 @@ def server(input: Inputs, output: Outputs, session: Session):
             notify(f"Could not restore the session archive: {e}", type="error",
                    duration=None)
 
+
+    @reactive.effect
+    @reactive.event(input.score_dataset)
+    def update_imputation_choices():
+        """AFT imputation models missing intensities, so a spectral-count dataset
+        offers Default only."""
+        dataset = input.score_dataset.get()
+        df = datasets()
+        quant = df.loc[df['Dataset Name'] == dataset, 'Quant Type']
+        if quant.empty:
+            return
+        choices = {0: "Default"}
+        if quant.values[0] != "Spectral Counts":
+            choices.update({2: "Two-component AFT", 3: "One-component AFT"})
+        selected = input.imputation_method.get()
+        if int(selected) not in choices:
+            selected = "0"
+        ui.update_radio_buttons("imputation_method", choices=choices, selected=selected)
 
     @reactive.effect
     @reactive.event(input.score_dataset, input.imputation_method, input.pi_method)

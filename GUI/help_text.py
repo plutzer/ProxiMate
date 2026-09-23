@@ -37,7 +37,7 @@ TOOLTIPS = {
     "saint_interaction": "SAINT interaction.txt: one row per protein per experiment - experiment name, bait, prey, and quantity.",  # tooltip
     "organism": "The species your samples came from. Chooses which annotation databases (BioGRID, UniProt, HPA, CORUM) are used for annotation and enrichment.",  # tooltip
     "exclude_hcm": "Annotate against a BioGRID copy with all Human Cell Map (Go et al. 2021) evidence removed. HCM is itself a BioID screen, so it makes proximity-labeling hits look more 'known' than they are. Interactions with other evidence are kept.",  # tooltip
-    "imputation_method": "How missing control values are filled in before SAINT scoring. Default = no fill-in; the AFT options model the chance a value is missing because it fell below detection. Use Default for MSstats input.",  # tooltip
+    "imputation_method": "How missing control values are filled in before SAINT scoring. Default = no fill-in; the AFT options model the chance an intensity is missing because it fell below detection, so they apply to intensity data only. Use Default for MSstats input.",  # tooltip
     "pi_method": "π is the estimated share of missing values that are true absences rather than below-detection signals. Choose to estimate it from all control baits or fit it from a single one.",  # tooltip
     "pi_bait": "The control bait whose replicates are used to fit π. Pick one with several replicates.",  # tooltip
     "wdfdr_iterations": "Number of data shuffles used to estimate the WD score's false discovery rate (WDFDR). More iterations are slower but more stable; 0 skips WDFDR entirely.",  # tooltip
