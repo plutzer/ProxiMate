@@ -17,6 +17,7 @@ section to the version and date and starts a fresh Unreleased section above it.
   sources live under `saint/` as `upstream/` and `patches/`.
 - `THIRD_PARTY_LICENSES.md` lists the licenses of the bundled SAINTexpress, Boost,
   NLopt, GOGO and CORUM.
+- Hovering a point in the prey PCA shows the gene name in bold above the accession.
 
 ### Fixed
 - Release builds no longer fail while preprocessing BioGRID; the download step now installs pandas.

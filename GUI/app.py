@@ -16,7 +16,7 @@ import zipfile
 import tempfile
 import datetime
 import shutil
-from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
+from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, prey_gene_names, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
 from Ann_Enrichment import process_refactored, plot_results
 from network_comparison import (
     load_and_filter_bait_data,
@@ -1118,9 +1118,10 @@ def server(input: Inputs, output: Outputs, session: Session):
             values, label, mode, threshold = _prey_pca_color_data(
                 dataset_name, input.prey_pca_color(), input.prey_pca_bait(),
                 matrix.index)
+            gene_names = prey_gene_names(os.path.join(out_dir, dataset_name, "prey.txt"))
             return plot_prey_pca(matrix, color_values=values,
                                  color_label=label, color_mode=mode,
-                                 color_threshold=threshold)
+                                 color_threshold=threshold, gene_names=gene_names)
 
 
     @render_widget

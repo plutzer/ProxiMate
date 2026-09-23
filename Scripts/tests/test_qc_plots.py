@@ -30,6 +30,7 @@ from QC_plots import (
     pca_plot,
     prepare_pca_matrix,
     prey_pca_plot,
+    prey_gene_names,
     reduce_categorical,
     roc_plot,
     saint_known_retention,
@@ -610,3 +611,26 @@ def test_prey_pca_continuous_threshold_greys_low_scores(dataset):
     assert isinstance(plot_exports.prey_pca_matplotlib(
         matrix, color_values=scores, color_label="SaintScore",
         color_mode="continuous", color_threshold=0.1), matplotlib.figure.Figure)
+
+
+def test_prey_pca_hover_shows_gene_name_above_accession(dataset, tmp_path):
+    interaction, _ = dataset
+    matrix = prepare_pca_matrix(interaction)
+    prey_file = tmp_path / "prey.txt"
+    prey_file.write_text("P1\t100\tGENE1\nP2\t200\tGENE2\n")
+    names = prey_gene_names(prey_file)
+    assert names.to_dict() == {"P1": "GENE1", "P2": "GENE2"}
+
+    scores = pd.Series([0.9, 0.05, 0.0, 0.5, 0.09], index=matrix.index)
+    fig = prey_pca_plot(matrix, color_values=scores, color_label="SaintScore",
+                        color_mode="continuous", color_threshold=0.1,
+                        gene_names=names)
+
+    for trace in fig.data:
+        hover = trace.hovertemplate
+        assert hover.startswith("<b>%{")
+        assert "</b><br>%{customdata[0]}<br>" in hover
+    colored = next(t for t in fig.data if t.name != "SaintScore < 0.1")
+    # P1 has a gene name; P4 does not and keeps its accession as the label
+    assert list(colored.hovertext) == ["GENE1", "P4"]
+    assert [row[0] for row in colored.customdata] == ["P1", "P4"]
