@@ -28,8 +28,7 @@ section to the version and date and starts a fresh Unreleased section above it.
   `cytoscape_list_nodes` lists the drawn nodes with accession, symbol and role.
 - A fifth MCP tool, `view_network`, returns a picture of the drawn Cytoscape network
   that the agent sees directly, and `cytoscape_clear_selection` deselects everything.
-- MCP operations `upload_file` (store a client's input file on the server),
-  `get_scores` (the interactions passing a threshold set), `get_run_info` and
+- MCP operations `get_scores` (the interactions passing a threshold set), `get_run_info` and
   `tail_log` (a dataset's run manifest and log); `score_dataset` defaults to the
   Scoring card's settings; `compare_networks` can omit the volcano table;
   `cytoscape_send` is refused while a network is drawn unless `replace` is true, and
@@ -39,6 +38,9 @@ section to the version and date and starts a fresh Unreleased section above it.
   `include_seed`) and `satellites` relations of `cytoscape_select_related` with an
   explicit seed; `cytoscape_sync_positions`, `cytoscape_unlock` and the base64
   `cytoscape_view_image` are gone (the GUI keeps its buttons, `view_network` its picture).
+- Cluster and Repack leaves selected baits where they are and moves only the preys.
+- The MCP activity entries name the arguments an operation was called with and what
+  it returned, such as the relation and the number of nodes selected.
 - Annotation builds its HPA, CORUM and GO lookups once and evaluates them per distinct
   prey or bait-prey pair, and GOGO scores only the cellular-component ontology; a
   212k-row dataset annotates in under three minutes instead of fifteen.

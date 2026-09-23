@@ -419,19 +419,25 @@ def _symbols():
 
 
 def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0, actor='gui'):
-    """Leiden over the selected nodes, then re-pack them by community inside the box
-    they occupy.  Only the selected nodes move; they recolour by community and carry
-    it in the node table."""
+    """Leiden over the selected preys, then re-pack them by community inside the box
+    they occupy.  Only those move; they recolour by community and carry it in the node
+    table.  Selected baits stay where they are: a bait links every prey around it, so
+    it would pull them into one community and then land on the circle among them."""
     suid = _net()
     with STATE['cy_lock']:
         selected = cy.selected_nodes(suid)
         positions = cy.current_positions(suid)
     if not selected:
         raise ValueError("nothing is selected in Cytoscape")
+    nodes = STATE['nodes']
+    roles = dict(zip(nodes['id'], nodes['role']))
+    baits = [s for s in selected if roles.get(s) == 'bait']
+    selected = [s for s in selected if roles.get(s) != 'bait']
+    if not selected:
+        raise ValueError("only baits are selected; select the preys to cluster")
     with _busy(f'clustering {len(selected)} selected nodes'):
         membership = net.cluster(STATE['edges'], selected, resolution, seed, literature_weight)
         placed = net.pack_communities(membership, positions)
-    nodes = STATE['nodes']
     # Numbers continue above any community already assigned, so two clustered regions
     # never share one.
     if 'community' in nodes.columns:
@@ -452,9 +458,10 @@ def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0, actor='gui
         cy.set_positions(suid, placed)
     sizes = membership.value_counts().sort_index().tolist()
     with _mutate('cluster_selection', f'{len(membership)} nodes -> {len(sizes)} communities '
-                 f'{sizes} (resolution {resolution}, seed {seed})', actor=actor):
+                 f'{sizes} (resolution {resolution}, seed {seed}); {len(baits)} bait(s) left in place',
+                 actor=actor):
         pass
-    return {'n': len(membership), 'n_communities': len(sizes), 'sizes': sizes}
+    return {'n': len(membership), 'n_communities': len(sizes), 'sizes': sizes, 'baits_left': baits}
 
 
 def export_image(out_dir, height=2000, actor='gui'):

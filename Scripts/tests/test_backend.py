@@ -4,7 +4,6 @@ Dataset operations go through one job lock per dataset and land in the datasets
 store; sandbox operations compute from a dataset directory and leave it untouched.
 """
 
-import base64
 import os
 import threading
 
@@ -154,21 +153,6 @@ def test_run_info_and_log_tail_report_the_stages_and_the_log(parsed, monkeypatch
     assert any('Starting scoring' in line for line in backend.log_tail('ds1', n_lines=1000)['lines'])
     with pytest.raises(FileNotFoundError, match='run.json'):
         backend.run_info('ds2')
-
-
-def test_uploads_land_under_the_output_dir_and_refuse_silent_overwrites(out_dir):
-    text = "Experiment Name,Type,Bait,Replicate\n"
-    result = backend.upload_file('ED.csv', text)
-    assert result == {'path': str(out_dir / '_uploads' / 'ED.csv'), 'bytes': len(text)}
-    assert open(result['path']).read() == text
-    with pytest.raises(FileExistsError, match='overwrite'):
-        backend.upload_file('ED.csv', 'x')
-    backend.upload_file('ED.csv', base64.b64encode(b'\x00\x01').decode(), encoding='base64', overwrite=True)
-    assert open(result['path'], 'rb').read() == b'\x00\x01'
-    with pytest.raises(ValueError, match='bare file name'):
-        backend.upload_file('../ED.csv', 'x')
-    with pytest.raises(ValueError, match='encoding'):
-        backend.upload_file('other.csv', 'x', encoding='hex')
 
 
 def test_score_refuses_an_unknown_dataset_or_bad_settings(parsed, monkeypatch):

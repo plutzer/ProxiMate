@@ -543,34 +543,52 @@ def test_an_empty_relation_is_an_error_not_a_silent_deselect(controlled, cytosca
     assert not any(name == 'select' for name, *_ in cytoscape['calls'])
 
 
-def test_clustering_recolours_numbers_and_moves_only_the_selection(controlled, cytoscape):
-    cytoscape['selected'] = ['BaitA', 'P1', 'P2', 'P4']
-    cytoscape['positions'] = {i: (10.0 * k, 50.0) for k, i in enumerate(['BaitA', 'P1', 'P2', 'P4', 'BaitB'])}
+@pytest.fixture
+def clusterable(scores, tmp_path, cytoscape):
+    """``controlled`` with a fourth and fifth prey of BaitA, enough to cluster without
+    the baits."""
+    scores.loc[len(scores)] = _row('BaitA', 'PA', 'P4', 'G4')
+    scores.loc[len(scores)] = _row('BaitA', 'PA', 'P5', 'G5')
+    biogrid = _biogrid(tmp_path, [('P1', 'P2', 2, False)])
+    nodes, edges = cn.build(scores, PASSING, biogrid_path=biogrid)
+    ctl.STATE.update(dataset='d', title='ProxiMate: d', net_suid=1, nodes=nodes, edges=edges,
+                     thresholds=dict(PASSING),
+                     style={'width_source': 'abundance', 'literature_weighted': False, 'biogrid_scope': 'all'})
+    cytoscape['positions'] = {i: (10.0 * k, 50.0) for k, i in enumerate(['BaitA', 'P1', 'P2', 'P4', 'P5', 'BaitB'])}
+    yield nodes, edges
+    ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
+                     thresholds=None, style=None)
+
+
+def test_clustering_recolours_numbers_and_moves_only_the_selected_preys(clusterable, cytoscape):
+    cytoscape['selected'] = ['BaitA', 'P1', 'P2', 'P4', 'P5']
 
     result = ctl.cluster_selection(resolution=1.0, seed=1)
 
-    assert result['n'] == 4 and sum(result['sizes']) == 4
+    assert result['n'] == 4 and sum(result['sizes']) == 4 and result['baits_left'] == ['BaitA']
     frame = _last(cytoscape['calls'], 'nodes')[0]
-    assert set(frame['name']) == {'BaitA', 'P1', 'P2', 'P4'}
+    assert set(frame['name']) == {'P1', 'P2', 'P4', 'P5'}
     assert set(frame.columns) == {'name', 'community', 'fill'}
     moved = _last(cytoscape['calls'], 'positions')[0]
-    assert set(moved) == {'BaitA', 'P1', 'P2', 'P4'}
+    assert set(moved) == {'P1', 'P2', 'P4', 'P5'}
     assert all(x >= 0 and y >= 50 for x, y in moved.values())
     nodes = ctl.STATE['nodes'].set_index('id')
-    assert np.isnan(nodes.loc['BaitB', 'community'])   # untouched
-    assert nodes.loc['BaitA', 'fill'] in cn.COMMUNITY_FILL
+    assert np.isnan(nodes.loc['BaitA', 'community']) and np.isnan(nodes.loc['BaitB', 'community'])
+    assert nodes.loc['P1', 'fill'] in cn.COMMUNITY_FILL
+    cytoscape['selected'] = ['BaitA', 'BaitB']
+    with pytest.raises(ValueError, match='only baits'):
+        ctl.cluster_selection()
 
 
-def test_a_second_clustering_numbers_above_the_first(controlled, cytoscape):
-    cytoscape['positions'] = {i: (10.0 * k, 0.0) for k, i in enumerate(['BaitA', 'P1', 'P2', 'P4', 'BaitB'])}
-    cytoscape['selected'] = ['BaitA', 'P1', 'P2', 'P4']
+def test_a_second_clustering_numbers_above_the_first(clusterable, cytoscape):
+    cytoscape['selected'] = ['P1', 'P2', 'P4', 'P5']
     ctl.cluster_selection()
-    first = ctl.STATE['nodes'].set_index('id').loc[['BaitA', 'P1', 'P2', 'P4'], 'community'].max()
+    first = ctl.STATE['nodes'].set_index('id').loc[['P1', 'P2', 'P4', 'P5'], 'community'].max()
 
-    cytoscape['selected'] = ['BaitB', 'BaitA', 'P2', 'P4']
+    cytoscape['selected'] = ['BaitB', 'P2', 'P4', 'P5', 'P1']
     ctl.cluster_selection()
 
-    second = ctl.STATE['nodes'].set_index('id').loc[['BaitB', 'BaitA'], 'community'].min()
+    second = ctl.STATE['nodes'].set_index('id').loc[['P2', 'P4'], 'community'].min()
     assert second > first
 
 

@@ -2535,8 +2535,8 @@ def server(input: Inputs, output: Outputs, session: Session):
         result = cy_call("cluster the selection", cytoscape_ctl.cluster_selection,
                          resolution=float(resolution), seed=int(seed), literature_weight=float(weight))
         if result:
-            notify(f"{result['n']} nodes clustered into {result['n_communities']} communities "
-                   f"(sizes {result['sizes']}).")
+            notify(f"{result['n']} preys clustered into {result['n_communities']} communities "
+                   f"(sizes {result['sizes']}); {len(result['baits_left'])} bait(s) left in place.")
 
     @reactive.effect
     @reactive.event(input.cy_read_selection)

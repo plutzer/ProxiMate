@@ -158,21 +158,42 @@ def validate(name, arguments):
     return arguments
 
 
+def _label(arguments):
+    """The dataset, then the other arguments that were set, for the activity entry."""
+    rest = ', '.join(f'{k}={v}' for k, v in arguments.items()
+                     if k != 'dataset' and v not in (None, False))
+    return ' '.join(part for part in (str(arguments.get('dataset', '')), rest[:120]) if part)
+
+
+def _count(result):
+    """What a result amounts to, for the activity entry: its first list's length or
+    first count, by the keys the operations use."""
+    if isinstance(result, dict):
+        for key in ('selected', 'nodes', 'rows'):
+            if isinstance(result.get(key), list):
+                return f'{len(result[key])} {key}'
+        for key in ('hidden', 'moved', 'n'):
+            if isinstance(result.get(key), int):
+                return f'{result[key]} {key}'
+    return ''
+
+
 def call(name, arguments, actor='mcp'):
     """Validate, run and log one operation; exceptions propagate to the caller."""
     global _SEQ
     arguments = validate(name, arguments)
     op = _get(name)
-    target = str(arguments.get('dataset', ''))
+    label = _label(arguments)
     entry = {'ts': datetime.datetime.now().isoformat(timespec='seconds'), 'actor': actor,
-             'op': name, 'mode': op.mode, 'ok': None, 'detail': target}
+             'op': name, 'mode': op.mode, 'ok': None, 'detail': label}
     try:
         result = op.fn(**arguments)
     except Exception as e:
-        entry.update(ok=False, detail=f"{target}: {type(e).__name__}: {e}"[:300].strip(': '))
+        entry.update(ok=False, detail=f"{label}: {type(e).__name__}: {e}"[:300].strip(': '))
         raise
     else:
-        entry['ok'] = True
+        count = _count(result)
+        entry.update(ok=True, detail=f"{label} -> {count}".strip(' ->') if count else label)
         return result
     finally:
         with _ACTIVITY_LOCK:

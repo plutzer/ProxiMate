@@ -181,22 +181,12 @@ def compare_networks(dataset: str, bait_a: str, bait_b: str, thresholds_a: dict,
 
 # --- dataset ----------------------------------------------------------------------------------
 
-@register('dataset', "Store a file's content on the server and return the path parse_dataset can read.",
-          tags=('upload', 'file', 'input', 'copy', 'path'))
-def upload_file(name: str, content: str, encoding: str = 'text', overwrite: bool = False) -> dict:
-    """For a client whose files the server cannot see.  ``content`` is the file's
-    text, or its bytes base64-encoded with ``encoding`` base64.  The file lands under
-    ``<out_dir>/_uploads/<name>``; an existing name is refused unless ``overwrite``.
-    Files the server can already read (a mounted folder) need no upload: pass their
-    server-side paths to parse_dataset directly."""
-    return backend.upload_file(name, content, encoding, overwrite)
-
-
 @register('dataset', "Parse raw quantification files into a new dataset (MaxQuant, DIA-NN, Pioneer, FragPipe, MSstats or SAINT).",
           tags=('parse', 'import', 'upload', 'maxquant', 'diann', 'saint', 'experimental design'))
 def parse_dataset(dataset: str, input_format: str, files: dict, quant_type: str = 'Intensity') -> dict:
     """Creates ``<out_dir>/<dataset>/`` with the SAINT and CompPASS inputs and adds the
-    dataset to the session.  ``files`` maps file keys to paths readable by the server:
+    dataset to the session.  ``files`` maps file keys to paths as the server sees them
+    (inside its container, so the folder holding them must be mounted there):
     MaxQuant {pg, ed}; DIA-NN and Pioneer {matrix, ed}; FragPipe {fp, ed}; MSstats
     {msstats, ed}; SAINT {bait, prey, interaction}.  ``ed`` is the experimental design
     CSV (Experiment Name, Type, Bait, Replicate, Bait ID).  ``quant_type`` is
@@ -395,11 +385,12 @@ def cytoscape_move_nodes(positions: dict) -> dict:
     return {'moved': int(ctl.move_nodes(positions, actor=ACTOR))}
 
 
-@register('cytoscape', "Leiden over the selected nodes, colored by community and re-packed inside their box.",
+@register('cytoscape', "Leiden over the selected preys, colored by community and re-packed inside their box.",
           tags=('cytoscape', 'cluster', 'leiden', 'community', 'repack'))
 def cytoscape_cluster_selection(resolution: float = 1.0, seed: int = 17,
                                 literature_weight: float = 1.0) -> dict:
-    """Only the selected nodes move; the community number lands in the node table."""
+    """Only the selected preys move; the community number lands in the node table.
+    Selected baits keep their place and are returned in ``baits_left``."""
     return _json(ctl.cluster_selection(resolution, seed, literature_weight, actor=ACTOR))
 
 

@@ -98,7 +98,7 @@ TOOLTIPS = {
     "cy_cl_resolution": "Leiden resolution. Above 1 splits the selection into more, smaller communities; below 1 merges them.",  # tooltip
     "cy_cl_seed": "Random seed for the Leiden run, so the same selection clusters the same way again.",  # tooltip
     "cy_cl_lit_weight": "How much a BioGRID or complex edge pulls relative to a bait-prey edge. 0 clusters on bait-prey edges alone.",  # tooltip
-    "cy_cluster": "Run Leiden over the selected nodes, color them by community, and re-pack each community on its own circle inside the box the selection occupies. Only selected nodes move.",  # tooltip
+    "cy_cluster": "Run Leiden over the selected preys, color them by community, and re-pack each community on its own circle inside the box the selection occupies. Only selected preys move; selected baits stay put.",  # tooltip
     # ---- Downloads tab ----
     "dl_filter_card": "These cutoffs filter the rows of score-based exports only. Experimental Design, SAINT Inputs, and Enriched Features always download unfiltered.",  # tooltip
     "dl_preset": "Ready-made export formats for common next steps. A preset appears only when the dataset has the files it needs.",  # tooltip

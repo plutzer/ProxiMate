@@ -231,19 +231,6 @@ def test_parse_dataset_lands_in_the_store_and_records_the_actor(out_dir):
     assert log[-1]['op'] == 'parse_dataset' and log[-1]['actor'] == 'mcp' and log[-1]['ok']
 
 
-def test_uploaded_files_can_be_parsed(out_dir):
-    paths = {}
-    for key, text in {'bait': "t1\tBaitA\tT\nc1\tCtrl\tC\n", 'prey': "P1\tG1\n",
-                      'interaction': "t1\tBaitA\tP1\t10\nc1\tCtrl\tP1\t4\n"}.items():
-        paths[key] = registry.call('upload_file', {'name': f'{key}.txt', 'content': text})['path']
-    assert paths['bait'] == str(out_dir / '_uploads' / 'bait.txt')
-    result = registry.call('parse_dataset', {'dataset': 'up', 'input_format': 'SAINT', 'files': paths,
-                                             'quant_type': 'Spectral Counts'})
-    assert result['Dataset Name'] == 'up'
-    with pytest.raises(FileExistsError):
-        registry.call('upload_file', {'name': 'bait.txt', 'content': 'again'})
-
-
 def test_load_session_needs_confirmation(scored, tmp_path):
     with pytest.raises(ValueError, match='confirm'):
         registry.call('load_session', {'zip_path': str(tmp_path / 'x.zip')})
@@ -458,3 +445,12 @@ def test_activity_entries_are_sequenced_and_name_their_target(scored):
     assert new[1]['detail'].startswith('nope: KeyError') and not new[1]['ok']
     assert registry.last_seq() == start + 2
     assert registry.activity_since(registry.last_seq()) == []
+    registry.call('get_scores', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'baits': ['BaitA'], 'top_n': 2})
+    assert registry.activity(1)[0]['detail'] == f"ds thresholds={THRESHOLDS}, baits=['BaitA'], top_n=2 -> 2 rows"
+
+
+def test_cytoscape_activity_entries_name_the_relation_and_the_count(drawn):
+    registry.call('cytoscape_select_related', {'seed': 'BA', 'relation': 'singletons'})
+    assert registry.activity(1)[0]['detail'] == 'seed=BA, relation=singletons -> 2 selected'
+    registry.call('cytoscape_list_nodes', {'role': 'prey'})
+    assert registry.activity(1)[0]['detail'] == 'role=prey -> 2 nodes'

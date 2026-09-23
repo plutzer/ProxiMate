@@ -19,7 +19,6 @@ Every threshold argument is an explicit ``{'SaintScore', 'BFDR', 'WD', 'WDFDR'}`
 dict; no operation reads a setting from the GUI.
 """
 
-import base64
 import contextlib
 import datetime
 import json
@@ -454,37 +453,6 @@ def log_tail(name, n_lines=50):
     with open(path, encoding='utf-8', errors='replace') as handle:
         lines = [line.rstrip('\n') for line in handle]
     return {'dataset': name, 'path': path, 'n_lines_total': len(lines), 'lines': lines[-int(n_lines):]}
-
-
-# --- uploads ---------------------------------------------------------------------------------
-
-UPLOADS_DIR = '_uploads'
-
-
-def upload_file(name, content, encoding='text', overwrite=False):
-    """Write a client's file under ``<out_dir>/_uploads/`` and return its path, for
-    parse_dataset from a client that shares no filesystem with the server.
-    ``content`` is the file's text, or its bytes base64-encoded when ``encoding`` is
-    base64.  An existing file of that name is refused unless ``overwrite``."""
-    if OUT_DIR is None:
-        raise RuntimeError("backend.configure(out_dir) has not been called")
-    if not name or os.path.basename(name) != name or name in ('.', '..'):
-        raise ValueError(f"name must be a bare file name, got {name!r}")
-    if encoding == 'text':
-        data = content.encode('utf-8')
-    elif encoding == 'base64':
-        data = base64.b64decode(content, validate=True)
-    else:
-        raise ValueError(f"encoding must be text or base64, got {encoding!r}")
-    folder = os.path.join(OUT_DIR, UPLOADS_DIR)
-    os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, name)
-    if os.path.exists(path) and not overwrite:
-        raise FileExistsError(f"{path} exists; pass overwrite=true to replace it")
-    with open(path, 'wb') as handle:
-        handle.write(data)
-    logger.info("Uploaded %s (%d bytes)", path, len(data))
-    return {'path': path, 'bytes': len(data)}
 
 
 # --- sandbox -----------------------------------------------------------------------------
