@@ -2,7 +2,6 @@
 
 ProxiMate itself is released under the MIT license in `LICENSE`. The repository also
 carries the source of the tools below, which keep their own licenses and copyrights.
-The container image compiles and ships them.
 
 | Component | Location | License | Notes |
 | --- | --- | --- | --- |
@@ -12,6 +11,4 @@ The container image compiles and ships them.
 | GOGO | `Scripts/GOGO` | No license file is distributed by the authors; used with attribution | Zhao and Wang 2018, Sci Rep 8:15107, doi:10.1038/s41598-018-33219-y. `apcluster.c` implements affinity propagation (Frey and Dueck 2007). |
 | CORUM | `Datasets/corum_humanComplexes.txt` | CC BY 4.0 | Tsitsiridis et al. 2023, Nucleic Acids Res 51:D539-D545. |
 
-The BioGRID, UniProt and Human Protein Atlas snapshots are downloaded at build time
-rather than tracked here; their terms of use are at the respective download pages
-listed in `README.md`.
+The BioGRID, UniProt and Human Protein Atlas snapshots are downloaded at build time; their terms of use are at the respective download pages listed in `README.md`.
