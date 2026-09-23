@@ -116,13 +116,22 @@ def layout_names():
         return sorted(p4c.get_layout_names())
 
 
+def current_network():
+    """The network Cytoscape shows in its window, and whether it is the drawn one."""
+    with STATE['cy_lock']:
+        title = cy.current_network_title()
+    return {'title': title, 'is_drawn': title is not None and title == STATE['title']}
+
+
 # --- operations ------------------------------------------------------------------------
 
 def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_path=None,
          label_policy='all', layout='force-directed', width_source='abundance',
          literature_weighted=False, biogrid_scope='all', corum_path=None,
          corum_min_members=3, corum_min_fraction=0.5, actor='gui'):
-    """Build the thresholded network and draw it, replacing the previous one."""
+    """Build the thresholded network and draw it, replacing every ProxiMate network
+    in Cytoscape.  Recreating the style leaves any earlier ProxiMate network on
+    Cytoscape's default style, so none may survive a draw."""
     df = pd.read_csv(scores_path)
     nodes, edges = net.build(df, thresholds, baits=baits, prey_prey=prey_prey,
                              biogrid_path=biogrid_path, label_policy=label_policy,
@@ -133,10 +142,10 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
     nodes['node_alpha'] = net.node_alpha(nodes, edges).to_numpy()
     style = {'width_source': width_source, 'literature_weighted': bool(literature_weighted),
              'biogrid_scope': biogrid_scope}
-    title = f'ProxiMate: {dataset}'
+    title = cy.TITLE_PREFIX + dataset
     with _busy(f'drawing {title}'), STATE['cy_lock']:
-        if title in p4c.get_network_list():
-            p4c.delete_network(p4c.get_network_suid(title))
+        for old in cy.proximate_networks():
+            p4c.delete_network(p4c.get_network_suid(old))
         suid = p4c.create_network_from_data_frames(
             nodes, edges.drop(columns=['name']), title=title, collection=COLLECTION)
         cy.apply_passthrough_style(STYLE, suid, STYLE_DEFAULTS, PASSTHROUGH)
@@ -286,7 +295,7 @@ def _select(op, ids, detail, add=False, actor='gui'):
 def _resolve_ids(queries):
     """Drawn node ids for a list of accessions or symbols; unknown names raise."""
     if not queries:
-        raise ValueError("no nodes named")
+        raise ValueError("no nodes named; clear_selection deselects everything")
     nodes = STATE['nodes']
     return [str(net.resolve_node(nodes, q)['id']) for q in queries]
 
@@ -298,6 +307,14 @@ def select_nodes(ids, add=False, actor='gui'):
     chosen = _resolve_ids(ids)
     return _select('select_nodes', chosen, f'{len(chosen)} node(s)' + (' added' if add else ''),
                    add=add, actor=actor)
+
+
+def clear_selection(actor='gui'):
+    """Deselect everything in the drawn network."""
+    with STATE['cy_lock']:
+        cy.clear_selection(_net())
+    with _mutate('clear_selection', actor=actor):
+        pass
 
 
 def list_nodes(role=None):
@@ -354,27 +371,44 @@ def select_loners(actor='gui'):
     return _select('select_loners', [bait] + found, f'{symbol}: {len(found)} loner(s)', actor=actor)
 
 
+def _satellites(bait):
+    """``(only, nearer)`` for a bait id by the positions Cytoscape holds now."""
+    with STATE['cy_lock']:
+        positions = cy.current_positions(_net())
+    only, nearer = net.satellites(STATE['nodes'], STATE['edges'], bait, positions)
+    if not only and not nearer:
+        raise ValueError(f"{_symbols()[bait]} has no satellites")
+    return only, nearer
+
+
 def select_satellites(actor='gui'):
     """Select the one selected bait with its satellites: the preys whose only bait it
     is, and the two-bait preys that currently sit nearer to it than to the other."""
     bait = _selected_bait()
-    with STATE['cy_lock']:
-        positions = cy.current_positions(_net())
-    only, nearer = net.satellites(STATE['nodes'], STATE['edges'], bait, positions)
-    symbol = _symbols()[bait]
-    if not only and not nearer:
-        raise ValueError(f"{symbol} has no satellites")
+    only, nearer = _satellites(bait)
     return _select('select_satellites', [bait] + only + nearer,
-                   f'{symbol}: {len(only)} only-bait prey(s), {len(nearer)} nearer of two', actor=actor)
+                   f'{_symbols()[bait]}: {len(only)} only-bait prey(s), {len(nearer)} nearer of two',
+                   actor=actor)
 
 
-def select_related(seed, relation, add=False, actor='gui', **cuts):
-    """Select what ``relation`` names for ``seed`` (``net.related``); ``add`` keeps the
-    current selection."""
+def select_related(seed, relation, add=False, include_seed=False, actor='gui', **cuts):
+    """Select what ``relation`` names for ``seed``: one of ``net.related``'s, or
+    ``satellites`` (a bait's only-bait preys and the two-bait preys nearer to it, by
+    the positions Cytoscape holds now).  ``include_seed`` selects the seed too, so it
+    moves with them; ``add`` keeps the current selection."""
     _net()
-    ids = net.related(STATE['nodes'], STATE['edges'], seed, relation, **cuts)
+    if relation == 'satellites':
+        node = net.resolve_node(STATE['nodes'], seed)
+        if node['role'] != 'bait':
+            raise ValueError(f"{node['symbol']} is a prey; satellites needs a bait")
+        only, nearer = _satellites(node['id'])
+        ids = only + nearer
+    else:
+        ids = net.related(STATE['nodes'], STATE['edges'], seed, relation, **cuts)
     if not ids:
         raise ValueError(f"no {relation} for {seed} under these cuts")
+    if include_seed:
+        ids = [net.resolve_node(STATE['nodes'], seed)['id']] + ids
     cut = ', '.join(f'{k} {v}' for k, v in cuts.items() if v is not None) or 'no cuts'
     return _select('select_related', ids, f'{relation} of {seed} ({cut}): {len(ids)}'
                    + (' added' if add else ''), add=add, actor=actor)
@@ -435,6 +469,16 @@ def export_image(out_dir, height=2000, actor='gui'):
     with _mutate('export_image', path, actor=actor):
         pass
     return path
+
+
+def view_image(height=1200, actor='gui'):
+    """The drawn network, fitted, as PNG bytes; nothing is written to disk."""
+    suid = _net()
+    with _busy('rendering image'), STATE['cy_lock']:
+        png = cy.render_png(suid, height=height)
+    with _mutate('view_image', f'{height} px', actor=actor):
+        pass
+    return png
 
 
 def unlock(actor='gui'):

@@ -4,6 +4,7 @@ Dataset operations go through one job lock per dataset and land in the datasets
 store; sandbox operations compute from a dataset directory and leave it untouched.
 """
 
+import base64
 import os
 import threading
 
@@ -139,6 +140,37 @@ def test_a_failing_stage_raises_with_its_log_and_leaves_the_row_unscored(parsed,
     assert store.row('ds1')['Scored'] != 'Yes'
 
 
+def test_run_info_and_log_tail_report_the_stages_and_the_log(parsed, monkeypatch):
+    _fake_stages(monkeypatch, [])
+    backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='human', exclude_hcm=False)
+    info = backend.run_info('ds1')
+    # The faked score.py and annotator.py record no stages of their own.
+    assert [(s['stage'], s['status']) for run in info['runs'] for s in run['stages']] == [('parse', 'ok')]
+    assert info['n_runs'] == len(info['runs']) == 1
+    assert 'environment' not in info['runs'][0] and 'traceback' not in str(info)
+    assert backend.run_info('ds1', last_n=1) == info
+    tail = backend.log_tail('ds1', n_lines=3)
+    assert len(tail['lines']) == 3 and tail['n_lines_total'] >= 3
+    assert any('Starting scoring' in line for line in backend.log_tail('ds1', n_lines=1000)['lines'])
+    with pytest.raises(FileNotFoundError, match='run.json'):
+        backend.run_info('ds2')
+
+
+def test_uploads_land_under_the_output_dir_and_refuse_silent_overwrites(out_dir):
+    text = "Experiment Name,Type,Bait,Replicate\n"
+    result = backend.upload_file('ED.csv', text)
+    assert result == {'path': str(out_dir / '_uploads' / 'ED.csv'), 'bytes': len(text)}
+    assert open(result['path']).read() == text
+    with pytest.raises(FileExistsError, match='overwrite'):
+        backend.upload_file('ED.csv', 'x')
+    backend.upload_file('ED.csv', base64.b64encode(b'\x00\x01').decode(), encoding='base64', overwrite=True)
+    assert open(result['path'], 'rb').read() == b'\x00\x01'
+    with pytest.raises(ValueError, match='bare file name'):
+        backend.upload_file('../ED.csv', 'x')
+    with pytest.raises(ValueError, match='encoding'):
+        backend.upload_file('other.csv', 'x', encoding='hex')
+
+
 def test_score_refuses_an_unknown_dataset_or_bad_settings(parsed, monkeypatch):
     _fake_stages(monkeypatch, [])
     with pytest.raises(KeyError):
@@ -258,6 +290,16 @@ def test_compare_networks_returns_volcano_rows_and_gene_lists(scored):
     assert _tree(scored) == before
     with pytest.raises(ValueError, match='BaitZ'):
         backend.compare_networks('ds', 'BaitA', 'BaitZ', THRESHOLDS, THRESHOLDS)
+
+
+def test_passing_scores_filters_orders_and_restricts_to_baits(scored):
+    rows = backend.passing_scores('ds', THRESHOLDS)
+    assert list(zip(rows['Experiment.ID'], rows['Prey.ID'])) == [
+        ('BaitA', 'P1'), ('BaitA', 'P2'), ('BaitA', 'P3'), ('BaitB', 'P1')]
+    assert list(rows.columns[:5]) == ['Experiment.ID', 'Prey.ID', 'First_ID', 'First_Prey_Gene', 'SaintScore']
+    assert list(backend.passing_scores('ds', THRESHOLDS, baits=['BaitB'])['Prey.ID']) == ['P1']
+    with pytest.raises(ValueError, match='BaitZ'):
+        backend.passing_scores('ds', THRESHOLDS, baits=['BaitZ'])
 
 
 def test_dataset_info_summarizes_the_row_files_and_baits(scored):

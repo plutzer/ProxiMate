@@ -1,6 +1,6 @@
 """The operation registry behind the MCP ``call_tool`` tool.
 
-An agent sees four MCP tools; everything it can do is an *operation* registered here
+An agent sees five MCP tools; everything it can do is an *operation* registered here
 with a name, a mode, a one-line summary, tags for search, and a JSON schema derived
 from the function's signature.  ``call`` validates arguments against that schema
 before the function runs, so a misspelled or missing argument fails at once with a

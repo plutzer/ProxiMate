@@ -26,6 +26,19 @@ section to the version and date and starts a fresh Unreleased section above it.
   (passing baits at given thresholds, BioGRID partners, best scores, localization, GO
   CC, complex) for all preys or a list of accessions or symbols, and
   `cytoscape_list_nodes` lists the drawn nodes with accession, symbol and role.
+- A fifth MCP tool, `view_network`, returns a picture of the drawn Cytoscape network
+  that the agent sees directly, and `cytoscape_clear_selection` deselects everything.
+- MCP operations `upload_file` (store a client's input file on the server),
+  `get_scores` (the interactions passing a threshold set), `get_run_info` and
+  `tail_log` (a dataset's run manifest and log); `score_dataset` defaults to the
+  Scoring card's settings; `compare_networks` can omit the volcano table;
+  `cytoscape_send` is refused while a network is drawn unless `replace` is true, and
+  `server_status` with `probe` names the network in Cytoscape's window.
+- The MCP operation list is pruned to what an agent can use: `cytoscape_status` folds
+  into `server_status`; loners and satellites become `singletons` (with
+  `include_seed`) and `satellites` relations of `cytoscape_select_related` with an
+  explicit seed; `cytoscape_sync_positions`, `cytoscape_unlock` and the base64
+  `cytoscape_view_image` are gone (the GUI keeps its buttons, `view_network` its picture).
 - Annotation builds its HPA, CORUM and GO lookups once and evaluates them per distinct
   prey or bait-prey pair, and GOGO scores only the cellular-component ontology; a
   212k-row dataset annotates in under three minutes instead of fifteen.
@@ -35,6 +48,10 @@ section to the version and date and starts a fresh Unreleased section above it.
   against its own bait; it used to reflect a single arbitrary bait.
 - The feature enrichment panel no longer shows the last exported PNG figure when it has
   nothing to draw.
+- Cytoscape PNG exports release any view lock before fitting, so a view zoomed by a
+  selection no longer crops the picture.
+- Sending a second dataset to Cytoscape removes the earlier ProxiMate network instead
+  of leaving it behind stripped of its style.
 - Release builds no longer fail while preprocessing BioGRID; the download step now installs pandas.
 
 ### Removed

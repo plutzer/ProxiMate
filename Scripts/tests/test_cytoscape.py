@@ -526,6 +526,17 @@ def test_related_selection_can_add_to_the_current_one(controlled, cytoscape):
     assert _last(cytoscape['calls'], 'select') == [['BaitA', 'P2'], True]
 
 
+def test_satellites_are_a_relation_with_an_explicit_seed(controlled, cytoscape):
+    cytoscape['positions'] = {'BaitA': (0, 0), 'BaitB': (100, 0), 'P1': (0, 10), 'P2': (10, 0),
+                              'P4': (0, 20), 'PA': (100, 10)}
+
+    assert ctl.select_related('BaitA', 'satellites') == ['P1', 'P4', 'P2']
+    assert ctl.select_related('baita', 'satellites', include_seed=True) == ['BaitA', 'P1', 'P4', 'P2']
+    assert _last(cytoscape['calls'], 'select') == [['BaitA', 'P1', 'P4', 'P2'], False]
+    with pytest.raises(ValueError, match='needs a bait'):
+        ctl.select_related('P1', 'satellites')
+
+
 def test_an_empty_relation_is_an_error_not_a_silent_deselect(controlled, cytoscape):
     with pytest.raises(ValueError):
         ctl.select_related('BaitB', 'interactors', min_saint=0.99)
@@ -632,6 +643,48 @@ def test_unlock_clears_only_the_locks_that_are_held(monkeypatch):
     assert cy.unlock(3) == []
 
 
+def test_proximate_networks_are_told_apart_by_title(monkeypatch):
+    monkeypatch.setattr(cy.p4c, 'get_network_list', lambda: ['ProxiMate: a', 'mine', 'ProxiMate: b'])
+    assert cy.proximate_networks() == ['ProxiMate: a', 'ProxiMate: b']
+    monkeypatch.setattr(cy.p4c, 'get_network_count', lambda: 0)
+    assert cy.current_network_title() is None
+    monkeypatch.setattr(cy.p4c, 'get_network_count', lambda: 2)
+    monkeypatch.setattr(cy.p4c, 'get_network_name', lambda: 'mine')
+    assert cy.current_network_title() == 'mine'
+
+
+def test_draw_removes_every_earlier_proximate_network(scores, tmp_path, cytoscape, monkeypatch):
+    deleted = []
+    monkeypatch.setattr(ctl.cy, 'proximate_networks', lambda: ['ProxiMate: old', 'ProxiMate: d'])
+    monkeypatch.setattr(ctl.p4c, 'get_network_suid', lambda title: {'ProxiMate: old': 7, 'ProxiMate: d': 8}[title])
+    monkeypatch.setattr(ctl.p4c, 'delete_network', lambda suid: deleted.append(suid))
+    monkeypatch.setattr(ctl.p4c, 'create_network_from_data_frames', lambda *a, **k: 9)
+    monkeypatch.setattr(ctl.cy, 'apply_passthrough_style', lambda *a: None)
+    monkeypatch.setattr(ctl.p4c, 'layout_network', lambda *a, **k: None)
+    monkeypatch.setattr(ctl.cy, 'unlock', lambda net: [])
+    monkeypatch.setattr(ctl.p4c, 'fit_content', lambda **k: None)
+    scores.to_csv(tmp_path / 's.csv', index=False)
+    try:
+        snap = ctl.draw('d', str(tmp_path / 's.csv'), PASSING, biogrid_path=_biogrid(tmp_path, [('P1', 'P2')]))
+        assert deleted == [7, 8] and snap['net_suid'] == 9 and snap['title'] == 'ProxiMate: d'
+    finally:
+        ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
+                         thresholds=None, style=None)
+
+
+def test_render_unlocks_and_fits_before_capturing(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(cy, 'unlock', lambda net: calls.append('unlock') or ['NETWORK_SCALE_FACTOR'])
+    monkeypatch.setattr(cy.p4c, 'fit_content', lambda **k: calls.append('fit'))
+    monkeypatch.setattr(cy.requests, 'get',
+                        lambda url, **k: calls.append(('png', k['params'])) or _Response(content=b'PNG'))
+
+    assert cy.render_png(3, height=600) == b'PNG'
+    assert calls == ['unlock', 'fit', ('png', {'h': 600})]
+    path = cy.export_png(3, str(tmp_path / 'net.png'), height=600)
+    assert open(path, 'rb').read() == b'PNG'
+
+
 # --- actor, explicit selection and positions (the MCP surface) --------------------------
 
 def test_mutations_record_their_actor(controlled, cytoscape):
@@ -648,7 +701,7 @@ def test_select_nodes_resolves_symbols_and_refuses_unknown_ones(controlled, cyto
     assert cytoscape['calls'][-1] == ('select', ['P1', 'P2'], True)
     with pytest.raises(ValueError, match='ZZ'):
         ctl.select_nodes(['P1', 'ZZ'])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='clear_selection'):
         ctl.select_nodes([])
 
 

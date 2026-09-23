@@ -182,18 +182,20 @@ url = "http://localhost:3839/mcp"
 
 Any other MCP client that speaks streamable HTTP connects to the same URL. Then ask
 the agent to help with a dataset; `curl localhost:3839/api/health` confirms the
-endpoint is up before you do. The agent sees four
+endpoint is up before you do. The agent sees five
 tools: `search_tools` and `get_tool_details` describe the operations, `call_tool` runs
-one, and `get_gui_documentation` explains the GUI tab by tab so the agent can help a
-person use it. Every operation takes its thresholds and settings as explicit arguments;
+one, `get_gui_documentation` explains the GUI tab by tab so the agent can help a
+person use it, and `view_network` returns a picture of the drawn Cytoscape network,
+fitted to show all of it, that the agent sees directly without any file being written.
+Every operation takes its thresholds and settings as explicit arguments;
 none reads what the GUI's sliders show. Operations are classed by what they touch:
 
 | Mode | Operations | Effect on a person at the GUI |
 | --- | --- | --- |
-| read | `list_datasets`, `get_dataset_info`, `server_status`, `cytoscape_status`, `cytoscape_read_selection`, `cytoscape_list_nodes`, `cytoscape_get_positions` | none |
-| sandbox | `threshold_metrics`, `feature_analysis`, `get_prey_annotations`, `compare_networks` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
-| dataset | `parse_dataset`, `score_dataset`, `load_session` | the dataset table and dropdowns update within a second; a dataset being scored by either side refuses a second job; `load_session` is destructive and needs `confirm` |
-| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_*`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_sync_positions`, `cytoscape_export_image`, `cytoscape_unlock` | the drawn network changes under the mouse; the Cytoscape tab's status shows the thresholds it was drawn at and the activity panel lists each operation as `[mcp]` |
+| read | `list_datasets`, `get_dataset_info`, `get_run_info`, `tail_log`, `server_status`, `cytoscape_read_selection`, `cytoscape_list_nodes`, `cytoscape_get_positions` | none |
+| sandbox | `get_scores`, `threshold_metrics`, `feature_analysis`, `get_prey_annotations`, `compare_networks` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
+| dataset | `upload_file`, `parse_dataset`, `score_dataset`, `load_session` | the dataset table and dropdowns update within a second; a dataset being scored by either side refuses a second job; `upload_file` writes under `<out_dir>/_uploads/` for a client that shares no filesystem with the server; `load_session` is destructive and needs `confirm` |
+| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_nodes`, `cytoscape_select_related`, `cytoscape_clear_selection`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_export_image` | the drawn network changes under the mouse; the Cytoscape tab's status shows the thresholds it was drawn at and the activity panel lists each operation as `[mcp]` |
 
 Sends and exports from MCP are recorded in the dataset's `run.json` with their full
 argument set. `curl localhost:3839/api/health` reports the datasets, running jobs and

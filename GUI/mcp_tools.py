@@ -1,14 +1,19 @@
-"""The four MCP tools: search_tools, get_tool_details, call_tool, get_gui_documentation.
+"""The five MCP tools: search_tools, get_tool_details, call_tool, get_gui_documentation
+and view_network.
 
-The agent's context holds only these four; every operation lives behind ``call_tool``
-in ``mcp_registry`` (populated by importing ``mcp_ops``).  ``server.py`` registers
-these functions with FastMCP; they are plain functions here so tests drive them
-without a transport.
+The agent's context holds only these five; every operation lives behind ``call_tool``
+in ``mcp_registry`` (populated by importing ``mcp_ops``).  ``view_network`` is the one
+tool beside it, because an image reaches the agent only as a tool's own return value,
+not inside ``call_tool``'s JSON envelope.  ``server.py`` registers these functions
+with FastMCP; they are plain functions here so tests drive them without a transport.
 """
 
 import os
 import re
 
+from mcp.server.fastmcp import Image
+
+import cytoscape_ctl
 import help_text
 import log_config
 import mcp_ops  # noqa: F401  (registers the operations)
@@ -57,6 +62,18 @@ def call_tool(name: str, arguments: dict = None) -> dict:
         logger.warning("mcp %s failed: %s: %s", name, type(e).__name__, e)
         return {'ok': False, 'error': str(e), 'error_type': type(e).__name__, 'run_id': run_id}
     return {'ok': True, 'result': result, 'run_id': run_id}
+
+
+def view_network(height: int = 1200) -> Image:
+    """A picture of the network drawn in Cytoscape, fitted so all of it is in view.
+
+    height is the image height in pixels; a larger picture costs more to look at.
+    A selection shows yellow over the node colors, so clear it first (call_tool
+    cytoscape_clear_selection) when the colors matter.  Nothing is written to disk;
+    cytoscape_export_image keeps a PNG under the dataset for the user.
+    """
+    png = cytoscape_ctl.view_image(height=int(height), actor='mcp')
+    return Image(data=png, format='png')
 
 
 def _split_docs(text):

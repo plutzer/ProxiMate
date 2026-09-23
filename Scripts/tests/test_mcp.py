@@ -1,4 +1,4 @@
-"""The MCP surface: the operation registry behind call_tool, the four tools, and the
+"""The MCP surface: the operation registry behind call_tool, the five tools, and the
 documentation they serve.
 
 Sandbox operations must leave a dataset directory byte-identical; dataset operations
@@ -6,6 +6,7 @@ must land in the store the GUI polls; Cytoscape operations must reach the contro
 with actor 'mcp'.
 """
 
+import base64
 import json
 import os
 
@@ -22,6 +23,7 @@ import mcp_tools
 
 
 THRESHOLDS = {'SaintScore': 0.7, 'BFDR': 0.05, 'WD': 0.0, 'WDFDR': 1.0}
+PNG = b'\x89PNG\r\n\x1a\nstub'
 
 
 @pytest.fixture
@@ -51,7 +53,7 @@ def test_search_matches_name_summary_and_tags_and_filters_by_mode():
     assert {'threshold_metrics', 'cytoscape_apply_thresholds'} <= hits
     assert all(h['mode'] == 'sandbox' for h in registry.search('', mode='sandbox'))
     assert {h['name'] for h in registry.search('', mode='sandbox')} == \
-        {'threshold_metrics', 'feature_analysis', 'get_prey_annotations', 'compare_networks'}
+        {'get_scores', 'threshold_metrics', 'feature_analysis', 'get_prey_annotations', 'compare_networks'}
     assert len(registry.search('')) == len(registry.OPS)
     with pytest.raises(ValueError, match='mode'):
         registry.search('', mode='bogus')
@@ -120,7 +122,7 @@ def test_read_ops_describe_the_session(scored):
     info = registry.call('get_dataset_info', {'dataset': 'ds'})
     assert info['baits'] == ['BaitA', 'BaitB']
     status = registry.call('server_status', {})
-    assert status['datasets'] == ['ds'] and status['jobs'] == {}
+    assert status['jobs'] == {} and status['network']['dataset'] is None and 'cytoscape' not in status
 
 
 def test_sandbox_ops_return_json_and_leave_the_dataset_untouched(scored, tmp_path, monkeypatch):
@@ -141,8 +143,46 @@ def test_sandbox_ops_return_json_and_leave_the_dataset_untouched(scored, tmp_pat
     assert metrics['total_after'] == 4
     assert features['columns'][:3] == ['Bait', 'Feature', 'Feature_type']
     assert comparison['genes']['both'] == ['p1'] and comparison['volcano']['n'] == 3
+    lists_only = registry.call('compare_networks', {'dataset': 'ds', 'bait_a': 'BaitA', 'bait_b': 'BaitB',
+                                                    'thresholds_a': THRESHOLDS, 'thresholds_b': THRESHOLDS,
+                                                    'include_volcano': False})
+    assert lists_only['genes'] == comparison['genes'] and 'volcano' not in lists_only
+    scores = registry.call('get_scores', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'top_n': 2})
+    assert scores['n'] == 4 and scores['returned'] == 2 and scores['n_per_bait'] == {'BaitA': 3, 'BaitB': 1}
+    assert scores['rows'][0]['First_Prey_Gene'] == 'p1' and scores['rows'][0]['In.BioGRID'] is False
+    only_b = registry.call('get_scores', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'baits': ['BaitB']})
+    assert [r['Prey.ID'] for r in only_b['rows']] == ['P1']
     assert _tree(scored) == before
     assert store.version() == store.version()
+
+
+def test_run_info_and_tail_log_read_the_manifest_and_the_log(out_dir):
+    files = {'bait': out_dir / 'bait.txt', 'prey': out_dir / 'prey.txt', 'interaction': out_dir / 'interaction.txt'}
+    files['bait'].write_text("t1\tBaitA\tT\nc1\tCtrl\tC\n")
+    files['prey'].write_text("P1\tG1\n")
+    files['interaction'].write_text("t1\tBaitA\tP1\t10\nc1\tCtrl\tP1\t4\n")
+    registry.call('parse_dataset', {'dataset': 'new', 'input_format': 'SAINT',
+                                    'files': {k: str(v) for k, v in files.items()},
+                                    'quant_type': 'Spectral Counts'})
+    info = registry.call('get_run_info', {'dataset': 'new'})
+    stage = info['runs'][0]['stages'][0]
+    assert stage['stage'] == 'parse' and stage['status'] == 'ok' and stage['error'] is None
+    assert stage['wall_seconds'] is not None and 'ED.csv' in ''.join(stage['outputs'])
+    json.dumps(info)
+    tail = registry.call('tail_log', {'dataset': 'new', 'n_lines': 5})
+    assert tail['lines'] and tail['n_lines_total'] >= len(tail['lines'])
+    with pytest.raises(FileNotFoundError):
+        registry.call('tail_log', {'dataset': 'absent'})
+
+
+def test_score_dataset_defaults_are_the_scoring_cards(monkeypatch):
+    params = registry.details('score_dataset')['schema']['properties']
+    assert {k: params[k]['default'] for k in ('imputation', 'wdfdr_iterations', 'organism', 'exclude_hcm')} == \
+        {'imputation': 0, 'wdfdr_iterations': 1000, 'organism': 'human', 'exclude_hcm': False}
+    seen = {}
+    monkeypatch.setattr(backend, 'run_score', lambda name, *a, **k: seen.update(args=a, **k) or {'run_id': 'r'})
+    registry.call('score_dataset', {'dataset': 'ds'})
+    assert seen['args'] == (0, 1000, 'human', False)
 
 
 def test_prey_annotations_summarize_each_prey_across_baits(scored, tmp_path):
@@ -191,6 +231,19 @@ def test_parse_dataset_lands_in_the_store_and_records_the_actor(out_dir):
     assert log[-1]['op'] == 'parse_dataset' and log[-1]['actor'] == 'mcp' and log[-1]['ok']
 
 
+def test_uploaded_files_can_be_parsed(out_dir):
+    paths = {}
+    for key, text in {'bait': "t1\tBaitA\tT\nc1\tCtrl\tC\n", 'prey': "P1\tG1\n",
+                      'interaction': "t1\tBaitA\tP1\t10\nc1\tCtrl\tP1\t4\n"}.items():
+        paths[key] = registry.call('upload_file', {'name': f'{key}.txt', 'content': text})['path']
+    assert paths['bait'] == str(out_dir / '_uploads' / 'bait.txt')
+    result = registry.call('parse_dataset', {'dataset': 'up', 'input_format': 'SAINT', 'files': paths,
+                                             'quant_type': 'Spectral Counts'})
+    assert result['Dataset Name'] == 'up'
+    with pytest.raises(FileExistsError):
+        registry.call('upload_file', {'name': 'bait.txt', 'content': 'again'})
+
+
 def test_load_session_needs_confirmation(scored, tmp_path):
     with pytest.raises(ValueError, match='confirm'):
         registry.call('load_session', {'zip_path': str(tmp_path / 'x.zip')})
@@ -205,13 +258,15 @@ def drawn(monkeypatch):
     monkeypatch.setattr(ctl.cy, 'selected_nodes', lambda net: list(stub['selected']))
     monkeypatch.setattr(ctl.cy, 'current_positions', lambda net: dict(stub['positions']))
     monkeypatch.setattr(ctl.cy, 'select_nodes', lambda net, names, add=False: calls.append(('select', list(names), add)))
+    monkeypatch.setattr(ctl.cy, 'clear_selection', lambda net: calls.append('clear'))
+    monkeypatch.setattr(ctl.cy, 'render_png', lambda net, height: calls.append(('render', height)) or PNG)
     monkeypatch.setattr(ctl.cy, 'set_positions', lambda net, pos: calls.append(('positions', dict(pos))))
     monkeypatch.setattr(ctl.cy, 'update_edge_columns', lambda net, frame: calls.append(('edges', frame)))
     monkeypatch.setattr(ctl.cy, 'update_node_columns', lambda net, frame: calls.append(('nodes', frame)))
     nodes = pd.DataFrame({'id': ['BA', 'P1', 'P2'], 'symbol': ['GA', 'G1', 'G2'], 'accession': ['QA', 'P1', 'P2'],
                           'role': ['bait', 'prey', 'prey'], 'x': [0.0] * 3, 'y': [0.0] * 3})
     edges = pd.DataFrame({'name': ['e1', 'e2'], 'source': ['BA', 'BA'], 'target': ['P1', 'P2'],
-                          'interaction': ['bait-prey'] * 2, 'visible': [True, True],
+                          'interaction': ['proximity'] * 2, 'visible': [True, True],
                           'SaintScore': [0.9, 0.8], 'BFDR': [0.01, 0.02], 'WD': [2.0, 1.0],
                           'WDFDR': [0.01, 0.01], 'width': [2.0, 2.0], 'kind': ['proximity'] * 2})
     ctl.STATE.update(dataset='ds', title='ProxiMate: ds', net_suid=1, nodes=nodes, edges=edges,
@@ -224,7 +279,7 @@ def drawn(monkeypatch):
 
 
 def test_cytoscape_ops_act_on_the_drawn_network_as_mcp(drawn):
-    status = registry.call('cytoscape_status', {'probe': False})
+    status = registry.call('server_status', {})
     assert status['network']['dataset'] == 'ds' and status['network']['thresholds'] == THRESHOLDS
     sel = registry.call('cytoscape_read_selection', {})
     assert sel['nodes'][0]['id'] == 'P1' and sel['edges'][0]['SaintScore'] == 0.9
@@ -237,7 +292,25 @@ def test_cytoscape_ops_act_on_the_drawn_network_as_mcp(drawn):
     with pytest.raises(ValueError, match='role'):
         registry.call('cytoscape_list_nodes', {'role': 'edge'})
     assert registry.call('cytoscape_move_nodes', {'positions': {'P1': [5, 5]}}) == {'moved': 1}
+    assert registry.call('cytoscape_clear_selection', {}) == {'selected': []}
+    assert drawn['calls'][-1] == 'clear'
+    drawn['positions'].update(P2=(1.0, 1.0), BA=(0.0, 0.0))
+    related = registry.call('cytoscape_select_related', {'seed': 'GA', 'relation': 'satellites', 'include_seed': True})
+    assert related == {'selected': ['BA', 'P1', 'P2'], 'added': False}
+    assert registry.call('cytoscape_select_related', {'seed': 'BA', 'relation': 'singletons'})['selected'] == ['P1', 'P2']
+    with pytest.raises(ValueError, match='needs a bait'):
+        registry.call('cytoscape_select_related', {'seed': 'P1', 'relation': 'satellites'})
+    with pytest.raises(ValueError, match='clear_selection'):
+        registry.call('cytoscape_select_nodes', {'ids': []})
     assert ctl.snapshot()['log'][-1]['actor'] == 'mcp'
+
+
+def test_view_network_renders_the_fitted_network_without_writing(drawn, out_dir):
+    image = mcp_tools.view_network(height=300)
+    assert image.data == PNG and image._mime_type == 'image/png'
+    assert drawn['calls'][-1] == ('render', 300)
+    assert not (out_dir / 'ds' / 'cytoscape').exists()
+    assert ctl.snapshot()['log'][-1] == {**ctl.snapshot()['log'][-1], 'actor': 'mcp', 'op': 'view_image'}
 
 
 def test_cytoscape_send_records_its_settings_in_the_manifest(scored, drawn, monkeypatch):
@@ -248,8 +321,11 @@ def test_cytoscape_send_records_its_settings_in_the_manifest(scored, drawn, monk
         return ctl.snapshot()
     monkeypatch.setattr(ctl, 'draw', fake_draw)
     monkeypatch.setattr(mcp_ops.provenance, 'biogrid_summary_path', lambda organism, exclude_hcm=False: '/no/biogrid.csv')
+    with pytest.raises(ValueError, match="'ds' is drawn; pass replace=true"):
+        registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS})
+    assert not seen
     result = registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'baits': ['BaitA'],
-                                              'layout': 'grid', 'width_source': 'SaintScore'})
+                                              'layout': 'grid', 'width_source': 'SaintScore', 'replace': True})
     assert seen['actor'] == 'mcp' and seen['baits'] == ['BaitA'] and seen['layout'] == 'grid'
     assert result['network']['dataset'] == 'ds'
     manifest = json.load(open(scored / 'run.json'))
@@ -257,10 +333,23 @@ def test_cytoscape_send_records_its_settings_in_the_manifest(scored, drawn, monk
     assert stage['stage'] == 'cytoscape' and stage['entrypoint'] == 'mcp.cytoscape_send'
     assert stage['params']['thresholds'] == THRESHOLDS and stage['params']['width_source'] == 'SaintScore'
     with pytest.raises(ValueError, match='width_source'):
-        registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'width_source': 'nope'})
+        registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'width_source': 'nope',
+                                         'replace': True})
 
 
-# --- the four tools --------------------------------------------------------------------------
+def test_status_names_the_network_in_cytoscapes_window(drawn, monkeypatch):
+    monkeypatch.setattr(ctl, 'health', lambda: {'ok': True, 'url': 'u', 'version': '3.10', 'error': None})
+    monkeypatch.setattr(ctl.cy, 'current_network_title', lambda: 'ProxiMate: other')
+    status = registry.call('server_status', {'probe': True})
+    assert status['cytoscape']['ok'] is True
+    assert status['current_network'] == {'title': 'ProxiMate: other', 'is_drawn': False}
+    monkeypatch.setattr(ctl.cy, 'current_network_title', lambda: 'ProxiMate: ds')
+    assert registry.call('server_status', {'probe': True})['current_network']['is_drawn'] is True
+    monkeypatch.setattr(ctl, 'health', lambda: {'ok': False, 'url': 'u', 'version': None, 'error': 'down'})
+    assert 'current_network' not in registry.call('server_status', {'probe': True})
+
+
+# --- the five tools --------------------------------------------------------------------------
 
 def test_tool_wrappers_return_json_envelopes(scored):
     assert mcp_tools.search_tools('dataset', mode='read')[0]['mode'] == 'read'
@@ -317,7 +406,7 @@ def mcp_url(scored):
     thread.join(5)
 
 
-def test_the_four_tools_answer_over_http(mcp_url):
+def test_the_five_tools_answer_over_http(mcp_url, drawn):
     import anyio
     import requests
     from mcp import ClientSession
@@ -332,11 +421,12 @@ def test_the_four_tools_answer_over_http(mcp_url):
                 await session.initialize()
                 tools = await session.list_tools()
                 names = sorted(t.name for t in tools.tools)
-                found = await session.call_tool('search_tools', {'query': 'metrics'})
+                found = await session.call_tool('search_tools', {'query': 'threshold_metrics'})
                 details = await session.call_tool('get_tool_details', {'name': 'threshold_metrics'})
                 called = await session.call_tool('call_tool', {'name': 'list_datasets', 'arguments': {}})
                 docs = await session.call_tool('get_gui_documentation', {'section': 'Downloads'})
-                return names, found, details, called, docs
+                picture = await session.call_tool('view_network', {'height': 300})
+                return names, found, details, called, docs, picture
 
     def payload(result):
         assert not result.isError, result.content
@@ -344,13 +434,17 @@ def test_the_four_tools_answer_over_http(mcp_url):
             return result.structuredContent.get('result', result.structuredContent)
         return json.loads(result.content[0].text)
 
-    names, found, details, called, docs = anyio.run(drive)
-    assert names == ['call_tool', 'get_gui_documentation', 'get_tool_details', 'search_tools']
+    names, found, details, called, docs, picture = anyio.run(drive)
+    assert names == ['call_tool', 'get_gui_documentation', 'get_tool_details', 'search_tools', 'view_network']
     assert 'threshold_metrics' in json.dumps(payload(found))
     assert payload(details)['mode'] == 'sandbox'
     assert payload(called)['ok'] is True
     assert payload(called)['result']['datasets'][0]['Dataset Name'] == 'ds'
     assert payload(docs)['section'] == 'Downloads'
+    assert not picture.isError, picture.content
+    block = picture.content[0]
+    assert block.type == 'image' and block.mimeType == 'image/png'
+    assert base64.b64decode(block.data) == PNG
 
 
 def test_activity_entries_are_sequenced_and_name_their_target(scored):

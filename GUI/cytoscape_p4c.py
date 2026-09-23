@@ -87,6 +87,21 @@ def probe(timeout=5):
 
 # --- networks and views ----------------------------------------------------------------
 
+TITLE_PREFIX = 'ProxiMate: '
+
+
+def proximate_networks():
+    """Titles of the networks ProxiMate drew, by their title prefix."""
+    return [name for name in p4c.get_network_list() if name.startswith(TITLE_PREFIX)]
+
+
+def current_network_title():
+    """The title of the network in Cytoscape's window; None when it has none."""
+    if p4c.get_network_count() == 0:
+        return None
+    return p4c.get_network_name()
+
+
 def node_suids(network):
     names = p4c.get_table_columns('node', ['name'], network=network)['name']
     return {name: suid for suid, name in names.items()}
@@ -116,6 +131,11 @@ def select_nodes(network, names, add=False):
         p4c.clear_selection(network=network)
     p4c.select_nodes(list(names), by_col='name', preserve_current_selection=add, network=network)
     return len(names)
+
+
+def clear_selection(network):
+    """Deselect every node and edge."""
+    p4c.clear_selection(network=network)
 
 
 def set_positions(network, positions):
@@ -202,17 +222,26 @@ def unlock(network):
 
 # --- export --------------------------------------------------------------------------------
 
-def export_png(network, path, height=2000):
-    """Write the whole network as a PNG of the given pixel height.
+def render_png(network, height=2000):
+    """The whole network as PNG bytes of the given pixel height.
 
-    CyREST's view-PNG endpoint fits the network to the height and returns the bytes,
-    so the image is written from this process and no path is handed to Cytoscape.
-    ``export_image`` would rasterize the window instead, capped by the screen.
+    CyREST's view-PNG endpoint captures the current view at that height, so the view
+    is fitted to the network first.  A locked scale factor or center would hold the
+    view where the last zoom left it and crop the picture, so any lock is released
+    before fitting.  ``export_image`` would rasterize the window instead, capped by
+    the screen.
     """
+    unlock(network)
     p4c.fit_content(network=network)
     r = requests.get(f'{BASE_URL}/networks/{network}/views/first.png',
                      params={'h': int(height)}, timeout=CY_TIMEOUT)
     r.raise_for_status()
+    return r.content
+
+
+def export_png(network, path, height=2000):
+    """Write the whole network as a PNG of the given pixel height; the bytes come
+    from ``render_png``, so no path is handed to Cytoscape."""
     with open(path, 'wb') as fh:
-        fh.write(r.content)
+        fh.write(render_png(network, height))
     return path

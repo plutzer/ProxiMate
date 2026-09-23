@@ -19,8 +19,10 @@ Every threshold argument is an explicit ``{'SaintScore', 'BFDR', 'WD', 'WDFDR'}`
 dict; no operation reads a setting from the GUI.
 """
 
+import base64
 import contextlib
 import datetime
+import json
 import os
 import re
 import shutil
@@ -418,7 +420,94 @@ def dataset_info(name):
             'busy': running_jobs().get(name)}
 
 
+STAGE_FIELDS = ('stage', 'entrypoint', 'status', 'started_utc', 'wall_seconds', 'params',
+                'metrics', 'extra', 'outputs')
+
+
+def run_info(name, last_n=5):
+    """The last ``last_n`` runs in the dataset's manifest, oldest first, each with its
+    stages' status, timing, parameters, metrics and error message.  Environment
+    snapshots and tracebacks stay in run.json."""
+    path = os.path.join(dataset_dir(name), provenance.RUN_JSON_FILENAME)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"dataset {name!r} has no run.json")
+    with open(path, encoding='utf-8') as handle:
+        document = json.load(handle)
+    runs = []
+    for run in list(document['runs'].values())[-int(last_n):]:
+        stages = []
+        for entry in run.get('stages', []):
+            stage = {key: entry.get(key) for key in STAGE_FIELDS}
+            stage['outputs'] = [o.get('path') for o in entry.get('outputs', [])]
+            stage['error'] = (entry.get('error') or {}).get('message')
+            stages.append(stage)
+        runs.append({'run_id': run.get('run_id'), 'created_utc': run.get('created_utc'),
+                     'proximate': run.get('proximate'), 'stages': stages})
+    return {'dataset': name, 'path': path, 'n_runs': len(document['runs']), 'runs': runs}
+
+
+def log_tail(name, n_lines=50):
+    """The last ``n_lines`` of the dataset's proximate.log."""
+    path = os.path.join(dataset_dir(name), 'proximate.log')
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"dataset {name!r} has no proximate.log")
+    with open(path, encoding='utf-8', errors='replace') as handle:
+        lines = [line.rstrip('\n') for line in handle]
+    return {'dataset': name, 'path': path, 'n_lines_total': len(lines), 'lines': lines[-int(n_lines):]}
+
+
+# --- uploads ---------------------------------------------------------------------------------
+
+UPLOADS_DIR = '_uploads'
+
+
+def upload_file(name, content, encoding='text', overwrite=False):
+    """Write a client's file under ``<out_dir>/_uploads/`` and return its path, for
+    parse_dataset from a client that shares no filesystem with the server.
+    ``content`` is the file's text, or its bytes base64-encoded when ``encoding`` is
+    base64.  An existing file of that name is refused unless ``overwrite``."""
+    if OUT_DIR is None:
+        raise RuntimeError("backend.configure(out_dir) has not been called")
+    if not name or os.path.basename(name) != name or name in ('.', '..'):
+        raise ValueError(f"name must be a bare file name, got {name!r}")
+    if encoding == 'text':
+        data = content.encode('utf-8')
+    elif encoding == 'base64':
+        data = base64.b64decode(content, validate=True)
+    else:
+        raise ValueError(f"encoding must be text or base64, got {encoding!r}")
+    folder = os.path.join(OUT_DIR, UPLOADS_DIR)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, name)
+    if os.path.exists(path) and not overwrite:
+        raise FileExistsError(f"{path} exists; pass overwrite=true to replace it")
+    with open(path, 'wb') as handle:
+        handle.write(data)
+    logger.info("Uploaded %s (%d bytes)", path, len(data))
+    return {'path': path, 'bytes': len(data)}
+
+
 # --- sandbox -----------------------------------------------------------------------------
+
+SCORE_COLUMNS = ('Experiment.ID', 'Prey.ID', 'First_ID', 'First_Prey_Gene', 'SaintScore', 'BFDR',
+                 'WD', 'WDFDR', 'FoldChange', 'AvgIntensity', 'In.BioGRID')
+
+
+def passing_scores(name, thresholds, baits=None):
+    """The scored rows passing ``thresholds``, restricted to ``baits`` when given,
+    ordered by bait, then SAINT score descending, then BFDR."""
+    thresholds = validate_thresholds(thresholds)
+    scores = pd.read_csv(_require_scored(name))
+    if baits:
+        for bait in baits:
+            _require_bait(scores, bait)
+        scores = scores[scores['Experiment.ID'].astype(str).isin([str(b) for b in baits])]
+    passing = apply_score_thresholds(scores, thresholds)
+    columns = [c for c in SCORE_COLUMNS if c in passing.columns]
+    return (passing[columns]
+            .sort_values(['Experiment.ID', 'SaintScore', 'BFDR'], ascending=[True, False, True], kind='stable')
+            .reset_index(drop=True))
+
 
 def threshold_metrics(name, thresholds, bait=None, biogrid_path=None):
     """The QC tab's three metrics at one threshold set, for every bait or one."""
