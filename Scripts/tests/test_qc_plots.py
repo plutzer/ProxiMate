@@ -613,6 +613,18 @@ def test_prey_pca_continuous_threshold_greys_low_scores(dataset):
         color_mode="continuous", color_threshold=0.1), matplotlib.figure.Figure)
 
 
+def test_png_exports_leave_no_pyplot_figure_open(dataset):
+    """A ``render.plot`` function that returns None shows pyplot's current figure if
+    one exists, so an export figure left open would appear in an unrelated panel."""
+    import matplotlib.pyplot as plt
+    interaction, ed = dataset
+    matrix = prepare_pca_matrix(interaction)
+    plt.close("all")
+    plot_exports.pca_plot_matplotlib(interaction, ed)
+    plot_exports.prey_pca_matplotlib(matrix)
+    assert plt.get_fignums() == []
+
+
 def test_prey_pca_hover_shows_gene_name_above_accession(dataset, tmp_path):
     interaction, _ = dataset
     matrix = prepare_pca_matrix(interaction)

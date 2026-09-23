@@ -70,13 +70,27 @@ def test_prey_is_bait_matches_any_member_of_the_prey_group(prey_id, baits, expec
 @pytest.mark.parametrize("item, subcellular, uniprot, expected", [
     ("MATR3", ["MATR3", "AAA"], [], "MATR3"),
     ("OLDNAME", ["NEWNAME"], ["OLDNAME NEWNAME EXTRA"], "NEWNAME"),
+    ("OLDNAME", ["NEWNAME"], ["OLDNAME EXTRA", "OLDNAME NEWNAME"], "NEWNAME"),
     ("AAA", ["AAA"], [np.nan], "AAA"),
-], ids=["known", "synonym-via-uniprot", "null-uniprot-row"])
-def test_get_match_bridges_symbols_through_uniprot_synonyms(item, subcellular, uniprot,
-                                                            expected):
+    ("ZZZ", ["AAA"], ["ZZZ EXTRA"], None),
+], ids=["known", "synonym-via-uniprot", "later-entry-holds-the-name",
+        "null-uniprot-row", "no-match"])
+def test_hpa_name_matching_bridges_symbols_through_uniprot_synonyms(
+        item, subcellular, uniprot, expected):
     """HPA and the scored table do not always use the same symbol for a gene; the
     UniProt synonym list is what bridges them."""
-    assert annotator.get_match(item, subcellular, uniprot) == expected
+    hpa = set(subcellular)
+    synonyms = annotator.hpa_synonym_map(hpa, uniprot)
+    assert annotator.match_hpa_name(item, hpa, synonyms) == expected
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("nucleus [GO:0005634]; cytosol [GO:0005829]", ["GO:0005634", "GO:0005829"]),
+    ("nucleus [GO:0005634]", ["GO:0005634"]),
+    (np.nan, []),
+])
+def test_go_ids(value, expected):
+    assert annotator.go_ids(value) == expected
 
 
 CC_DICT = {"BAIT1": {"PREY1": 0.85, "PREY2": 0.40}}
@@ -108,7 +122,12 @@ COMPLEXES = {"Complex A": "P1;P2;P3", "Complex B": "P4;P5"}
     ("P9", None),
 ])
 def test_complex_id_names_the_complex_holding_any_group_member(prey_id, expected):
-    assert annotator.complex_id(prey_id, COMPLEXES) == expected
+    assert annotator.complex_id(prey_id, annotator.subunit_complex_map(COMPLEXES)) == expected
+
+
+def test_a_shared_subunit_keeps_the_first_complex_listed():
+    subunits = annotator.subunit_complex_map({"First": "P1;P2", "Second": "P2;P3"})
+    assert subunits == {"P1": "First", "P2": "First", "P3": "Second"}
 
 
 # --- gene symbol resolution ----------------------------------------------------

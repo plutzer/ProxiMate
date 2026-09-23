@@ -22,8 +22,15 @@ section to the version and date and starts a fresh Unreleased section above it.
   heatmap three quarters.
 - Scoring a spectral-count dataset with AFT imputation is refused up front with a
   message naming the reason; the GUI offers only Default for such datasets.
+- Annotation builds its HPA, CORUM and GO lookups once and evaluates them per distinct
+  prey or bait-prey pair, and GOGO scores only the cellular-component ontology; a
+  212k-row dataset annotates in under three minutes instead of fifteen.
 
 ### Fixed
+- The `Self-Interaction` column in `annotated_scores.csv` compares each row's prey
+  against its own bait; it used to reflect a single arbitrary bait.
+- The feature enrichment panel no longer shows the last exported PNG figure when it has
+  nothing to draw.
 - Release builds no longer fail while preprocessing BioGRID; the download step now installs pandas.
 
 ### Removed

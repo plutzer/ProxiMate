@@ -1668,7 +1668,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.plot
     def feature_enrichment_plot():
-        # Trigger re-render when feature analysis completes
+        # Returning None shows pyplot's current figure if any is open, so nothing
+        # else in the app may leave one (exports build Figure objects directly).
         _ = feature_enrichment.get()
 
         # Set the feature enrichment to whatever dataset is selected
