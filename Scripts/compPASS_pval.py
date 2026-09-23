@@ -20,7 +20,7 @@ def entropy(xs):
     # Convert input to numpy array for easier manipulation
     xs = np.array(xs, dtype=np.float64)
     # Calculate probabilities
-    p = (xs + 1/len(xs)) / (np.sum(xs) + 1)
+    p = (xs + 1/len(xs)) / (np.sum(xs) + 1) #Pseudocount 1/len to avoid log(0)
     # Calculate entropy
     ent = np.sum([-x * np.log2(x) for x in p])
     return ent
