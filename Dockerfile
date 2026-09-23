@@ -23,6 +23,9 @@ COPY saint/patches /saint/patches
 
 COPY saint/upstream /saint/upstream
 RUN find /saint/upstream \( -name "*.sh" -o -name "configure" -o -name "bootstrap" -o -name "b2" -o -name "bjam" \) -exec chmod +x {} +
+# A Windows checkout can leave CRLF endings, which break the shell scripts that
+# configure Boost and nlopt.  dos2unix skips binary files.
+RUN find /saint/upstream -type f -exec dos2unix -q {} +
 RUN mkdir -p /saint/upstream/bin
 
 RUN make -C /saint/upstream
