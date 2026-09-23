@@ -106,6 +106,25 @@ def feature_analysis(dataset: str, thresholds: dict, feature_types: list = None,
     return out
 
 
+@register('sandbox', "Per-prey summary: passing baits at thresholds, best scores, localization, GO CC, complex, BioGRID partners.",
+          tags=('prey', 'annotations', 'gene', 'symbol', 'accession', 'localization', 'complex',
+                'biogrid', 'lookup'))
+def get_prey_annotations(dataset: str, thresholds: dict, ids: list = None, top_n: int = 500) -> dict:
+    """One row per prey in the scored dataset: First_ID (the accession the annotation
+    is keyed on), accession (the prey group as scored), gene, n_baits_seen,
+    passing_baits (the baits it passes ``thresholds`` under), known_baits (the baits
+    BioGRID already links it to), max_saint, max_fold_change, and first_SCL, Main
+    location, GO_CC and Human_Complex where the organism has them.  ``ids`` are
+    accessions or gene symbols (case-insensitive) to restrict the rows; those absent
+    from the dataset come back in ``unmatched``.  Rows are ordered by passing-bait
+    count then SAINT score, at most ``top_n``."""
+    rows, unmatched = backend.prey_annotations(dataset, thresholds, ids)
+    out = _records(rows, top_n)
+    out.update(dataset=dataset, thresholds=backend.validate_thresholds(thresholds),
+               unmatched=list(unmatched))
+    return out
+
+
 @register('sandbox', "Compare two baits: volcano data and the Venn gene lists at separate thresholds.",
           tags=('compare', 'volcano', 'venn', 'baits', 'fold change'))
 def compare_networks(dataset: str, bait_a: str, bait_b: str, thresholds_a: dict,
@@ -306,6 +325,15 @@ def cytoscape_select_satellites() -> dict:
 def cytoscape_set_edge_visibility(action: str) -> dict:
     """A column update; nothing moves and nothing is rebuilt."""
     return {'changed': int(ctl.set_edge_visibility(action, actor=ACTOR))}
+
+
+@register('read', "The drawn nodes with id, accession, gene symbol and role (bait or prey).",
+          tags=('cytoscape', 'nodes', 'symbols', 'accessions', 'baits', 'preys', 'read'))
+def cytoscape_list_nodes(role: str = None) -> dict:
+    """Bait nodes are keyed on the bait name and carry the bait's accession; prey nodes
+    are keyed on the accession.  ``role`` restricts to bait or prey.  The ids and
+    symbols are what every other cytoscape operation accepts."""
+    return _json({'nodes': ctl.list_nodes(role)})
 
 
 @register('read', "Node positions in Cytoscape, all drawn nodes or the named ones.",

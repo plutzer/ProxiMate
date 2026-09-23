@@ -22,6 +22,10 @@ section to the version and date and starts a fresh Unreleased section above it.
   heatmap three quarters.
 - Scoring a spectral-count dataset with AFT imputation is refused up front with a
   message naming the reason; the GUI offers only Default for such datasets.
+- Two MCP operations: `get_prey_annotations` summarizes each prey of a scored dataset
+  (passing baits at given thresholds, BioGRID partners, best scores, localization, GO
+  CC, complex) for all preys or a list of accessions or symbols, and
+  `cytoscape_list_nodes` lists the drawn nodes with accession, symbol and role.
 - Annotation builds its HPA, CORUM and GO lookups once and evaluates them per distinct
   prey or bait-prey pair, and GOGO scores only the cellular-component ontology; a
   212k-row dataset annotates in under three minutes instead of fifteen.

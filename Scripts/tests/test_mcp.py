@@ -51,7 +51,7 @@ def test_search_matches_name_summary_and_tags_and_filters_by_mode():
     assert {'threshold_metrics', 'cytoscape_apply_thresholds'} <= hits
     assert all(h['mode'] == 'sandbox' for h in registry.search('', mode='sandbox'))
     assert {h['name'] for h in registry.search('', mode='sandbox')} == \
-        {'threshold_metrics', 'feature_analysis', 'compare_networks'}
+        {'threshold_metrics', 'feature_analysis', 'get_prey_annotations', 'compare_networks'}
     assert len(registry.search('')) == len(registry.OPS)
     with pytest.raises(ValueError, match='mode'):
         registry.search('', mode='bogus')
@@ -145,6 +145,28 @@ def test_sandbox_ops_return_json_and_leave_the_dataset_untouched(scored, tmp_pat
     assert store.version() == store.version()
 
 
+def test_prey_annotations_summarize_each_prey_across_baits(scored, tmp_path):
+    before = sorted(os.listdir(scored))
+    result = registry.call('get_prey_annotations', {'dataset': 'ds', 'thresholds': THRESHOLDS})
+    assert sorted(os.listdir(scored)) == before
+    rows = {r['First_ID']: r for r in result['rows']}
+    assert result['n'] == 3 and result['unmatched'] == []
+    # P1 passes under both baits; BaitB's P2 row scores 0.1 and fails
+    assert rows['P1']['passing_baits'] == ['BaitA', 'BaitB']
+    assert rows['P2']['passing_baits'] == ['BaitA'] and rows['P2']['n_baits_seen'] == 2
+    assert rows['P3']['GO_CC'] == 'Vesicle' and rows['P3']['known_baits'] == []
+    assert rows['P1']['max_saint'] == 0.9 and rows['P1']['max_fold_change'] == 3.0
+    assert result['rows'][0]['First_ID'] == 'P1'  # most passing baits first
+    # first_SCL, Main location and Human_Complex are absent from this annotation
+    assert 'Human_Complex' not in result['columns']
+
+    # ids match accessions or gene symbols, case-insensitively; absent ones are listed
+    result = registry.call('get_prey_annotations', {'dataset': 'ds', 'thresholds': THRESHOLDS,
+                                                    'ids': ['p1', 'P3', 'NOPE']})
+    assert [r['First_ID'] for r in result['rows']] == ['P1', 'P3']
+    assert result['unmatched'] == ['NOPE']
+
+
 def test_feature_analysis_truncates_to_top_n(scored):
     result = registry.call('feature_analysis', {'dataset': 'ds', 'feature_types': ['GO_CC'],
                                                 'thresholds': {**THRESHOLDS, 'SaintScore': 0.0},
@@ -209,6 +231,11 @@ def test_cytoscape_ops_act_on_the_drawn_network_as_mcp(drawn):
     assert registry.call('cytoscape_select_nodes', {'ids': ['G2'], 'add': True}) == {'selected': ['P2'], 'added': True}
     assert drawn['calls'][-1] == ('select', ['P2'], True)
     assert registry.call('cytoscape_get_positions', {'ids': ['P1']}) == {'positions': {'P1': [0.0, 0.0]}}
+    nodes = registry.call('cytoscape_list_nodes', {})['nodes']
+    assert nodes[0] == {'id': 'BA', 'accession': 'QA', 'symbol': 'GA', 'role': 'bait'}
+    assert [n['id'] for n in registry.call('cytoscape_list_nodes', {'role': 'prey'})['nodes']] == ['P1', 'P2']
+    with pytest.raises(ValueError, match='role'):
+        registry.call('cytoscape_list_nodes', {'role': 'edge'})
     assert registry.call('cytoscape_move_nodes', {'positions': {'P1': [5, 5]}}) == {'moved': 1}
     assert ctl.snapshot()['log'][-1]['actor'] == 'mcp'
 

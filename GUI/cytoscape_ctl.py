@@ -300,6 +300,17 @@ def select_nodes(ids, add=False, actor='gui'):
                    add=add, actor=actor)
 
 
+def list_nodes(role=None):
+    """The drawn nodes' id, accession, symbol and role, all or one role only."""
+    _net()
+    nodes = STATE['nodes'][['id', 'accession', 'symbol', 'role']]
+    if role is not None:
+        if role not in ('bait', 'prey'):
+            raise ValueError(f"role must be bait or prey, got {role!r}")
+        nodes = nodes[nodes['role'] == role]
+    return nodes.astype(str).to_dict('records')
+
+
 def get_positions(ids=None):
     """``{id: [x, y]}`` as Cytoscape has the drawn nodes now, all or the named ones."""
     suid = _net()

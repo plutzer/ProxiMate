@@ -190,8 +190,8 @@ none reads what the GUI's sliders show. Operations are classed by what they touc
 
 | Mode | Operations | Effect on a person at the GUI |
 | --- | --- | --- |
-| read | `list_datasets`, `get_dataset_info`, `server_status`, `cytoscape_status`, `cytoscape_read_selection`, `cytoscape_get_positions` | none |
-| sandbox | `threshold_metrics`, `feature_analysis`, `compare_networks` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
+| read | `list_datasets`, `get_dataset_info`, `server_status`, `cytoscape_status`, `cytoscape_read_selection`, `cytoscape_list_nodes`, `cytoscape_get_positions` | none |
+| sandbox | `threshold_metrics`, `feature_analysis`, `get_prey_annotations`, `compare_networks` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
 | dataset | `parse_dataset`, `score_dataset`, `load_session` | the dataset table and dropdowns update within a second; a dataset being scored by either side refuses a second job; `load_session` is destructive and needs `confirm` |
 | cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_*`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_sync_positions`, `cytoscape_export_image`, `cytoscape_unlock` | the drawn network changes under the mouse; the Cytoscape tab's status shows the thresholds it was drawn at and the activity panel lists each operation as `[mcp]` |
 

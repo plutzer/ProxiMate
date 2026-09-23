@@ -38,7 +38,7 @@ import provenance
 import session_archive
 from Ann_Enrichment import process_refactored
 from network_comparison import calculate_volcano_data, load_and_filter_bait_data
-from QC_plots import calculate_threshold_metrics
+from QC_plots import apply_score_thresholds, calculate_threshold_metrics
 from setup_datasets import ORGANISMS
 from log_config import get_logger
 
@@ -450,6 +450,50 @@ def feature_analysis(name, thresholds, feature_types=None):
     if absent:
         raise ValueError(f"feature types not in this dataset's annotation: {absent}")
     return process_refactored(scores, feature_types, thresholds)
+
+
+PREY_ANNOTATION_COLUMNS = ('first_SCL', 'Main location', 'GO_CC', 'Human_Complex')
+
+
+def prey_annotations(name, thresholds, ids=None):
+    """One row per prey: identifiers, the baits it passes ``thresholds`` under, the
+    baits BioGRID already links it to, its best scores and its annotation columns.
+
+    ``ids`` (accessions or gene symbols, case-insensitive) restrict the rows.  Returns
+    ``(frame, unmatched)``; an id absent from the dataset is a normal answer, so it is
+    listed rather than raised.  Annotation columns an organism lacks are left out.
+    """
+    thresholds = validate_thresholds(thresholds)
+    scores = pd.read_csv(_require_scored(name))
+    scores['First_ID'] = scores['First_ID'].astype(str)
+    unmatched = []
+    if ids:
+        keys = [scores[c].astype(str).str.lower()
+                for c in ('Prey.ID', 'First_ID', 'First_Prey_Gene')]
+        wanted = {str(i).lower() for i in ids}
+        hit = keys[0].isin(wanted) | keys[1].isin(wanted) | keys[2].isin(wanted)
+        found = set().union(*(set(k[hit]) for k in keys))
+        unmatched = [i for i in ids if str(i).lower() not in found]
+        scores = scores[hit]
+
+    def baits_of(frame):
+        return frame.groupby('First_ID')['Experiment.ID'].agg(lambda s: sorted(set(s)))
+
+    groups = scores.groupby('First_ID', sort=False)
+    rows = groups.agg(accession=('Prey.ID', 'first'), gene=('First_Prey_Gene', 'first'),
+                      n_baits_seen=('Experiment.ID', 'nunique'),
+                      max_saint=('SaintScore', 'max'), max_fold_change=('FoldChange', 'max'))
+    lists = {'passing_baits': baits_of(apply_score_thresholds(scores, thresholds))}
+    if 'In.BioGRID' in scores.columns:
+        lists['known_baits'] = baits_of(scores[scores['In.BioGRID'].eq(True)])
+    for column, baits in lists.items():
+        rows[column] = [baits.get(prey, []) for prey in rows.index]
+    for column in PREY_ANNOTATION_COLUMNS:
+        if column in scores.columns:
+            rows[column] = groups[column].first()
+    rows['n_passing'] = rows['passing_baits'].str.len()
+    rows = rows.sort_values(['n_passing', 'max_saint'], ascending=False, kind='stable')
+    return rows.reset_index(), unmatched
 
 
 def compare_sets(data_a, data_b):
