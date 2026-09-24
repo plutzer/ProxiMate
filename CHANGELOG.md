@@ -11,6 +11,8 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-24
+
 ### Changed
 - Example datasets live in `examples/` (TIP49 spectral counts from the SAINTexpress
   distribution and the Human Cell Map LFQ set), each with a README; the SAINTexpress
@@ -102,6 +104,7 @@ section to the version and date and starts a fresh Unreleased section above it.
 Last version published to Docker Hub by hand, before this changelog existed. Older
 versions are listed at https://hub.docker.com/r/plutzer/proximate/tags.
 
-[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/plutzer/ProxiMate/releases/tag/v0.2.1
 [0.2.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.2.0
 [0.1.11]: https://hub.docker.com/r/plutzer/proximate/tags
