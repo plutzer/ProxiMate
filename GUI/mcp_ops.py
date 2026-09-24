@@ -62,20 +62,55 @@ def get_dataset_info(dataset: str) -> dict:
     return _json(backend.dataset_info(dataset))
 
 
-@register('read', "Server state: output directory, datasets, running jobs, drawn Cytoscape network, recent MCP activity.",
-          tags=('status', 'health', 'jobs'))
-def server_status() -> dict:
+@register('read', "The run manifest: each run's stages with status, timing, parameters, metrics and error.",
+          tags=('run', 'manifest', 'provenance', 'stages', 'diagnose', 'failed'))
+def get_run_info(dataset: str, last_n: int = 5) -> dict:
+    """The last ``last_n`` runs recorded in the dataset's run.json, oldest first.  Each
+    stage (parse, score, annotate, cytoscape, ...) carries status ok/error/running,
+    wall_seconds, params, metrics, outputs and the error message when it failed."""
+    return _json(backend.run_info(dataset, last_n))
+
+
+@register('read', "The last lines of a dataset's proximate.log.",
+          tags=('log', 'tail', 'diagnose', 'failed'))
+def tail_log(dataset: str, n_lines: int = 50) -> dict:
+    """The dataset's own log, written by every parse, score and annotate run on it."""
+    return backend.log_tail(dataset, n_lines)
+
+
+@register('read', "Server state: output directory, running jobs, the drawn Cytoscape network, recent MCP activity; probe asks Cytoscape.",
+          tags=('status', 'health', 'jobs', 'cytoscape', 'connect'))
+def server_status(probe: bool = False) -> dict:
+    """``network`` is the drawn ProxiMate network from the controller state: dataset,
+    counts, thresholds, style.  ``probe`` contacts CyREST (a few seconds when
+    Cytoscape is down) and adds ``cytoscape`` (whether it answers) and, when it does,
+    ``current_network``: the network in Cytoscape's window and whether it is the
+    drawn one; every cytoscape operation acts on the drawn one regardless."""
     import mcp_registry
-    snap = ctl.snapshot()
-    return _json({'out_dir': backend.OUT_DIR, 'datasets': store.names(),
-                  'scored': store.scored_names(), 'jobs': backend.running_jobs(),
-                  'cytoscape': {'dataset': snap['dataset'], 'n_nodes': snap['n_nodes'],
-                                'n_edges': snap['n_edges'], 'thresholds': snap['thresholds'],
-                                'busy': snap['busy']},
-                  'activity': mcp_registry.activity(10)})
+    out = {'out_dir': backend.OUT_DIR, 'jobs': backend.running_jobs(), 'network': _network(),
+           'activity': mcp_registry.activity(10)}
+    if probe:
+        out['cytoscape'] = ctl.health()
+        if out['cytoscape']['ok']:
+            out['current_network'] = ctl.current_network()
+    return _json(out)
 
 
 # --- sandbox ---------------------------------------------------------------------------------
+
+@register('sandbox', "The interactions passing a threshold set: bait, prey, gene, scores, fold change, BioGRID flag.",
+          tags=('scores', 'hits', 'passing', 'interactions', 'prey', 'bait', 'thresholds'))
+def get_scores(dataset: str, thresholds: dict, baits: list = None, top_n: int = 500) -> dict:
+    """The rows of annotated_scores.csv passing ``thresholds``, restricted to ``baits``
+    when given: Experiment.ID (bait), Prey.ID, First_ID, First_Prey_Gene, SaintScore,
+    BFDR, WD, WDFDR, FoldChange, AvgIntensity, In.BioGRID.  Ordered by bait then SAINT
+    score, at most ``top_n`` rows; ``n_per_bait`` counts every passing row."""
+    rows = backend.passing_scores(dataset, thresholds, baits)
+    out = _records(rows, top_n)
+    out.update(dataset=dataset, thresholds=backend.validate_thresholds(thresholds),
+               n_per_bait=_json(rows['Experiment.ID'].value_counts().sort_index().to_dict()))
+    return out
+
 
 @register('sandbox', "QC metrics at a threshold set: median network size, BioGRID enrichment, mean degree.",
           tags=('thresholds', 'qc', 'metrics', 'known', 'degree'))
@@ -106,20 +141,41 @@ def feature_analysis(dataset: str, thresholds: dict, feature_types: list = None,
     return out
 
 
+@register('sandbox', "Per-prey summary: passing baits at thresholds, best scores, localization, GO CC, complex, BioGRID partners.",
+          tags=('prey', 'annotations', 'gene', 'symbol', 'accession', 'localization', 'complex',
+                'biogrid', 'lookup'))
+def get_prey_annotations(dataset: str, thresholds: dict, ids: list = None, top_n: int = 500) -> dict:
+    """One row per prey in the scored dataset: First_ID (the accession the annotation
+    is keyed on), accession (the prey group as scored), gene, n_baits_seen,
+    passing_baits (the baits it passes ``thresholds`` under), known_baits (the baits
+    BioGRID already links it to), max_saint, max_fold_change, and first_SCL, Main
+    location, GO_CC and Human_Complex where the organism has them.  ``ids`` are
+    accessions or gene symbols (case-insensitive) to restrict the rows; those absent
+    from the dataset come back in ``unmatched``.  Rows are ordered by passing-bait
+    count then SAINT score, at most ``top_n``."""
+    rows, unmatched = backend.prey_annotations(dataset, thresholds, ids)
+    out = _records(rows, top_n)
+    out.update(dataset=dataset, thresholds=backend.validate_thresholds(thresholds),
+               unmatched=list(unmatched))
+    return out
+
+
 @register('sandbox', "Compare two baits: volcano data and the Venn gene lists at separate thresholds.",
           tags=('compare', 'volcano', 'venn', 'baits', 'fold change'))
 def compare_networks(dataset: str, bait_a: str, bait_b: str, thresholds_a: dict,
-                     thresholds_b: dict, top_n: int = 500) -> dict:
+                     thresholds_b: dict, top_n: int = 500, include_volcano: bool = True) -> dict:
     """The Network Comparison tab's data: ``genes`` holds the sorted gene lists passing
     thresholds in only A, only B and both; ``volcano`` holds every prey seen under
     either bait with status (shared / a_only / b_only), mean intensities, log2 fold
     change, adjusted p-value and the -log10 BFDR for one-sided preys, at most
-    ``top_n`` rows ordered by adjusted p-value."""
+    ``top_n`` rows ordered by adjusted p-value.  ``include_volcano`` false returns
+    the gene lists alone."""
     out = backend.compare_networks(dataset, bait_a, bait_b, thresholds_a, thresholds_b)
     volcano = out.pop('volcano')
-    if len(volcano) and 'pval_adj' in volcano.columns:
-        volcano = volcano.sort_values('pval_adj', kind='stable', na_position='last')
-    out['volcano'] = _records(volcano, top_n)
+    if include_volcano:
+        if len(volcano) and 'pval_adj' in volcano.columns:
+            volcano = volcano.sort_values('pval_adj', kind='stable', na_position='last')
+        out['volcano'] = _records(volcano, top_n)
     return _json(out)
 
 
@@ -129,7 +185,8 @@ def compare_networks(dataset: str, bait_a: str, bait_b: str, thresholds_a: dict,
           tags=('parse', 'import', 'upload', 'maxquant', 'diann', 'saint', 'experimental design'))
 def parse_dataset(dataset: str, input_format: str, files: dict, quant_type: str = 'Intensity') -> dict:
     """Creates ``<out_dir>/<dataset>/`` with the SAINT and CompPASS inputs and adds the
-    dataset to the session.  ``files`` maps file keys to paths readable by the server:
+    dataset to the session.  ``files`` maps file keys to paths as the server sees them
+    (inside its container, so the folder holding them must be mounted there):
     MaxQuant {pg, ed}; DIA-NN and Pioneer {matrix, ed}; FragPipe {fp, ed}; MSstats
     {msstats, ed}; SAINT {bait, prey, interaction}.  ``ed`` is the experimental design
     CSV (Experiment Name, Type, Bait, Replicate, Bait ID).  ``quant_type`` is
@@ -140,17 +197,18 @@ def parse_dataset(dataset: str, input_format: str, files: dict, quant_type: str 
 
 @register('dataset', "Score a parsed dataset with SAINTexpress and CompPASS, then annotate it.",
           tags=('score', 'saint', 'comppass', 'annotate', 'imputation', 'wdfdr'))
-def score_dataset(dataset: str, imputation: int, wdfdr_iterations: int, organism: str,
-                  exclude_hcm: bool, pi_method: str = None, pi_bait: str = None,
-                  seed: int = None) -> dict:
-    """Runs score.py and annotator.py on the dataset, as the Scoring card does.
-    ``imputation``: 0 none, 1 prey-specific AFT, 2 refactored AFT, 3 one-component
-    AFT.  ``wdfdr_iterations``: permutations for the WD FDR (0 skips it).
-    ``organism``: human, mouse or yeast.  ``exclude_hcm`` removes Human Cell Map
-    evidence from BioGRID (human only).  ``pi_method`` (weighted_average or
-    single_bait, with ``pi_bait``) applies to imputation 2.  ``seed`` fixes the
-    CompPASS permutations.  Blocks until both stages finish (minutes); refused while
-    the GUI or another call is working on the dataset."""
+def score_dataset(dataset: str, imputation: int = 0, wdfdr_iterations: int = 1000,
+                  organism: str = 'human', exclude_hcm: bool = False, pi_method: str = None,
+                  pi_bait: str = None, seed: int = None) -> dict:
+    """Runs score.py and annotator.py on the dataset, as the Scoring card does; the
+    defaults are the Scoring card's.  ``imputation``: 0 none, 1 prey-specific AFT, 2
+    refactored AFT, 3 one-component AFT (intensity data only).  ``wdfdr_iterations``:
+    permutations for the WD FDR (0 skips it).  ``organism``: human, mouse or yeast.
+    ``exclude_hcm`` removes Human Cell Map evidence from BioGRID (human only).
+    ``pi_method`` (weighted_average or single_bait, with ``pi_bait``) applies to
+    imputation 2.  ``seed`` fixes the CompPASS permutations.  Blocks until both
+    stages finish (minutes); refused while the GUI or another call is working on the
+    dataset."""
     return _json(backend.run_score(dataset, imputation, wdfdr_iterations, organism, exclude_hcm,
                                    pi_method=pi_method, pi_bait=pi_bait, seed=seed, actor=ACTOR))
 
@@ -177,32 +235,28 @@ def _network():
             'thresholds': snap['thresholds'], 'style': snap['style'], 'busy': snap['busy']}
 
 
-@register('read', "Whether Cytoscape answers, and what ProxiMate network is drawn at which thresholds.",
-          tags=('cytoscape', 'connect', 'health', 'status'))
-def cytoscape_status(probe: bool = True) -> dict:
-    """``probe`` contacts CyREST (a few seconds when Cytoscape is down); the drawn
-    network's dataset, counts, thresholds and style come from the controller state."""
-    out = {'network': _network(), 'activity': ctl.snapshot()['log'][-10:]}
-    if probe:
-        out['cytoscape'] = ctl.health()
-    return _json(out)
-
-
-@register('cytoscape', "Draw a dataset's thresholded network in Cytoscape, replacing the previous one.",
+@register('cytoscape', "Draw a dataset's thresholded network in Cytoscape; replace=true when one is already drawn.",
           tags=('cytoscape', 'send', 'draw', 'network', 'layout', 'biogrid', 'corum'))
 def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey: bool = True,
                    label_policy: str = 'all', layout: str = 'force-directed',
                    width_source: str = 'abundance', literature_weighted: bool = False,
                    biogrid_scope: str = 'all', corum: bool = False, corum_min_members: int = 3,
-                   corum_min_fraction: float = 0.5) -> dict:
-    """As the Cytoscape tab's Send button, with every option explicit.  ``baits``
-    limits the drawing (default all).  ``prey_prey`` adds BioGRID prey-prey edges;
-    ``biogrid_scope`` all or multivalidated; ``literature_weighted`` thickens them by
-    publications.  ``corum`` adds complex edges (human datasets only) under the two
-    criteria.  ``label_policy`` all, baits or none.  ``width_source`` abundance,
-    SaintScore, WD, FoldChange or uniform.  ``layout`` is a Cytoscape layout name
-    (force-directed, grid, circular, ...).  The thresholds and options are recorded in
-    the dataset's run.json; the GUI's own sliders keep the user's values."""
+                   corum_min_fraction: float = 0.5, replace: bool = False) -> dict:
+    """As the Cytoscape tab's Send button, with every option explicit.  Drawing
+    removes every ProxiMate network from Cytoscape, with its layout and clustering;
+    while one is drawn the call is refused unless ``replace`` is true, so ask the
+    user first.  ``baits`` limits the drawing (default all).  ``prey_prey`` adds
+    BioGRID prey-prey edges; ``biogrid_scope`` all or multivalidated;
+    ``literature_weighted`` thickens them by publications.  ``corum`` adds complex
+    edges (human datasets only) under the two criteria.  ``label_policy`` all, baits
+    or none.  ``width_source`` abundance, SaintScore, WD, FoldChange or uniform.
+    ``layout`` is a Cytoscape layout name (force-directed, grid, circular, ...).  The
+    thresholds and options are recorded in the dataset's run.json; the GUI's own
+    sliders keep the user's values."""
+    drawn = ctl.snapshot()['dataset']
+    if drawn is not None and not replace:
+        raise ValueError(f"a network for dataset {drawn!r} is drawn; pass replace=true to remove "
+                         "it and draw this one")
     thresholds = backend.validate_thresholds(thresholds)
     if width_source not in cytoscape_net.EDGE_WIDTH_SOURCES:
         raise ValueError(f"width_source must be one of {cytoscape_net.EDGE_WIDTH_SOURCES}")
@@ -275,30 +329,30 @@ def cytoscape_select_nodes(ids: list, add: bool = False) -> dict:
     return {'selected': ctl.select_nodes(ids, add=add, actor=ACTOR), 'added': bool(add)}
 
 
-@register('cytoscape', "Select the nodes a relation names for a seed: interactors, singletons, partners, cocomplex.",
-          tags=('cytoscape', 'select', 'relation', 'interactors', 'partners'))
-def cytoscape_select_related(seed: str, relation: str, add: bool = False, min_saint: float = None,
-                             max_bfdr: float = None, min_abundance: float = None,
-                             min_publications: int = None) -> dict:
-    """``interactors`` and ``singletons`` need a bait seed and take the SAINT, BFDR and
-    abundance cuts; ``partners`` are BioGRID or complex neighbors of any node
-    (``min_publications`` applies); ``cocomplex`` needs the CORUM layer drawn."""
-    ids = ctl.select_related(seed, relation, add=add, actor=ACTOR, min_saint=min_saint,
-                             max_bfdr=max_bfdr, min_abundance=min_abundance,
+@register('cytoscape', "Deselect everything in the drawn network.",
+          tags=('cytoscape', 'select', 'clear', 'deselect'))
+def cytoscape_clear_selection() -> dict:
+    """A selection is drawn yellow over the node colors, so clear it before an export
+    or view that should show community colors."""
+    ctl.clear_selection(actor=ACTOR)
+    return {'selected': []}
+
+
+@register('cytoscape', "Select the nodes a relation names for a seed: interactors, singletons, satellites, partners, cocomplex.",
+          tags=('cytoscape', 'select', 'relation', 'interactors', 'singletons', 'satellites', 'partners'))
+def cytoscape_select_related(seed: str, relation: str, add: bool = False, include_seed: bool = False,
+                             min_saint: float = None, max_bfdr: float = None,
+                             min_abundance: float = None, min_publications: int = None) -> dict:
+    """``interactors`` (a bait's preys, under the SAINT, BFDR and abundance cuts),
+    ``singletons`` (the preys whose only bait it is) and ``satellites`` (its singletons
+    plus the two-bait preys lying nearer to it than to the other bait in the current
+    layout) need a bait seed; ``partners`` are BioGRID or complex neighbors of any
+    node (``min_publications`` applies); ``cocomplex`` needs the CORUM layer drawn.
+    ``include_seed`` selects the seed too, so the group moves as one."""
+    ids = ctl.select_related(seed, relation, add=add, include_seed=include_seed, actor=ACTOR,
+                             min_saint=min_saint, max_bfdr=max_bfdr, min_abundance=min_abundance,
                              min_publications=min_publications)
     return {'selected': list(ids), 'added': bool(add)}
-
-
-@register('cytoscape', "With one bait selected, select it with the preys whose only neighbor it is.",
-          tags=('cytoscape', 'select', 'loners', 'bait'))
-def cytoscape_select_loners() -> dict:
-    return {'selected': list(ctl.select_loners(actor=ACTOR))}
-
-
-@register('cytoscape', "With one bait selected, select it with its own preys and the two-bait preys nearer to it.",
-          tags=('cytoscape', 'select', 'satellites', 'bait'))
-def cytoscape_select_satellites() -> dict:
-    return {'selected': list(ctl.select_satellites(actor=ACTOR))}
 
 
 @register('cytoscape', "Hide or show edges against the selection: hide_selected, show_selected, hide_unselected, show_all.",
@@ -306,6 +360,15 @@ def cytoscape_select_satellites() -> dict:
 def cytoscape_set_edge_visibility(action: str) -> dict:
     """A column update; nothing moves and nothing is rebuilt."""
     return {'changed': int(ctl.set_edge_visibility(action, actor=ACTOR))}
+
+
+@register('read', "The drawn nodes with id, accession, gene symbol and role (bait or prey).",
+          tags=('cytoscape', 'nodes', 'symbols', 'accessions', 'baits', 'preys', 'read'))
+def cytoscape_list_nodes(role: str = None) -> dict:
+    """Bait nodes are keyed on the bait name and carry the bait's accession; prey nodes
+    are keyed on the accession.  ``role`` restricts to bait or prey.  The ids and
+    symbols are what every other cytoscape operation accepts."""
+    return _json({'nodes': ctl.list_nodes(role)})
 
 
 @register('read', "Node positions in Cytoscape, all drawn nodes or the named ones.",
@@ -322,18 +385,13 @@ def cytoscape_move_nodes(positions: dict) -> dict:
     return {'moved': int(ctl.move_nodes(positions, actor=ACTOR))}
 
 
-@register('cytoscape', "Leiden over the selected nodes, colored by community and re-packed inside their box.",
+@register('cytoscape', "Leiden over the selected preys, colored by community and re-packed inside their box.",
           tags=('cytoscape', 'cluster', 'leiden', 'community', 'repack'))
 def cytoscape_cluster_selection(resolution: float = 1.0, seed: int = 17,
                                 literature_weight: float = 1.0) -> dict:
-    """Only the selected nodes move; the community number lands in the node table."""
+    """Only the selected preys move; the community number lands in the node table.
+    Selected baits keep their place and are returned in ``baits_left``."""
     return _json(ctl.cluster_selection(resolution, seed, literature_weight, actor=ACTOR))
-
-
-@register('cytoscape', "Record the positions the user dragged nodes to into the controller state.",
-          tags=('cytoscape', 'sync', 'positions'))
-def cytoscape_sync_positions() -> dict:
-    return {'recorded': int(ctl.sync_positions(actor=ACTOR))}
 
 
 @register('cytoscape', "Export the drawn network as a PNG under the dataset's cytoscape folder.",
@@ -350,9 +408,3 @@ def cytoscape_export_image(height: int = 2000) -> dict:
         record.add_output(path, role='image')
         record.extra(thresholds=snap['thresholds'])
     return {'path': path}
-
-
-@register('cytoscape', "Release any lock a Cytoscape view picked up, restoring pan and zoom.",
-          tags=('cytoscape', 'unlock', 'view'))
-def cytoscape_unlock() -> dict:
-    return {'released': list(ctl.unlock(actor=ACTOR))}

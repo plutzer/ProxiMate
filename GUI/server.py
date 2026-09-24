@@ -48,7 +48,7 @@ def threaded(fn):
 
 
 def build_mcp(host=MCP_HOST, port=MCP_PORT):
-    """The FastMCP server with the four tools and the health route registered."""
+    """The FastMCP server with the five tools and the health route registered."""
     from mcp.server.fastmcp import FastMCP
     from starlette.requests import Request
     from starlette.responses import JSONResponse
@@ -61,7 +61,7 @@ def build_mcp(host=MCP_HOST, port=MCP_PORT):
 
     mcp = FastMCP('proximate', host=host, port=port)
     for tool in (mcp_tools.search_tools, mcp_tools.get_tool_details, mcp_tools.call_tool,
-                 mcp_tools.get_gui_documentation):
+                 mcp_tools.get_gui_documentation, mcp_tools.view_network):
         mcp.tool()(threaded(tool))
 
     @mcp.custom_route('/api/health', methods=['GET'])

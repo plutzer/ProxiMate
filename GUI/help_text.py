@@ -37,7 +37,7 @@ TOOLTIPS = {
     "saint_interaction": "SAINT interaction.txt: one row per protein per experiment - experiment name, bait, prey, and quantity.",  # tooltip
     "organism": "The species your samples came from. Chooses which annotation databases (BioGRID, UniProt, HPA, CORUM) are used for annotation and enrichment.",  # tooltip
     "exclude_hcm": "Annotate against a BioGRID copy with all Human Cell Map (Go et al. 2021) evidence removed. HCM is itself a BioID screen, so it makes proximity-labeling hits look more 'known' than they are. Interactions with other evidence are kept.",  # tooltip
-    "imputation_method": "How missing control values are filled in before SAINT scoring. Default = no fill-in; the AFT options model the chance a value is missing because it fell below detection. Use Default for MSstats input.",  # tooltip
+    "imputation_method": "How missing control values are filled in before SAINT scoring. Default = no fill-in; the AFT options model the chance an intensity is missing because it fell below detection, so they apply to intensity data only. Use Default for MSstats input.",  # tooltip
     "pi_method": "π is the estimated share of missing values that are true absences rather than below-detection signals. Choose to estimate it from all control baits or fit it from a single one.",  # tooltip
     "pi_bait": "The control bait whose replicates are used to fit π. Pick one with several replicates.",  # tooltip
     "wdfdr_iterations": "Number of data shuffles used to estimate the WD score's false discovery rate (WDFDR). More iterations are slower but more stable; 0 skips WDFDR entirely.",  # tooltip
@@ -98,7 +98,7 @@ TOOLTIPS = {
     "cy_cl_resolution": "Leiden resolution. Above 1 splits the selection into more, smaller communities; below 1 merges them.",  # tooltip
     "cy_cl_seed": "Random seed for the Leiden run, so the same selection clusters the same way again.",  # tooltip
     "cy_cl_lit_weight": "How much a BioGRID or complex edge pulls relative to a bait-prey edge. 0 clusters on bait-prey edges alone.",  # tooltip
-    "cy_cluster": "Run Leiden over the selected nodes, color them by community, and re-pack each community on its own circle inside the box the selection occupies. Only selected nodes move.",  # tooltip
+    "cy_cluster": "Run Leiden over the selected preys, color them by community, and re-pack each community on its own circle inside the box the selection occupies. Only selected preys move; selected baits stay put.",  # tooltip
     # ---- Downloads tab ----
     "dl_filter_card": "These cutoffs filter the rows of score-based exports only. Experimental Design, SAINT Inputs, and Enriched Features always download unfiltered.",  # tooltip
     "dl_preset": "Ready-made export formats for common next steps. A preset appears only when the dataset has the files it needs.",  # tooltip

@@ -18,28 +18,30 @@ RUN apt-get update && apt-get install -y \
     libnlopt-dev \
     dos2unix
 
-# RUN apt-get update && apt-get install -y perl
 
-COPY SAINTexpress-custom /SAINTexpress-custom
+COPY saint/patches /saint/patches
 
-COPY SAINTexpress_v3.6.3__2018-03-09 /SAINTexpress_v3.6.3__2018-03-09
-RUN find /SAINTexpress_v3.6.3__2018-03-09 \( -name "*.sh" -o -name "configure" -o -name "bootstrap" -o -name "b2" -o -name "bjam" \) -exec chmod +x {} +
-RUN mkdir -p /SAINTexpress_v3.6.3__2018-03-09/bin
+COPY saint/upstream /saint/upstream
+RUN find /saint/upstream \( -name "*.sh" -o -name "configure" -o -name "bootstrap" -o -name "b2" -o -name "bjam" \) -exec chmod +x {} +
+# A Windows checkout can leave CRLF endings, which break the shell scripts that
+# configure Boost and nlopt.  dos2unix skips binary files.
+RUN find /saint/upstream -type f -exec dos2unix -q {} +
+RUN mkdir -p /saint/upstream/bin
 
-RUN make -C /SAINTexpress_v3.6.3__2018-03-09
-RUN mv /SAINTexpress_v3.6.3__2018-03-09/bin/SAINTexpress-int /bin/SAINTexpress-int_default
-RUN mv /SAINTexpress_v3.6.3__2018-03-09/bin/SAINTexpress-spc /bin/SAINTexpress-spc
+RUN make -C /saint/upstream
+RUN mv /saint/upstream/bin/SAINTexpress-int /bin/SAINTexpress-int_default
+RUN mv /saint/upstream/bin/SAINTexpress-spc /bin/SAINTexpress-spc
 
-# Overwrite the default SAINTexpress with the custom version
-COPY /SAINTexpress-custom/SAINT-MRF-int/*.cpp /SAINTexpress_v3.6.3__2018-03-09/SAINT-MRF-int/
-COPY /SAINTexpress-custom/SAINT-MRF-int/*.hpp /SAINTexpress_v3.6.3__2018-03-09/SAINT-MRF-int/
-# COPY /SAINTexpress-custom/SAINT-MRF-int/Makefile /SAINTexpress_v3.6.3__2018-03-09/SAINT-MRF-int/
-RUN make -C /SAINTexpress_v3.6.3__2018-03-09/SAINT-MRF-int clean
-RUN make -C /SAINTexpress_v3.6.3__2018-03-09/SAINT-MRF-spc clean
+# Overlay the patched intensity-model sources on the upstream tree and rebuild that
+# binary; the spectral-count build above is unmodified upstream.
+COPY /saint/patches/SAINT-MRF-int/*.cpp /saint/upstream/SAINT-MRF-int/
+COPY /saint/patches/SAINT-MRF-int/*.hpp /saint/upstream/SAINT-MRF-int/
+RUN make -C /saint/upstream/SAINT-MRF-int clean
+RUN make -C /saint/upstream/SAINT-MRF-spc clean
 
 # Build the project
-RUN make -C /SAINTexpress_v3.6.3__2018-03-09/SAINT-MRF-int
-RUN cp /SAINTexpress_v3.6.3__2018-03-09/bin/SAINTexpress-int /bin/SAINTexpress-int
+RUN make -C /saint/upstream/SAINT-MRF-int
+RUN cp /saint/upstream/bin/SAINTexpress-int /bin/SAINTexpress-int
 
 # Python 3.12 is built from source: focal's apt tops out at 3.9 and the deadsnakes
 # PPA publishes nothing for this release, while the pinned requirements need >= 3.11.

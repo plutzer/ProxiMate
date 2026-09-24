@@ -113,14 +113,15 @@ def _fake_stages(monkeypatch, calls, fail=None):
     monkeypatch.setattr(backend, '_run_stage_subprocess', run)
 
 
-def test_score_runs_both_stages_with_the_given_settings_and_marks_the_row(parsed, monkeypatch):
+def test_score_runs_both_stages_with_the_given_settings_and_marks_the_row(out_dir, monkeypatch):
+    backend.run_parse('ds1', 'SAINT', _saint_files(out_dir), 'Intensity')
     calls = []
     _fake_stages(monkeypatch, calls)
     result = backend.run_score('ds1', imputation=2, wdfdr_iterations=5, organism='human',
                                exclude_hcm=True, pi_method='single_bait', pi_bait='Ctrl', seed=7)
     score_cmd, ann_cmd = calls
     assert score_cmd[1].endswith('score.py')
-    assert score_cmd[score_cmd.index('--quantType') + 1] == 'Spectral Counts'
+    assert score_cmd[score_cmd.index('--quantType') + 1] == 'Intensity'
     assert score_cmd[score_cmd.index('--imputation') + 1] == '2'
     assert score_cmd[score_cmd.index('--n-iterations') + 1] == '5'
     assert score_cmd[score_cmd.index('--pi-bait') + 1] == 'Ctrl'
@@ -138,6 +139,22 @@ def test_a_failing_stage_raises_with_its_log_and_leaves_the_row_unscored(parsed,
     assert store.row('ds1')['Scored'] != 'Yes'
 
 
+def test_run_info_and_log_tail_report_the_stages_and_the_log(parsed, monkeypatch):
+    _fake_stages(monkeypatch, [])
+    backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='human', exclude_hcm=False)
+    info = backend.run_info('ds1')
+    # The faked score.py and annotator.py record no stages of their own.
+    assert [(s['stage'], s['status']) for run in info['runs'] for s in run['stages']] == [('parse', 'ok')]
+    assert info['n_runs'] == len(info['runs']) == 1
+    assert 'environment' not in info['runs'][0] and 'traceback' not in str(info)
+    assert backend.run_info('ds1', last_n=1) == info
+    tail = backend.log_tail('ds1', n_lines=3)
+    assert len(tail['lines']) == 3 and tail['n_lines_total'] >= 3
+    assert any('Starting scoring' in line for line in backend.log_tail('ds1', n_lines=1000)['lines'])
+    with pytest.raises(FileNotFoundError, match='run.json'):
+        backend.run_info('ds2')
+
+
 def test_score_refuses_an_unknown_dataset_or_bad_settings(parsed, monkeypatch):
     _fake_stages(monkeypatch, [])
     with pytest.raises(KeyError):
@@ -146,6 +163,19 @@ def test_score_refuses_an_unknown_dataset_or_bad_settings(parsed, monkeypatch):
         backend.run_score('ds1', imputation=9, wdfdr_iterations=0, organism='human', exclude_hcm=False)
     with pytest.raises(ValueError, match='organism'):
         backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='cat', exclude_hcm=False)
+
+
+@pytest.mark.parametrize("imputation", [1, 2, 3])
+def test_score_refuses_imputation_for_spectral_counts(parsed, monkeypatch, imputation):
+    """The AFT imputations model missing intensities; the spectral-count SAINT build
+    cannot use their output, so the request is refused before any stage runs."""
+    calls = []
+    _fake_stages(monkeypatch, calls)
+    with pytest.raises(ValueError, match='spectral counts'):
+        backend.run_score('ds1', imputation=imputation, wdfdr_iterations=0, organism='human',
+                          exclude_hcm=False)
+    assert calls == []
+    assert store.row('ds1')['Scored'] != 'Yes'
 
 
 def test_a_dataset_being_worked_on_refuses_a_second_job(parsed, monkeypatch):
@@ -244,6 +274,16 @@ def test_compare_networks_returns_volcano_rows_and_gene_lists(scored):
     assert _tree(scored) == before
     with pytest.raises(ValueError, match='BaitZ'):
         backend.compare_networks('ds', 'BaitA', 'BaitZ', THRESHOLDS, THRESHOLDS)
+
+
+def test_passing_scores_filters_orders_and_restricts_to_baits(scored):
+    rows = backend.passing_scores('ds', THRESHOLDS)
+    assert list(zip(rows['Experiment.ID'], rows['Prey.ID'])) == [
+        ('BaitA', 'P1'), ('BaitA', 'P2'), ('BaitA', 'P3'), ('BaitB', 'P1')]
+    assert list(rows.columns[:5]) == ['Experiment.ID', 'Prey.ID', 'First_ID', 'First_Prey_Gene', 'SaintScore']
+    assert list(backend.passing_scores('ds', THRESHOLDS, baits=['BaitB'])['Prey.ID']) == ['P1']
+    with pytest.raises(ValueError, match='BaitZ'):
+        backend.passing_scores('ds', THRESHOLDS, baits=['BaitZ'])
 
 
 def test_dataset_info_summarizes_the_row_files_and_baits(scored):

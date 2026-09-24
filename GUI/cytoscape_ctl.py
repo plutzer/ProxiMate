@@ -116,13 +116,22 @@ def layout_names():
         return sorted(p4c.get_layout_names())
 
 
+def current_network():
+    """The network Cytoscape shows in its window, and whether it is the drawn one."""
+    with STATE['cy_lock']:
+        title = cy.current_network_title()
+    return {'title': title, 'is_drawn': title is not None and title == STATE['title']}
+
+
 # --- operations ------------------------------------------------------------------------
 
 def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_path=None,
          label_policy='all', layout='force-directed', width_source='abundance',
          literature_weighted=False, biogrid_scope='all', corum_path=None,
          corum_min_members=3, corum_min_fraction=0.5, actor='gui'):
-    """Build the thresholded network and draw it, replacing the previous one."""
+    """Build the thresholded network and draw it, replacing every ProxiMate network
+    in Cytoscape.  Recreating the style leaves any earlier ProxiMate network on
+    Cytoscape's default style, so none may survive a draw."""
     df = pd.read_csv(scores_path)
     nodes, edges = net.build(df, thresholds, baits=baits, prey_prey=prey_prey,
                              biogrid_path=biogrid_path, label_policy=label_policy,
@@ -133,10 +142,10 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
     nodes['node_alpha'] = net.node_alpha(nodes, edges).to_numpy()
     style = {'width_source': width_source, 'literature_weighted': bool(literature_weighted),
              'biogrid_scope': biogrid_scope}
-    title = f'ProxiMate: {dataset}'
+    title = cy.TITLE_PREFIX + dataset
     with _busy(f'drawing {title}'), STATE['cy_lock']:
-        if title in p4c.get_network_list():
-            p4c.delete_network(p4c.get_network_suid(title))
+        for old in cy.proximate_networks():
+            p4c.delete_network(p4c.get_network_suid(old))
         suid = p4c.create_network_from_data_frames(
             nodes, edges.drop(columns=['name']), title=title, collection=COLLECTION)
         cy.apply_passthrough_style(STYLE, suid, STYLE_DEFAULTS, PASSTHROUGH)
@@ -286,7 +295,7 @@ def _select(op, ids, detail, add=False, actor='gui'):
 def _resolve_ids(queries):
     """Drawn node ids for a list of accessions or symbols; unknown names raise."""
     if not queries:
-        raise ValueError("no nodes named")
+        raise ValueError("no nodes named; clear_selection deselects everything")
     nodes = STATE['nodes']
     return [str(net.resolve_node(nodes, q)['id']) for q in queries]
 
@@ -298,6 +307,25 @@ def select_nodes(ids, add=False, actor='gui'):
     chosen = _resolve_ids(ids)
     return _select('select_nodes', chosen, f'{len(chosen)} node(s)' + (' added' if add else ''),
                    add=add, actor=actor)
+
+
+def clear_selection(actor='gui'):
+    """Deselect everything in the drawn network."""
+    with STATE['cy_lock']:
+        cy.clear_selection(_net())
+    with _mutate('clear_selection', actor=actor):
+        pass
+
+
+def list_nodes(role=None):
+    """The drawn nodes' id, accession, symbol and role, all or one role only."""
+    _net()
+    nodes = STATE['nodes'][['id', 'accession', 'symbol', 'role']]
+    if role is not None:
+        if role not in ('bait', 'prey'):
+            raise ValueError(f"role must be bait or prey, got {role!r}")
+        nodes = nodes[nodes['role'] == role]
+    return nodes.astype(str).to_dict('records')
 
 
 def get_positions(ids=None):
@@ -343,27 +371,44 @@ def select_loners(actor='gui'):
     return _select('select_loners', [bait] + found, f'{symbol}: {len(found)} loner(s)', actor=actor)
 
 
+def _satellites(bait):
+    """``(only, nearer)`` for a bait id by the positions Cytoscape holds now."""
+    with STATE['cy_lock']:
+        positions = cy.current_positions(_net())
+    only, nearer = net.satellites(STATE['nodes'], STATE['edges'], bait, positions)
+    if not only and not nearer:
+        raise ValueError(f"{_symbols()[bait]} has no satellites")
+    return only, nearer
+
+
 def select_satellites(actor='gui'):
     """Select the one selected bait with its satellites: the preys whose only bait it
     is, and the two-bait preys that currently sit nearer to it than to the other."""
     bait = _selected_bait()
-    with STATE['cy_lock']:
-        positions = cy.current_positions(_net())
-    only, nearer = net.satellites(STATE['nodes'], STATE['edges'], bait, positions)
-    symbol = _symbols()[bait]
-    if not only and not nearer:
-        raise ValueError(f"{symbol} has no satellites")
+    only, nearer = _satellites(bait)
     return _select('select_satellites', [bait] + only + nearer,
-                   f'{symbol}: {len(only)} only-bait prey(s), {len(nearer)} nearer of two', actor=actor)
+                   f'{_symbols()[bait]}: {len(only)} only-bait prey(s), {len(nearer)} nearer of two',
+                   actor=actor)
 
 
-def select_related(seed, relation, add=False, actor='gui', **cuts):
-    """Select what ``relation`` names for ``seed`` (``net.related``); ``add`` keeps the
-    current selection."""
+def select_related(seed, relation, add=False, include_seed=False, actor='gui', **cuts):
+    """Select what ``relation`` names for ``seed``: one of ``net.related``'s, or
+    ``satellites`` (a bait's only-bait preys and the two-bait preys nearer to it, by
+    the positions Cytoscape holds now).  ``include_seed`` selects the seed too, so it
+    moves with them; ``add`` keeps the current selection."""
     _net()
-    ids = net.related(STATE['nodes'], STATE['edges'], seed, relation, **cuts)
+    if relation == 'satellites':
+        node = net.resolve_node(STATE['nodes'], seed)
+        if node['role'] != 'bait':
+            raise ValueError(f"{node['symbol']} is a prey; satellites needs a bait")
+        only, nearer = _satellites(node['id'])
+        ids = only + nearer
+    else:
+        ids = net.related(STATE['nodes'], STATE['edges'], seed, relation, **cuts)
     if not ids:
         raise ValueError(f"no {relation} for {seed} under these cuts")
+    if include_seed:
+        ids = [net.resolve_node(STATE['nodes'], seed)['id']] + ids
     cut = ', '.join(f'{k} {v}' for k, v in cuts.items() if v is not None) or 'no cuts'
     return _select('select_related', ids, f'{relation} of {seed} ({cut}): {len(ids)}'
                    + (' added' if add else ''), add=add, actor=actor)
@@ -374,19 +419,25 @@ def _symbols():
 
 
 def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0, actor='gui'):
-    """Leiden over the selected nodes, then re-pack them by community inside the box
-    they occupy.  Only the selected nodes move; they recolour by community and carry
-    it in the node table."""
+    """Leiden over the selected preys, then re-pack them by community inside the box
+    they occupy.  Only those move; they recolour by community and carry it in the node
+    table.  Selected baits stay where they are: a bait links every prey around it, so
+    it would pull them into one community and then land on the circle among them."""
     suid = _net()
     with STATE['cy_lock']:
         selected = cy.selected_nodes(suid)
         positions = cy.current_positions(suid)
     if not selected:
         raise ValueError("nothing is selected in Cytoscape")
+    nodes = STATE['nodes']
+    roles = dict(zip(nodes['id'], nodes['role']))
+    baits = [s for s in selected if roles.get(s) == 'bait']
+    selected = [s for s in selected if roles.get(s) != 'bait']
+    if not selected:
+        raise ValueError("only baits are selected; select the preys to cluster")
     with _busy(f'clustering {len(selected)} selected nodes'):
         membership = net.cluster(STATE['edges'], selected, resolution, seed, literature_weight)
         placed = net.pack_communities(membership, positions)
-    nodes = STATE['nodes']
     # Numbers continue above any community already assigned, so two clustered regions
     # never share one.
     if 'community' in nodes.columns:
@@ -407,9 +458,10 @@ def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0, actor='gui
         cy.set_positions(suid, placed)
     sizes = membership.value_counts().sort_index().tolist()
     with _mutate('cluster_selection', f'{len(membership)} nodes -> {len(sizes)} communities '
-                 f'{sizes} (resolution {resolution}, seed {seed})', actor=actor):
+                 f'{sizes} (resolution {resolution}, seed {seed}); {len(baits)} bait(s) left in place',
+                 actor=actor):
         pass
-    return {'n': len(membership), 'n_communities': len(sizes), 'sizes': sizes}
+    return {'n': len(membership), 'n_communities': len(sizes), 'sizes': sizes, 'baits_left': baits}
 
 
 def export_image(out_dir, height=2000, actor='gui'):
@@ -424,6 +476,16 @@ def export_image(out_dir, height=2000, actor='gui'):
     with _mutate('export_image', path, actor=actor):
         pass
     return path
+
+
+def view_image(height=1200, actor='gui'):
+    """The drawn network, fitted, as PNG bytes; nothing is written to disk."""
+    suid = _net()
+    with _busy('rendering image'), STATE['cy_lock']:
+        png = cy.render_png(suid, height=height)
+    with _mutate('view_image', f'{height} px', actor=actor):
+        pass
+    return png
 
 
 def unlock(actor='gui'):

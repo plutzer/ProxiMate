@@ -1,30 +1,35 @@
-.vscode/
+# Python
 __pycache__/
-SAINTexpress-custom/boostsrc/
-SAINTexpress-custom/nloptsrc/
-SAINTexpress-custom/boost/
-SAINTexpress-custom/nlopt/
-filtered_interaction.txt
 *.pyc
+.venv/
+*.prof
+
+# Editors and OS
+.vscode/
 .DS_Store
 Thumbs.db
-*.log
-*.prof
-/Outputs/
-**/PaxHeader/*
-SAINTexpress-custom/va/
-SAINTexpress-custom/Precompiled_binaries/
-SAINTexpress-custom/bin/
-*.o
-DIANN_example/
-Example_datasets/
-.venv/
 
-# Claude Code documentation
+# Claude Code
 CLAUDE.md
 .claude/
 
-# Other
+# SAINTexpress build products (saint/upstream is built inside the image)
+saint/upstream/bin/
+saint/upstream/boost/
+saint/upstream/nlopt/
+saint/upstream/va/va.hpp
+*.o
+**/PaxHeader/*
+
+# Run output
+/Outputs/
+*.log
+filtered_interaction.txt
 Screenshots/
-# Annotation databases downloaded for a local release build
+
+# Local scratch data
+DIANN_example/
+
+# Annotation databases downloaded for a local release build; Datasets/.gitignore
+# keeps everything but CORUM out of the tree
 Datasets/build_info.txt

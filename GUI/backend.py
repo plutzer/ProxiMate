@@ -21,6 +21,7 @@ dict; no operation reads a setting from the GUI.
 
 import contextlib
 import datetime
+import json
 import os
 import re
 import shutil
@@ -38,7 +39,7 @@ import provenance
 import session_archive
 from Ann_Enrichment import process_refactored
 from network_comparison import calculate_volcano_data, load_and_filter_bait_data
-from QC_plots import calculate_threshold_metrics
+from QC_plots import apply_score_thresholds, calculate_threshold_metrics
 from setup_datasets import ORGANISMS
 from log_config import get_logger
 
@@ -295,6 +296,10 @@ def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_meth
     imputation = int(imputation)
     if imputation not in IMPUTATION_LABELS:
         raise ValueError(f"imputation must be one of {sorted(IMPUTATION_LABELS)}, got {imputation}")
+    if row['Quant Type'] == 'Spectral Counts' and imputation != 0:
+        raise ValueError(
+            f"dataset {name!r} holds spectral counts, and AFT imputation applies to "
+            "intensity data only; score it with imputation 0 (Default)")
     if organism not in ORGANISMS:
         raise ValueError(f"organism must be one of {sorted(ORGANISMS)}, got {organism!r}")
     if pi_method is not None and pi_method not in PI_METHODS:
@@ -414,7 +419,63 @@ def dataset_info(name):
             'busy': running_jobs().get(name)}
 
 
+STAGE_FIELDS = ('stage', 'entrypoint', 'status', 'started_utc', 'wall_seconds', 'params',
+                'metrics', 'extra', 'outputs')
+
+
+def run_info(name, last_n=5):
+    """The last ``last_n`` runs in the dataset's manifest, oldest first, each with its
+    stages' status, timing, parameters, metrics and error message.  Environment
+    snapshots and tracebacks stay in run.json."""
+    path = os.path.join(dataset_dir(name), provenance.RUN_JSON_FILENAME)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"dataset {name!r} has no run.json")
+    with open(path, encoding='utf-8') as handle:
+        document = json.load(handle)
+    runs = []
+    for run in list(document['runs'].values())[-int(last_n):]:
+        stages = []
+        for entry in run.get('stages', []):
+            stage = {key: entry.get(key) for key in STAGE_FIELDS}
+            stage['outputs'] = [o.get('path') for o in entry.get('outputs', [])]
+            stage['error'] = (entry.get('error') or {}).get('message')
+            stages.append(stage)
+        runs.append({'run_id': run.get('run_id'), 'created_utc': run.get('created_utc'),
+                     'proximate': run.get('proximate'), 'stages': stages})
+    return {'dataset': name, 'path': path, 'n_runs': len(document['runs']), 'runs': runs}
+
+
+def log_tail(name, n_lines=50):
+    """The last ``n_lines`` of the dataset's proximate.log."""
+    path = os.path.join(dataset_dir(name), 'proximate.log')
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"dataset {name!r} has no proximate.log")
+    with open(path, encoding='utf-8', errors='replace') as handle:
+        lines = [line.rstrip('\n') for line in handle]
+    return {'dataset': name, 'path': path, 'n_lines_total': len(lines), 'lines': lines[-int(n_lines):]}
+
+
 # --- sandbox -----------------------------------------------------------------------------
+
+SCORE_COLUMNS = ('Experiment.ID', 'Prey.ID', 'First_ID', 'First_Prey_Gene', 'SaintScore', 'BFDR',
+                 'WD', 'WDFDR', 'FoldChange', 'AvgIntensity', 'In.BioGRID')
+
+
+def passing_scores(name, thresholds, baits=None):
+    """The scored rows passing ``thresholds``, restricted to ``baits`` when given,
+    ordered by bait, then SAINT score descending, then BFDR."""
+    thresholds = validate_thresholds(thresholds)
+    scores = pd.read_csv(_require_scored(name))
+    if baits:
+        for bait in baits:
+            _require_bait(scores, bait)
+        scores = scores[scores['Experiment.ID'].astype(str).isin([str(b) for b in baits])]
+    passing = apply_score_thresholds(scores, thresholds)
+    columns = [c for c in SCORE_COLUMNS if c in passing.columns]
+    return (passing[columns]
+            .sort_values(['Experiment.ID', 'SaintScore', 'BFDR'], ascending=[True, False, True], kind='stable')
+            .reset_index(drop=True))
+
 
 def threshold_metrics(name, thresholds, bait=None, biogrid_path=None):
     """The QC tab's three metrics at one threshold set, for every bait or one."""
@@ -446,6 +507,50 @@ def feature_analysis(name, thresholds, feature_types=None):
     if absent:
         raise ValueError(f"feature types not in this dataset's annotation: {absent}")
     return process_refactored(scores, feature_types, thresholds)
+
+
+PREY_ANNOTATION_COLUMNS = ('first_SCL', 'Main location', 'GO_CC', 'Human_Complex')
+
+
+def prey_annotations(name, thresholds, ids=None):
+    """One row per prey: identifiers, the baits it passes ``thresholds`` under, the
+    baits BioGRID already links it to, its best scores and its annotation columns.
+
+    ``ids`` (accessions or gene symbols, case-insensitive) restrict the rows.  Returns
+    ``(frame, unmatched)``; an id absent from the dataset is a normal answer, so it is
+    listed rather than raised.  Annotation columns an organism lacks are left out.
+    """
+    thresholds = validate_thresholds(thresholds)
+    scores = pd.read_csv(_require_scored(name))
+    scores['First_ID'] = scores['First_ID'].astype(str)
+    unmatched = []
+    if ids:
+        keys = [scores[c].astype(str).str.lower()
+                for c in ('Prey.ID', 'First_ID', 'First_Prey_Gene')]
+        wanted = {str(i).lower() for i in ids}
+        hit = keys[0].isin(wanted) | keys[1].isin(wanted) | keys[2].isin(wanted)
+        found = set().union(*(set(k[hit]) for k in keys))
+        unmatched = [i for i in ids if str(i).lower() not in found]
+        scores = scores[hit]
+
+    def baits_of(frame):
+        return frame.groupby('First_ID')['Experiment.ID'].agg(lambda s: sorted(set(s)))
+
+    groups = scores.groupby('First_ID', sort=False)
+    rows = groups.agg(accession=('Prey.ID', 'first'), gene=('First_Prey_Gene', 'first'),
+                      n_baits_seen=('Experiment.ID', 'nunique'),
+                      max_saint=('SaintScore', 'max'), max_fold_change=('FoldChange', 'max'))
+    lists = {'passing_baits': baits_of(apply_score_thresholds(scores, thresholds))}
+    if 'In.BioGRID' in scores.columns:
+        lists['known_baits'] = baits_of(scores[scores['In.BioGRID'].eq(True)])
+    for column, baits in lists.items():
+        rows[column] = [baits.get(prey, []) for prey in rows.index]
+    for column in PREY_ANNOTATION_COLUMNS:
+        if column in scores.columns:
+            rows[column] = groups[column].first()
+    rows['n_passing'] = rows['passing_baits'].str.len()
+    rows = rows.sort_values(['n_passing', 'max_saint'], ascending=False, kind='stable')
+    return rows.reset_index(), unmatched
 
 
 def compare_sets(data_a, data_b):

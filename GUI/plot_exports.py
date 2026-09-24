@@ -6,7 +6,8 @@ for PNG/SVG export, avoiding the kaleido dependency.
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
+from matplotlib import colormaps
+from matplotlib.figure import Figure
 
 from QC_plots import (KNOWN_STATUS_STYLE, bait_scores, experiment_pca,
                       known_status_split, prey_pca)
@@ -34,14 +35,15 @@ def pca_plot_matplotlib(interaction, experimentalDesign, matrix=None):
     pca_df, explained_variance = experiment_pca(interaction, experimentalDesign, matrix)
 
     # Create matplotlib figure
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig = Figure(figsize=(10, 8))
+    ax = fig.subplots()
 
     # Get unique baits and types for coloring/markers
     unique_baits = pca_df['BaitName'].unique()
     unique_types = pca_df['Type'].unique()
 
     # Color palette
-    colors = plt.cm.tab10(np.linspace(0, 1, len(unique_baits)))
+    colors = colormaps["tab10"](np.linspace(0, 1, len(unique_baits)))
     color_map = dict(zip(unique_baits, colors))
 
     # Marker map for types
@@ -68,7 +70,7 @@ def pca_plot_matplotlib(interaction, experimentalDesign, matrix=None):
               ncol=min(4, len(unique_baits)), fontsize=9)
 
     ax.grid(True, alpha=0.3)
-    plt.tight_layout()
+    fig.tight_layout()
 
     return fig
 
@@ -97,7 +99,8 @@ def prey_pca_matplotlib(matrix, color_values=None, color_label=None,
     """
     prey_df, explained_variance = prey_pca(matrix)
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig = Figure(figsize=(10, 8))
+    ax = fig.subplots()
 
     if color_mode == "continuous":
         values = prey_df['Prey'].map(color_values)
@@ -118,7 +121,7 @@ def prey_pca_matplotlib(matrix, color_values=None, color_label=None,
         categories = [c for c in labels.dropna().unique()
                       if c not in ("Other", "Unknown")]
         categories = sorted(categories) + ["Other", "Unknown"]
-        colors = plt.cm.tab20(np.linspace(0, 1, len(categories)))
+        colors = colormaps["tab20"](np.linspace(0, 1, len(categories)))
         for category, color in zip(categories, colors):
             subset = prey_df[labels == category]
             if len(subset) > 0:
@@ -133,7 +136,7 @@ def prey_pca_matplotlib(matrix, color_values=None, color_label=None,
     ax.set_ylabel(f"PC2 ({explained_variance[1]*100:.2f}% variance)", fontsize=12)
     ax.set_title("Prey PCA", fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
-    plt.tight_layout()
+    fig.tight_layout()
 
     return fig
 
@@ -158,7 +161,8 @@ def saint_scatter_matplotlib(results_path, bait_name, saintscore_threshold):
     """
     bait_data = bait_scores(results_path, bait_name)
 
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig = Figure(figsize=(10, 7))
+    ax = fig.subplots()
 
     if len(bait_data) == 0:
         ax.text(0.5, 0.5, f"No data available for bait: {bait_name}",
@@ -191,6 +195,6 @@ def saint_scatter_matplotlib(results_path, bait_name, saintscore_threshold):
     ax.legend(loc='lower right', fontsize=9)
     ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
+    fig.tight_layout()
 
     return fig

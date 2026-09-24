@@ -60,7 +60,6 @@ def clean_motif(s):
     # Join the extracted motif names with a semicolon and space
     return '; '.join(motif_names)
 
-# TODO: Add an annotation for if it is a self-interaction
 def self_inter(prey_id, bait_id):
     prey_id=prey_id.split(';')
     for prey in prey_id:
@@ -68,7 +67,6 @@ def self_inter(prey_id, bait_id):
                 return True
     return False
 
-# TODO: Add an annotation for if the prey is a bait
 def prey_is_bait(prey_id, bait_values):
     prey_id=prey_id.split(';')
     for prey in prey_id:
@@ -76,26 +74,34 @@ def prey_is_bait(prey_id, bait_values):
             return True
     return False
 
-# TODO: Add an annotation for the main location
 #Get first prey-gene -> new column
 def get_first_pg(item):
     return item.split(';')[0]
 
-#make sure each First_Prey_Gene name is in subcellular
-#if name cannot be found, search uniprot['Gene Names'] for it
-#take list in cell that includes First_Prey_Gene name and split it
-#search subcellular for each name until one hits, and return that name
-#works, total runtime after adding is 3 minutes in docker
-def get_match(item, subcellular, uniprot):
-    if item in subcellular:
-        return item
+def hpa_synonym_map(hpa_names, uniprot_gene_names):
+    """Gene symbol -> the HPA gene name listed as its synonym in UniProt.
 
-    for cells in uniprot:
-        names = str(cells).split(' ')
-        if item in names:
-            for name in names:
-                if name in subcellular:
-                    return name
+    Each 'Gene Names' cell is a space-separated synonym list.  Every symbol in a cell
+    that also holds an HPA name maps to the first such name; a symbol in several
+    cells keeps the mapping from the first cell.
+    """
+    hpa = set(hpa_names)
+    synonyms = {}
+    for cell in uniprot_gene_names:
+        names = str(cell).split(' ')
+        hit = next((name for name in names if name in hpa), None)
+        if hit is None:
+            continue
+        for name in names:
+            synonyms.setdefault(name, hit)
+    return synonyms
+
+
+def match_hpa_name(item, hpa_names, synonyms):
+    """The HPA gene name for a symbol: itself when HPA lists it, else its synonym."""
+    if item in hpa_names:
+        return item
+    return synonyms.get(item)
 
 # Function that can add GOGO dictionary scores back to the proximity data
 def get_cco_score(bait_gene,prey_gene,cc_dict):
@@ -109,14 +115,30 @@ def get_cco_score(bait_gene,prey_gene,cc_dict):
                 return cc_dict[str(bait_gene)][str(prey_gene)]
     return np.nan # return nan if the gene pair is not in the dictionary
 
-def complex_id(prey_id, complex_dict):
-    prey_id = prey_id.split(';')
-    for prey in prey_id:
-        for key,value in complex_dict.items():
-            ids = value.split(';')
-            if prey in ids:
-                return key
+def subunit_complex_map(complex_dict):
+    """Accession -> complex name, from CORUM's complex -> ';'-joined subunits.  A
+    subunit of several complexes keeps the first complex listed."""
+    subunits = {}
+    for name, ids in complex_dict.items():
+        for accession in ids.split(';'):
+            subunits.setdefault(accession, name)
+    return subunits
+
+
+def complex_id(prey_id, subunit_complex):
+    """The complex holding the first member of a ';'-joined prey group, or None."""
+    for prey in prey_id.split(';'):
+        if prey in subunit_complex:
+            return subunit_complex[prey]
     return None
+
+
+def go_ids(annotation):
+    """GO IDs from a UniProt GO column value such as
+    'nucleus [GO:0005634]; cytosol [GO:0005829]'; empty for a missing value."""
+    if pd.isnull(annotation):
+        return []
+    return [term.split(' [')[1].split(']')[0] for term in annotation.split('; ')]
 
 # A UniProt accession, with an optional isoform suffix.
 ACCESSION_RE = re.compile(
@@ -377,7 +399,11 @@ def _annotate(args, record):
             hpa = pd.read_csv(args.locationFile, sep='\t')
             name_loc = collapse_hpa_locations(hpa[['Gene name', 'Main location']])
 
-            annotated_scores['Matched_Gene_Name'] = annotated_scores['First_Prey_Gene'].apply(get_match, subcellular=name_loc['Gene name'].to_numpy(), uniprot=uniprot['Gene Names'].to_numpy())
+            hpa_names = set(name_loc['Gene name'])
+            synonyms = hpa_synonym_map(hpa_names, uniprot['Gene Names'])
+            genes = annotated_scores['First_Prey_Gene']
+            matched = {g: match_hpa_name(g, hpa_names, synonyms) for g in genes.unique()}
+            annotated_scores['Matched_Gene_Name'] = genes.map(matched)
 
             annotated_scores = annotated_scores.merge(name_loc, left_on=['Matched_Gene_Name'], right_on=['Gene name'], how='left')
         except Exception:
@@ -386,8 +412,9 @@ def _annotate(args, record):
     bait_values = set(annotated_scores[bait_col])
     annotated_scores['Prey_Is_Bait'] = annotated_scores[prey_col].apply(prey_is_bait, bait_values=bait_values)
 
-    for bait_id in bait_values:
-        annotated_scores['Self-Interaction'] = annotated_scores[prey_col].apply(self_inter, bait_id=bait_id)
+    annotated_scores['Self-Interaction'] = [
+        self_inter(prey, bait)
+        for prey, bait in zip(annotated_scores[prey_col], annotated_scores[bait_col])]
 
     # CORUM protein complex annotations (human only)
     if args.complexFile:
@@ -395,8 +422,11 @@ def _annotate(args, record):
         try:
             human_complex = pd.read_table(args.complexFile, encoding='latin-1')
             complex_cols = human_complex[['complex_name','subunits_uniprot_id']]
-            complex_dict = complex_cols.set_index('complex_name').to_dict()['subunits_uniprot_id']
-            annotated_scores['Human_Complex'] = annotated_scores['Prey_Accessions'].apply(complex_id, complex_dict=complex_dict)
+            subunits = subunit_complex_map(
+                complex_cols.set_index('complex_name')['subunits_uniprot_id'].to_dict())
+            accessions = annotated_scores['Prey_Accessions']
+            complexes = {ids: complex_id(ids, subunits) for ids in accessions.unique()}
+            annotated_scores['Human_Complex'] = accessions.map(complexes)
         except Exception:
             logger.exception("CORUM annotation failed (non-fatal, continuing)")
 
@@ -424,52 +454,30 @@ def _annotate(args, record):
     gogo_input_path = args.scoreFile.rsplit('/', 1)[0] + '/gogo_input.txt'
     logger.info("Writing GOGO input to %s", gogo_input_path)
 
+    # One line per distinct bait-prey pair whose members both carry GO CC terms.
+    # A pair repeated across rows would only make GOGO score it again.
     start_time = time.time()
-    bait_anns = {}
+    entries = uniprot.drop_duplicates('Entry')
+    cc_terms = {entry: go_ids(ann) for entry, ann in
+                zip(entries['Entry'], entries['Gene Ontology (cellular component)'])}
+    pairs = annotated_scores[['Bait_Accession', first_prey_col]].drop_duplicates()
+    n_lines = 0
     with open(gogo_input_path, "w") as f:
-        for index, row in annotated_scores.iterrows():
-            bait_id = row['Bait_Accession']
-            prey_id = row[first_prey_col]
-            go_anns_raw = row['Gene Ontology (cellular component)'] # Go anns are in this format: cytosolic small ribosomal subunit [GO:0022627]; nucleus [GO:0005634]; plasma membrane [GO:0005886]
-            if pd.isnull(go_anns_raw):
+        for bait_id, prey_id in zip(pairs['Bait_Accession'], pairs[first_prey_col]):
+            bait_terms = cc_terms.get(bait_id, [])
+            prey_terms = cc_terms.get(prey_id, [])
+            if not bait_terms or not prey_terms:
                 continue
-            else:
-                go_anns_split = go_anns_raw.split('; ')
-                # Now for each element get just the GO ID
-                go_ids = [ann.split(' [')[1].split(']')[0] for ann in go_anns_split]
+            f.write(f"{bait_id} {' '.join(bait_terms)};{prey_id} {' '.join(prey_terms)}\n")
+            n_lines += 1
+    logger.info("GOGO input written: %d pairs in %.1f seconds", n_lines, time.time() - start_time)
 
-                # Now need the GO anns for the bait - use the uniprot dataframe for this
-                if bait_id in bait_anns:
-                    if bait_anns[bait_id] == []:
-                        continue
-                    else:
-                        bait_go_ids = bait_anns[bait_id]
-                else:
-                    bait_go_anns = uniprot[uniprot['Entry'] == bait_id]['Gene Ontology (cellular component)'].values
-                    if bait_go_anns.size == 0:
-                        bait_anns[bait_id] = []
-                        continue
-                    elif pd.isnull(bait_go_anns):
-                        bait_anns[bait_id] = []
-                        continue
-                    else:
-                        bait_go_anns_split = bait_go_anns[0].split('; ')
-                        bait_go_ids = [ann.split(' [')[1].split(']')[0] for ann in bait_go_anns_split]
-                        bait_anns[bait_id] = bait_go_ids
-            # Now append the line to the file
-            f.write(f"{bait_id} {' '.join(bait_go_ids)};{prey_id} {' '.join(go_ids)}\n")
-
-    logger.info("GOGO input written in %.1f seconds", time.time() - start_time)
-
-    # Run GOGO subprocess
+    # Only the cellular-component similarity is used, so only that ontology is scored.
     gogo_output_path = str(args.outputDir) + "/gogo_output.txt"
-    logger.info("Running GOGO (gene_pair_comb.pl)...")
-    p = subprocess.run(["perl",
-                        "/Scripts/GOGO/gene_pair_comb.pl",
-                        str(gogo_input_path),
-                        gogo_output_path],
-                        cwd="/Scripts/GOGO",
-                        capture_output=True, text=True)
+    logger.info("Running GOGO (gene_pair.pl CCO)...")
+    p = subprocess.run(["perl", "/Scripts/GOGO/gene_pair.pl", "CCO",
+                        str(gogo_input_path), gogo_output_path],
+                       cwd="/Scripts/GOGO", capture_output=True, text=True)
 
     if p.returncode != 0:
         logger.error("GOGO subprocess failed (exit code %d)", p.returncode)
@@ -516,7 +524,9 @@ def _annotate(args, record):
         sys.exit(1)
 
     # Now I can add the CCO scores to the annotated scores
-    annotated_scores['CCO'] = annotated_scores.apply(lambda x: get_cco_score(x['Bait_Accession'], x[first_prey_col], cc_dict), axis=1)
+    annotated_scores['CCO'] = [
+        get_cco_score(bait, prey, cc_dict)
+        for bait, prey in zip(annotated_scores['Bait_Accession'], annotated_scores[first_prey_col])]
 
     # Save the annotated scores
     output_path = f"{args.outputDir}/annotated_scores.csv"

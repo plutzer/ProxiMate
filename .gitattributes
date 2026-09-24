@@ -1,0 +1,4 @@
+# Shell scripts and build files run inside the Linux image; a CRLF shebang
+# makes /bin/sh report "not found". Check everything out with LF so a
+# Windows clone (core.autocrlf=true) builds the same as a Linux one.
+* text=auto eol=lf

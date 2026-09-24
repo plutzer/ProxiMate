@@ -235,8 +235,15 @@ def pca_plot(interaction, experimentalDesign, matrix=None):
     return fig
 
 
+def prey_gene_names(prey_file):
+    """Gene name per prey accession from a SAINT prey.txt (no header; accession
+    first, gene name last -- the spectral-count layout has sequence length between)."""
+    prey = pd.read_csv(prey_file, sep="\t", header=None, dtype=str)
+    return pd.Series(prey.iloc[:, -1].values, index=prey.iloc[:, 0].values)
+
+
 def prey_pca_plot(matrix, color_values=None, color_label=None,
-                  color_mode="none", color_threshold=None):
+                  color_mode="none", color_threshold=None, gene_names=None):
     """Prey-level PCA figure; see ``prey_pca`` for the embedding.
 
     color_values: pd.Series indexed by prey (numeric for 'continuous',
@@ -244,14 +251,21 @@ def prey_pca_plot(matrix, color_values=None, color_label=None,
 
     color_threshold: for 'continuous' only -- preys with a value below it are
     drawn grey so the color scale is spent on the informative range.
+
+    gene_names: pd.Series indexed by prey; when given, the hover shows the gene
+    name in bold above the accession.
     """
     prey_df, explained_variance = prey_pca(matrix)
+    if gene_names is None:
+        prey_df['Gene'] = prey_df['Prey']
+    else:
+        prey_df['Gene'] = prey_df['Prey'].map(gene_names).fillna(prey_df['Prey'])
 
     labels = {
         'PC1': f'PC1 ({explained_variance[0]*100:.2f}% variance)',
         'PC2': f'PC2 ({explained_variance[1]*100:.2f}% variance)'
     }
-    kwargs = dict(x='PC1', y='PC2', hover_name='Prey',
+    kwargs = dict(x='PC1', y='PC2', hover_name='Gene', hover_data={'Prey': True},
                   title="Prey PCA", labels=labels)
 
     if color_mode == "continuous":
@@ -265,8 +279,8 @@ def prey_pca_plot(matrix, color_values=None, color_label=None,
                 x=below['PC1'], y=below['PC2'], mode='markers',
                 name=f"{color_label} < {color_threshold:g}",
                 marker=dict(color='lightgrey'),
-                text=below['Prey'],
-                hovertemplate="<b>%{text}</b><br>PC1=%{x}<br>PC2=%{y}<extra></extra>",
+                text=below['Gene'], customdata=below[['Prey']],
+                hovertemplate="<b>%{text}</b><br>%{customdata[0]}<br>PC1=%{x}<br>PC2=%{y}<extra></extra>",
             ))
             # grey first so scoring preys draw on top of it
             fig.data = fig.data[-1:] + fig.data[:-1]
@@ -284,6 +298,12 @@ def prey_pca_plot(matrix, color_values=None, color_label=None,
     else:
         fig = px.scatter(prey_df, **kwargs)
 
+    # Plotly Express lists hover_data after the axes; move the accession up so it
+    # sits directly under the bold gene name.
+    for trace in fig.data:
+        trace.hovertemplate = (trace.hovertemplate
+                               .replace("<br>Prey=%{customdata[0]}", "")
+                               .replace("<br><br>", "<br>%{customdata[0]}<br>"))
     fig.update_traces(marker=dict(size=5, opacity=0.7))
     fig.update_layout(
         legend=dict(

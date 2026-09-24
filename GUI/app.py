@@ -16,7 +16,7 @@ import zipfile
 import tempfile
 import datetime
 import shutil
-from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
+from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, prey_gene_names, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
 from Ann_Enrichment import process_refactored, plot_results
 from network_comparison import (
     load_and_filter_bait_data,
@@ -373,6 +373,7 @@ app_ui = ui.page_navbar(
                         ),
                         ui.download_button("download_enrichment", "Download Filtered Enrichment Results"),
                     ),
+                    col_widths=(3, 9),
                 ),
     ),
     ui.nav_panel("Network Comparison",
@@ -984,6 +985,24 @@ def server(input: Inputs, output: Outputs, session: Session):
 
 
     @reactive.effect
+    @reactive.event(input.score_dataset)
+    def update_imputation_choices():
+        """AFT imputation models missing intensities, so a spectral-count dataset
+        offers Default only."""
+        dataset = input.score_dataset.get()
+        df = datasets()
+        quant = df.loc[df['Dataset Name'] == dataset, 'Quant Type']
+        if quant.empty:
+            return
+        choices = {0: "Default"}
+        if quant.values[0] != "Spectral Counts":
+            choices.update({2: "Two-component AFT", 3: "One-component AFT"})
+        selected = input.imputation_method.get()
+        if int(selected) not in choices:
+            selected = "0"
+        ui.update_radio_buttons("imputation_method", choices=choices, selected=selected)
+
+    @reactive.effect
     @reactive.event(input.score_dataset, input.imputation_method, input.pi_method)
     def update_pi_bait_choices():
         """Populate pi_bait dropdown from the selected dataset's saved ED,
@@ -1118,9 +1137,10 @@ def server(input: Inputs, output: Outputs, session: Session):
             values, label, mode, threshold = _prey_pca_color_data(
                 dataset_name, input.prey_pca_color(), input.prey_pca_bait(),
                 matrix.index)
+            gene_names = prey_gene_names(os.path.join(out_dir, dataset_name, "prey.txt"))
             return plot_prey_pca(matrix, color_values=values,
                                  color_label=label, color_mode=mode,
-                                 color_threshold=threshold)
+                                 color_threshold=threshold, gene_names=gene_names)
 
 
     @render_widget
@@ -1648,7 +1668,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.plot
     def feature_enrichment_plot():
-        # Trigger re-render when feature analysis completes
+        # Returning None shows pyplot's current figure if any is open, so nothing
+        # else in the app may leave one (exports build Figure objects directly).
         _ = feature_enrichment.get()
 
         # Set the feature enrichment to whatever dataset is selected
@@ -2514,8 +2535,8 @@ def server(input: Inputs, output: Outputs, session: Session):
         result = cy_call("cluster the selection", cytoscape_ctl.cluster_selection,
                          resolution=float(resolution), seed=int(seed), literature_weight=float(weight))
         if result:
-            notify(f"{result['n']} nodes clustered into {result['n_communities']} communities "
-                   f"(sizes {result['sizes']}).")
+            notify(f"{result['n']} preys clustered into {result['n_communities']} communities "
+                   f"(sizes {result['sizes']}); {len(result['baits_left'])} bait(s) left in place.")
 
     @reactive.effect
     @reactive.event(input.cy_read_selection)

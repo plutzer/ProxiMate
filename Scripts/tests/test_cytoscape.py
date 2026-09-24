@@ -526,40 +526,69 @@ def test_related_selection_can_add_to_the_current_one(controlled, cytoscape):
     assert _last(cytoscape['calls'], 'select') == [['BaitA', 'P2'], True]
 
 
+def test_satellites_are_a_relation_with_an_explicit_seed(controlled, cytoscape):
+    cytoscape['positions'] = {'BaitA': (0, 0), 'BaitB': (100, 0), 'P1': (0, 10), 'P2': (10, 0),
+                              'P4': (0, 20), 'PA': (100, 10)}
+
+    assert ctl.select_related('BaitA', 'satellites') == ['P1', 'P4', 'P2']
+    assert ctl.select_related('baita', 'satellites', include_seed=True) == ['BaitA', 'P1', 'P4', 'P2']
+    assert _last(cytoscape['calls'], 'select') == [['BaitA', 'P1', 'P4', 'P2'], False]
+    with pytest.raises(ValueError, match='needs a bait'):
+        ctl.select_related('P1', 'satellites')
+
+
 def test_an_empty_relation_is_an_error_not_a_silent_deselect(controlled, cytoscape):
     with pytest.raises(ValueError):
         ctl.select_related('BaitB', 'interactors', min_saint=0.99)
     assert not any(name == 'select' for name, *_ in cytoscape['calls'])
 
 
-def test_clustering_recolours_numbers_and_moves_only_the_selection(controlled, cytoscape):
-    cytoscape['selected'] = ['BaitA', 'P1', 'P2', 'P4']
-    cytoscape['positions'] = {i: (10.0 * k, 50.0) for k, i in enumerate(['BaitA', 'P1', 'P2', 'P4', 'BaitB'])}
+@pytest.fixture
+def clusterable(scores, tmp_path, cytoscape):
+    """``controlled`` with a fourth and fifth prey of BaitA, enough to cluster without
+    the baits."""
+    scores.loc[len(scores)] = _row('BaitA', 'PA', 'P4', 'G4')
+    scores.loc[len(scores)] = _row('BaitA', 'PA', 'P5', 'G5')
+    biogrid = _biogrid(tmp_path, [('P1', 'P2', 2, False)])
+    nodes, edges = cn.build(scores, PASSING, biogrid_path=biogrid)
+    ctl.STATE.update(dataset='d', title='ProxiMate: d', net_suid=1, nodes=nodes, edges=edges,
+                     thresholds=dict(PASSING),
+                     style={'width_source': 'abundance', 'literature_weighted': False, 'biogrid_scope': 'all'})
+    cytoscape['positions'] = {i: (10.0 * k, 50.0) for k, i in enumerate(['BaitA', 'P1', 'P2', 'P4', 'P5', 'BaitB'])}
+    yield nodes, edges
+    ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
+                     thresholds=None, style=None)
+
+
+def test_clustering_recolours_numbers_and_moves_only_the_selected_preys(clusterable, cytoscape):
+    cytoscape['selected'] = ['BaitA', 'P1', 'P2', 'P4', 'P5']
 
     result = ctl.cluster_selection(resolution=1.0, seed=1)
 
-    assert result['n'] == 4 and sum(result['sizes']) == 4
+    assert result['n'] == 4 and sum(result['sizes']) == 4 and result['baits_left'] == ['BaitA']
     frame = _last(cytoscape['calls'], 'nodes')[0]
-    assert set(frame['name']) == {'BaitA', 'P1', 'P2', 'P4'}
+    assert set(frame['name']) == {'P1', 'P2', 'P4', 'P5'}
     assert set(frame.columns) == {'name', 'community', 'fill'}
     moved = _last(cytoscape['calls'], 'positions')[0]
-    assert set(moved) == {'BaitA', 'P1', 'P2', 'P4'}
+    assert set(moved) == {'P1', 'P2', 'P4', 'P5'}
     assert all(x >= 0 and y >= 50 for x, y in moved.values())
     nodes = ctl.STATE['nodes'].set_index('id')
-    assert np.isnan(nodes.loc['BaitB', 'community'])   # untouched
-    assert nodes.loc['BaitA', 'fill'] in cn.COMMUNITY_FILL
+    assert np.isnan(nodes.loc['BaitA', 'community']) and np.isnan(nodes.loc['BaitB', 'community'])
+    assert nodes.loc['P1', 'fill'] in cn.COMMUNITY_FILL
+    cytoscape['selected'] = ['BaitA', 'BaitB']
+    with pytest.raises(ValueError, match='only baits'):
+        ctl.cluster_selection()
 
 
-def test_a_second_clustering_numbers_above_the_first(controlled, cytoscape):
-    cytoscape['positions'] = {i: (10.0 * k, 0.0) for k, i in enumerate(['BaitA', 'P1', 'P2', 'P4', 'BaitB'])}
-    cytoscape['selected'] = ['BaitA', 'P1', 'P2', 'P4']
+def test_a_second_clustering_numbers_above_the_first(clusterable, cytoscape):
+    cytoscape['selected'] = ['P1', 'P2', 'P4', 'P5']
     ctl.cluster_selection()
-    first = ctl.STATE['nodes'].set_index('id').loc[['BaitA', 'P1', 'P2', 'P4'], 'community'].max()
+    first = ctl.STATE['nodes'].set_index('id').loc[['P1', 'P2', 'P4', 'P5'], 'community'].max()
 
-    cytoscape['selected'] = ['BaitB', 'BaitA', 'P2', 'P4']
+    cytoscape['selected'] = ['BaitB', 'P2', 'P4', 'P5', 'P1']
     ctl.cluster_selection()
 
-    second = ctl.STATE['nodes'].set_index('id').loc[['BaitB', 'BaitA'], 'community'].min()
+    second = ctl.STATE['nodes'].set_index('id').loc[['P2', 'P4'], 'community'].min()
     assert second > first
 
 
@@ -632,6 +661,48 @@ def test_unlock_clears_only_the_locks_that_are_held(monkeypatch):
     assert cy.unlock(3) == []
 
 
+def test_proximate_networks_are_told_apart_by_title(monkeypatch):
+    monkeypatch.setattr(cy.p4c, 'get_network_list', lambda: ['ProxiMate: a', 'mine', 'ProxiMate: b'])
+    assert cy.proximate_networks() == ['ProxiMate: a', 'ProxiMate: b']
+    monkeypatch.setattr(cy.p4c, 'get_network_count', lambda: 0)
+    assert cy.current_network_title() is None
+    monkeypatch.setattr(cy.p4c, 'get_network_count', lambda: 2)
+    monkeypatch.setattr(cy.p4c, 'get_network_name', lambda: 'mine')
+    assert cy.current_network_title() == 'mine'
+
+
+def test_draw_removes_every_earlier_proximate_network(scores, tmp_path, cytoscape, monkeypatch):
+    deleted = []
+    monkeypatch.setattr(ctl.cy, 'proximate_networks', lambda: ['ProxiMate: old', 'ProxiMate: d'])
+    monkeypatch.setattr(ctl.p4c, 'get_network_suid', lambda title: {'ProxiMate: old': 7, 'ProxiMate: d': 8}[title])
+    monkeypatch.setattr(ctl.p4c, 'delete_network', lambda suid: deleted.append(suid))
+    monkeypatch.setattr(ctl.p4c, 'create_network_from_data_frames', lambda *a, **k: 9)
+    monkeypatch.setattr(ctl.cy, 'apply_passthrough_style', lambda *a: None)
+    monkeypatch.setattr(ctl.p4c, 'layout_network', lambda *a, **k: None)
+    monkeypatch.setattr(ctl.cy, 'unlock', lambda net: [])
+    monkeypatch.setattr(ctl.p4c, 'fit_content', lambda **k: None)
+    scores.to_csv(tmp_path / 's.csv', index=False)
+    try:
+        snap = ctl.draw('d', str(tmp_path / 's.csv'), PASSING, biogrid_path=_biogrid(tmp_path, [('P1', 'P2')]))
+        assert deleted == [7, 8] and snap['net_suid'] == 9 and snap['title'] == 'ProxiMate: d'
+    finally:
+        ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
+                         thresholds=None, style=None)
+
+
+def test_render_unlocks_and_fits_before_capturing(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(cy, 'unlock', lambda net: calls.append('unlock') or ['NETWORK_SCALE_FACTOR'])
+    monkeypatch.setattr(cy.p4c, 'fit_content', lambda **k: calls.append('fit'))
+    monkeypatch.setattr(cy.requests, 'get',
+                        lambda url, **k: calls.append(('png', k['params'])) or _Response(content=b'PNG'))
+
+    assert cy.render_png(3, height=600) == b'PNG'
+    assert calls == ['unlock', 'fit', ('png', {'h': 600})]
+    path = cy.export_png(3, str(tmp_path / 'net.png'), height=600)
+    assert open(path, 'rb').read() == b'PNG'
+
+
 # --- actor, explicit selection and positions (the MCP surface) --------------------------
 
 def test_mutations_record_their_actor(controlled, cytoscape):
@@ -648,7 +719,7 @@ def test_select_nodes_resolves_symbols_and_refuses_unknown_ones(controlled, cyto
     assert cytoscape['calls'][-1] == ('select', ['P1', 'P2'], True)
     with pytest.raises(ValueError, match='ZZ'):
         ctl.select_nodes(['P1', 'ZZ'])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='clear_selection'):
         ctl.select_nodes([])
 
 

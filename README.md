@@ -1,5 +1,5 @@
 # ProxiMate
-All-in-one GUI and scripts for analyzing proximity labelling data.
+All-in-one GUI and scripts for analyzing proximity labeling data.
 
 ## How to run the tool
 ### Running the GUI locally (easiest)
@@ -21,7 +21,7 @@ All-in-one GUI and scripts for analyzing proximity labelling data.
 The backend of the application can be accessed interactively by overriding the command to start the shiny app:
 1. Start the docker container interactively. In order to analyze files, you'll need to mount a directory to the container:
     `docker run -it --mount type=bind,source=<native_path_to_data_directory>,target=<working_directory_within_container> plutzer/proximate /bin/bash`
-2. Within the docker container, python, R, perl, or SAINT scripts can be run manually.
+2. Within the docker container, the Python scripts, GOGO (Perl) and the SAINTexpress binaries can be run manually.
 
 ### Running scripts on a high-performance computing cluster (experienced users)
 The docker container contains a shell script to run the entire pipeline. Use the `--format` flag to specify your input type:
@@ -40,11 +40,25 @@ docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/pr
   <ED_file> <matrix_file> <output_dir> <n_iterations> <imputation>
 ```
 
+**Pioneer:**
+```
+docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/proximate \
+  /bin/bash /run_pipeline.sh --format pioneer \
+  <ED_file> <protein_groups_wide.tsv> <output_dir> <n_iterations> <imputation>
+```
+
 **FragPipe:**
 ```
 docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/proximate \
   /bin/bash /run_pipeline.sh --format fragpipe \
   <ED_file> <FP_file> <quant_type> <output_dir> <n_iterations> <imputation>
+```
+
+**MSstats** (ProteinLevelData.csv, already log2-transformed, normalized and imputed):
+```
+docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/proximate \
+  /bin/bash /run_pipeline.sh --format msstats \
+  <ED_file> <ProteinLevelData.csv> <output_dir> <n_iterations> <imputation>
 ```
 
 **SAINT:**
@@ -61,7 +75,9 @@ docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/pr
 - `--seed`: CompPASS permutation seed, so WD p-values reproduce between runs
 
 The pipeline stops at the first stage that fails, rather than carrying on with
-missing inputs.
+missing inputs. Run `./run_pipeline.sh` with no arguments for the full option list,
+including `--exclude-hcm` and the imputation options. Small public datasets to try it on
+are in `examples/`, each with its own README.
 
 ## Logs and provenance
 
@@ -166,18 +182,20 @@ url = "http://localhost:3839/mcp"
 
 Any other MCP client that speaks streamable HTTP connects to the same URL. Then ask
 the agent to help with a dataset; `curl localhost:3839/api/health` confirms the
-endpoint is up before you do. The agent sees four
+endpoint is up before you do. The agent sees five
 tools: `search_tools` and `get_tool_details` describe the operations, `call_tool` runs
-one, and `get_gui_documentation` explains the GUI tab by tab so the agent can help a
-person use it. Every operation takes its thresholds and settings as explicit arguments;
+one, `get_gui_documentation` explains the GUI tab by tab so the agent can help a
+person use it, and `view_network` returns a picture of the drawn Cytoscape network,
+fitted to show all of it, that the agent sees directly without any file being written.
+Every operation takes its thresholds and settings as explicit arguments;
 none reads what the GUI's sliders show. Operations are classed by what they touch:
 
 | Mode | Operations | Effect on a person at the GUI |
 | --- | --- | --- |
-| read | `list_datasets`, `get_dataset_info`, `server_status`, `cytoscape_status`, `cytoscape_read_selection`, `cytoscape_get_positions` | none |
-| sandbox | `threshold_metrics`, `feature_analysis`, `compare_networks` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
-| dataset | `parse_dataset`, `score_dataset`, `load_session` | the dataset table and dropdowns update within a second; a dataset being scored by either side refuses a second job; `load_session` is destructive and needs `confirm` |
-| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_*`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_sync_positions`, `cytoscape_export_image`, `cytoscape_unlock` | the drawn network changes under the mouse; the Cytoscape tab's status shows the thresholds it was drawn at and the activity panel lists each operation as `[mcp]` |
+| read | `list_datasets`, `get_dataset_info`, `get_run_info`, `tail_log`, `server_status`, `cytoscape_read_selection`, `cytoscape_list_nodes`, `cytoscape_get_positions` | none |
+| sandbox | `get_scores`, `threshold_metrics`, `feature_analysis`, `get_prey_annotations`, `compare_networks` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
+| dataset | `parse_dataset`, `score_dataset`, `load_session` | the dataset table and dropdowns update within a second; a dataset being scored by either side refuses a second job; `parse_dataset` reads input files by their paths inside the container, so mount the folder that holds them; `load_session` is destructive and needs `confirm` |
+| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_nodes`, `cytoscape_select_related`, `cytoscape_clear_selection`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_export_image` | the drawn network changes under the mouse; the Cytoscape tab's status shows the thresholds it was drawn at and the activity panel lists each operation as `[mcp]` |
 
 Sends and exports from MCP are recorded in the dataset's `run.json` with their full
 argument set. `curl localhost:3839/api/health` reports the datasets, running jobs and
@@ -202,24 +220,19 @@ checkbox in the scoring panel (human only) or `--exclude-hcm` on `run_pipeline.s
 choice is recorded in `run.json`, and the QC tab's known-interaction and network-degree
 metrics use the same file the run was annotated against.
 
-### Updating databases manually (experienced users):
-Databases can be downloaded automatically by running `python3 Scripts/setup_datasets.py --output-dir Datasets`. Use `--skip` to exclude specific databases (e.g., `--skip corum`). See `python3 Scripts/setup_datasets.py --help` for all options.
+### Choosing the database snapshot (experienced users)
+The Dockerfile copies `Datasets/` into the image and then runs
+`python3 Scripts/setup_datasets.py --output-dir /Datasets --skip corum`, which downloads
+only the files that are missing. A file placed in `Datasets/` before `docker build`
+therefore takes precedence over the download, so a build can be pinned to a chosen
+snapshot. `python3 Scripts/setup_datasets.py --output-dir Datasets` downloads the
+current set locally; see its `--help` for `--skip` and the other options. The file
+names it writes:
 
-Alternatively, you can manually assemble the following files in a `/Datasets` subdirectory inside the ProxiMate parent directory and re-build the docker container. File names will need to match or be changed in the Dockerfile before building.
-
-
-`BIOGRID-ALL.tab3.txt` - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
-
-`BIOGRID-MV-Physical.tab3.txt` - downloaded from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
-
-`uniprot_anns.tsv` - tsv-formatted annotations for human proteins from [UniProt](https://www.uniprot.org/uniprotkb?query=%28proteome%3AUP000005640%29&facets=reviewed%3Atrue)
-
-`subcellular_location.tsv` - downloaded from [Human Protein Atlas](https://www.proteinatlas.org/humanproteome/subcellular/data#locations)
-
-`corum_humanComplexes.txt` - downloaded from [CORUM](https://mips.helmholtz-muenchen.de/corum/download): Human Complexes.
-
-
-
+- `BIOGRID-ALL.tab3.txt` and `BIOGRID-MV-Physical.tab3.txt` from [BioGRID](https://downloads.thebiogrid.org/BioGRID)
+- `uniprot_anns.tsv`, reviewed human proteome annotations from [UniProt](https://www.uniprot.org/uniprotkb?query=%28proteome%3AUP000005640%29&facets=reviewed%3Atrue)
+- `subcellular_location.tsv` from the [Human Protein Atlas](https://www.proteinatlas.org/humanproteome/subcellular/data#locations)
+- `corum_humanComplexes.txt` from [CORUM](https://mips.helmholtz-muenchen.de/corum/download), tracked in the repository
 
 ## Releases
 
@@ -248,11 +261,27 @@ tag when GitHub Actions is not an option:
 ./release.sh v0.2.0 --no-push        # amd64 only, loaded into local Docker
 ```
 
-## Common Errors
+## Repository layout
 
-### SAINT
-Permission Denied:
-    Can occur when python tries to run a subprocess on a directory rather than a file. Is the SAINT directory correct?
+| Path | Contents |
+| --- | --- |
+| `GUI/` | Shiny application, MCP server and the shared dataset backend |
+| `Scripts/` | Parsing, scoring, imputation and annotation pipeline; `Scripts/tests/` is the pytest suite |
+| `Scripts/GOGO/` | GO semantic similarity tool (Zhao and Wang 2018) |
+| `saint/upstream/` | SAINTexpress 3.6.3 as distributed, with the Boost and NLopt sources it builds against |
+| `saint/patches/` | ProxiMate's modified SAINTexpress intensity-model sources, overlaid on the upstream tree at image build |
+| `Datasets/` | CORUM complexes; the other annotation databases are downloaded at build time |
+| `examples/` | Public example datasets |
 
-Invalid delimiter:
-    SAINT throws this error when the file path is incorrect
+## Citation
+
+Cite the version you used with the DOI Zenodo mints for each release, or with
+`CITATION.cff` (GitHub's "Cite this repository" button). The scoring methods are
+SAINTexpress (Teo et al. 2014, J Proteomics 100:37-43) and CompPASS (Sowa et al.
+2009, Cell 138:389-403); please cite them alongside ProxiMate.
+
+## License
+
+ProxiMate is released under the MIT License (`LICENSE`). The repository also
+distributes SAINTexpress (GPL-3), Boost, NLopt and GOGO under their own terms; see
+`THIRD_PARTY_LICENSES.md`.
