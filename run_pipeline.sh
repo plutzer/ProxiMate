@@ -30,6 +30,8 @@ usage() {
     echo "  --exclude-hcm - annotate against BioGRID with Human Cell Map (Go et al. 2021) evidence removed; human only"
     echo "  --pi-method   - weighted_average (default) or single_bait; applies when imputation=2"
     echo "  --pi-bait     - required when --pi-method=single_bait: control Bait name"
+    echo "  --aft-min-obs - preys observed in fewer than N runs take the dataset median per-prey SD"
+    echo "                  as their sigma lower bound (imputation 2 or 3); default 0 (off)"
     echo "  --seed        - CompPASS permutation seed, so WD p-values reproduce"
     echo ""
     echo "Arguments:"
@@ -50,6 +52,7 @@ usage() {
 organism="human"
 pi_method="weighted_average"
 pi_bait=""
+aft_min_obs="0"
 seed=""
 hcm_args=()
 while true; do
@@ -57,6 +60,7 @@ while true; do
         --organism)   organism="$2"; shift 2 ;;
         --pi-method)  pi_method="$2"; shift 2 ;;
         --pi-bait)    pi_bait="$2"; shift 2 ;;
+        --aft-min-obs) aft_min_obs="$2"; shift 2 ;;
         --seed)       seed="$2"; shift 2 ;;
         --exclude-hcm) hcm_args=(--excludeHCM); shift ;;
         *) break ;;
@@ -66,6 +70,7 @@ done
 # Reusable arg arrays threaded into each score.py invocation
 pi_args=(--pi-method "$pi_method")
 [ -n "$pi_bait" ] && pi_args+=(--pi-bait "$pi_bait")
+aft_args=(--aft-min-obs "$aft_min_obs")
 seed_args=()
 [ -n "$seed" ] && seed_args=(--seed "$seed")
 
@@ -186,7 +191,7 @@ run_stage "Scoring" \
         --outputPath "$output_dir" \
         --n-iterations "$niters" \
         --imputation "$imp" \
-        --quantType "$quant" "${pi_args[@]}" "${seed_args[@]}"
+        --quantType "$quant" "${pi_args[@]}" "${aft_args[@]}" "${seed_args[@]}"
 
 run_stage "Annotating" \
     python3 /Scripts/annotator.py \

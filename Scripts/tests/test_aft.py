@@ -274,3 +274,93 @@ def test_estimate_pi_rejects_unusable_selections(kwargs):
 
     with pytest.raises(ValueError):
         refactored_aft.estimate_pi(interaction, ed, **kwargs)
+
+
+# --- sigma floor (min_obs) ------------------------------------------------------
+
+CONTROL_BAIT = "Ctrl"
+SPARSE_PREY = "SP"
+N_WELL_OBSERVED = 24
+
+
+@pytest.fixture
+def sparse_prey_inputs(tmp_path):
+    """prey.txt, interaction.txt and ED.csv for an imputation run with one sparse prey.
+
+    Seven runs: a control bait with three replicates (so refactored_aft can fit pi from
+    it) and two test baits with two replicates each. The well-observed preys span
+    log10 levels 3 to 6.5 with per-prey SDs from 0.2 to 0.9 and a few control zeros at
+    the low end, so the dataset SD distribution has spread and missingness falls with
+    intensity. The sparse prey is seen only in BaitA's two replicates near log10 5.
+    Bait IDs are not prey IDs, so the self-interaction filter drops nothing.
+    """
+    rng = np.random.default_rng(3)
+    runs = [(f"c_r{r}", CONTROL_BAIT, "C", r, "CTRL_ID") for r in (1, 2, 3)]
+    runs += [(f"a_r{r}", "BaitA", "T", r, "A_ID") for r in (1, 2)]
+    runs += [(f"b_r{r}", "BaitB", "T", r, "B_ID") for r in (1, 2)]
+    preys = [f"P{p:02d}" for p in range(N_WELL_OBSERVED)] + [SPARSE_PREY]
+
+    rows = []
+    for p in range(N_WELL_OBSERVED):
+        level, sd = 3.0 + p * 0.15, 0.2 + p * 0.03
+        for exp, bait, _, _, _ in runs:
+            zero = (p < 6 and exp == "c_r1") or (p < 3 and exp == "c_r2")
+            value = 0.0 if zero else 10 ** rng.normal(level, sd)
+            rows.append((exp, bait, preys[p], value))
+    for exp, bait, _, _, _ in runs:
+        value = {"a_r1": 10 ** 5.0, "a_r2": 10 ** 5.1}.get(exp, 0.0)
+        rows.append((exp, bait, SPARSE_PREY, value))
+
+    with open(tmp_path / "interaction.txt", "w", newline="") as handle:
+        for exp, bait, prey, value in rows:
+            handle.write(f"{exp}\t{bait}\t{prey}\t{value}\n")
+    with open(tmp_path / "prey.txt", "w", newline="") as handle:
+        for prey in preys:
+            handle.write(f"{prey}\t{prey}_gene\n")
+    pd.DataFrame([{"Experiment Name": e, "Type": t, "Bait": b, "Replicate": r, "Bait ID": i}
+                  for e, b, t, r, i in runs]).to_csv(tmp_path / "ED.csv", index=False)
+
+    interaction = pd.DataFrame(rows, columns=["ExperimentID", "Bait", "Prey", "Intensity"])
+    return {"dir": tmp_path, "interaction": interaction}
+
+
+def _impute(module, inputs, out_name, **kwargs):
+    out_dir = inputs["dir"] / out_name
+    out_dir.mkdir()
+    if module is refactored_aft:
+        kwargs.update(pi_method="single_bait", pi_bait=CONTROL_BAIT)
+    module.filter_impute(str(inputs["dir"] / "prey.txt"), str(inputs["dir"] / "interaction.txt"),
+                         str(out_dir) + "/", str(inputs["dir"] / "ED.csv"), impute=True, **kwargs)
+    return pd.read_csv(out_dir / "imputed_params.csv").set_index("Prey")
+
+
+def _expected_floor(interaction, min_obs):
+    """Median per-prey SD (ddof=1) of log10 intensity over preys with >= min_obs nonzero rows."""
+    nonzero = interaction[interaction["Intensity"] > 0]
+    sd = np.log10(nonzero["Intensity"]).groupby(nonzero["Prey"]).agg(["std", "size"])
+    return sd.loc[sd["size"] >= min_obs, "std"].median()
+
+
+@pytest.mark.parametrize("module", [one_component_aft, refactored_aft],
+                         ids=["one-component", "two-component"])
+def test_min_obs_floors_sigma_of_sparse_preys_only(module, sparse_prey_inputs):
+    """A prey seen in fewer than min_obs runs is fitted with sigma at the dataset floor,
+    which pulls its imputed control mean well below its observed level; preys with
+    enough observations fit exactly as they do without the floor."""
+    unfloored = _impute(module, sparse_prey_inputs, "out0", min_obs=0)
+    floored = _impute(module, sparse_prey_inputs, "out4", min_obs=4)
+    floor = _expected_floor(sparse_prey_inputs["interaction"], 4)
+
+    assert floored.loc[SPARSE_PREY, "imputed"] and unfloored.loc[SPARSE_PREY, "imputed"]
+    assert floored.loc[SPARSE_PREY, "sigma"] == pytest.approx(floor, abs=1e-3)
+    assert floored.loc[SPARSE_PREY, "mu"] <= unfloored.loc[SPARSE_PREY, "mu"] - 0.3
+
+    well_observed = [p for p in floored.index if p != SPARSE_PREY]
+    pd.testing.assert_frame_equal(floored.loc[well_observed], unfloored.loc[well_observed])
+
+
+@pytest.mark.parametrize("module", [one_component_aft, refactored_aft],
+                         ids=["one-component", "two-component"])
+def test_min_obs_without_a_qualifying_prey_is_refused(module, sparse_prey_inputs):
+    with pytest.raises(ValueError, match="sigma floor"):
+        _impute(module, sparse_prey_inputs, "out99", min_obs=99)

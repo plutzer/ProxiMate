@@ -108,7 +108,7 @@ def estimate_pi(interaction, ed, method, selected_bait=None, min_replicates=3):
 #### MAIN function ####
 
 def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False,
-                  pi_method='weighted_average', pi_bait=None):
+                  pi_method='weighted_average', pi_bait=None, min_obs=0):
     interaction, ed, bait_dict = read_saint_inputs(interaction_path, ed_path)
 
     if impute:
@@ -143,6 +143,20 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
         mu_lower_bound = interaction_nonzero['Intensity_log'].min() - interaction_nonzero['Intensity_log'].std() * 5
         mu_upper_bound = np.log10(np.percentile(interaction_nonzero.groupby('Prey')['Intensity'].mean(), 99))
         sigma_lower_bound = np.percentile(interaction_nonzero.groupby('Prey')['Intensity_log'].std().dropna(), 1)
+
+        # Sigma floor for sparsely observed preys: a prey seen in fewer than min_obs
+        # runs has too few values to say how widely it varies, so its own SD would
+        # confine sigma to a sliver and the censored term would be met by pulling mu
+        # down only a fraction of a log10 unit. The floor is the median per-prey SD
+        # over the well-observed preys.
+        sigma_floor = np.nan
+        if min_obs > 0:
+            prey_sd = interaction_nonzero.groupby('Prey')['Intensity_log'].agg(['std', 'size'])
+            well_observed = prey_sd.loc[prey_sd['size'] >= min_obs, 'std'].dropna()
+            if well_observed.empty:
+                raise ValueError(f"no prey has >= {min_obs} observations; cannot set a sigma floor")
+            sigma_floor = well_observed.median()
+            logger.info("AFT sigma floor %.4f for preys with < %d observations", sigma_floor, min_obs)
 
         # Add BaitID column to full interaction once, before the loop
         interaction['BaitID'] = interaction['Bait'].map(bait_dict)
@@ -211,7 +225,11 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
 
             obs_sigma = b
 
-            bounds = ((mu_lower_bound, mu_upper_bound), (sigma_lower_bound, sigma_lower_bound * 3 + 3 * obs_sigma))
+            sigma_lo = sigma_lower_bound
+            if len(nonzero_vals) < min_obs:
+                sigma_lo = max(sigma_lower_bound, sigma_floor)
+                obs_sigma = max(obs_sigma, sigma_floor)
+            bounds = ((mu_lower_bound, mu_upper_bound), (sigma_lo, sigma_lo * 3 + 3 * obs_sigma))
             # Check to see if the initial parameters are within the bounds
             a = np.clip(a, bounds[0][0], bounds[0][1])
             b = np.clip(b, bounds[1][0], bounds[1][1])

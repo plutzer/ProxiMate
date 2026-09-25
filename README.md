@@ -73,6 +73,7 @@ docker run --mount type=bind,source=<data_dir>,target=<container_dir> plutzer/pr
 - `quant_type`: `Intensity`, `LFQ`, or `Spectral Counts` (DIA-NN and Pioneer always use Intensity; FragPipe supports all three)
 - `imputation`: `0` (none), `1` (prey-specific AFT), `2` (refactored AFT), or `3` (one-component AFT)
 - `--seed`: CompPASS permutation seed, so WD p-values reproduce between runs
+- `--aft-min-obs`: preys observed in fewer than N runs take the dataset median per-prey SD as their sigma lower bound (imputation `2` or `3`); default `0` (off)
 
 The pipeline stops at the first stage that fails, rather than carrying on with
 missing inputs. Run `./run_pipeline.sh` with no arguments for the full option list,

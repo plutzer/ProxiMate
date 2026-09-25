@@ -198,6 +198,9 @@ def main():
                         help="Refactored AFT (imputation=2): how to estimate pi from controls.")
     parser.add_argument("--pi-bait", dest="pi_bait", default=None,
                         help="Required when --pi-method=single_bait: control Bait name to fit.")
+    parser.add_argument("--aft-min-obs", dest="aft_min_obs", type=int, default=0,
+                        help="AFT (imputation=2 or 3): preys observed in fewer than N runs take the "
+                             "dataset median per-prey SD as their sigma lower bound. 0 (default) disables.")
 
     args = parser.parse_args()
 
@@ -239,8 +242,8 @@ def _score(args, record):
             if args.pi_method == "single_bait" and not args.pi_bait:
                 logger.error("--pi-method=single_bait requires --pi-bait")
                 sys.exit(1)
-            logger.info("Running refactored AFT imputation (pi_method=%s, pi_bait=%s)...",
-                        args.pi_method, args.pi_bait)
+            logger.info("Running refactored AFT imputation (pi_method=%s, pi_bait=%s, aft_min_obs=%d)...",
+                        args.pi_method, args.pi_bait, args.aft_min_obs)
             refactored_aft.filter_impute(
                 f"{args.scoreInputs}/prey.txt",
                 f"{args.scoreInputs}/interaction.txt",
@@ -248,15 +251,17 @@ def _score(args, record):
                 args.experimentalDesign,
                 impute=True,
                 pi_method=args.pi_method,
-                pi_bait=args.pi_bait)
+                pi_bait=args.pi_bait,
+                min_obs=args.aft_min_obs)
         elif args.imputation == "3":
-            logger.info("Running one-component AFT imputation...")
+            logger.info("Running one-component AFT imputation (aft_min_obs=%d)...", args.aft_min_obs)
             one_component_aft.filter_impute(
                 f"{args.scoreInputs}/prey.txt",
                 f"{args.scoreInputs}/interaction.txt",
                 f"{args.scoreInputs}/",
                 args.experimentalDesign,
-                impute=True)
+                impute=True,
+                min_obs=args.aft_min_obs)
         else:
             logger.info("Running imputation filter (impute=%s)...", bool(int(args.imputation)))
             aft_impute_saint.filter_impute(

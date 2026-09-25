@@ -11,6 +11,12 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+### Added
+- `--aft-min-obs N` for the one- and two-component AFT imputations: a prey observed in
+  fewer than N runs is fitted with the dataset median per-prey SD as its sigma lower
+  bound, so its imputed control mean is not pinned near its own few observations.
+  Default 0 leaves results unchanged.
+
 ## [0.2.1] - 2026-09-24
 
 ### Changed
