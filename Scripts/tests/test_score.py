@@ -281,7 +281,7 @@ def score_inputs(tmp_path):
             scoreInputs=str(work), outputPath=str(work),
             experimentalDesign=str(ed_path), imputation="0", quantType="Intensity",
             compress_n_rep=1000, n_iterations=2, seed=0,
-            pi_method="weighted_average", pi_bait=None)
+            pi_method="weighted_average", pi_bait=None, aft_min_obs=4)
 
     return _build
 

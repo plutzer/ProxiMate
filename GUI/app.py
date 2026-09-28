@@ -180,6 +180,11 @@ app_ui = ui.page_navbar(
                                 "input.pi_method === 'single_bait'",
                                 ui.input_select("pi_bait", tip("Control Bait for π Fit", "pi_bait"), choices=[])),
                         ),
+                        ui.panel_conditional(
+                            "String(input.imputation_method) === '2' || String(input.imputation_method) === '3'",
+                            ui.input_numeric("aft_min_obs", tip("Sigma Floor: Min. Observations", "aft_min_obs"),
+                                             value=4, min=0, step=1),
+                        ),
                         ui.input_numeric("wdfdr_iterations", tip("WDFDR Iterations", "wdfdr_iterations"), value=1000),
                         ui.input_action_button("score_data", "Score Data")
                     ),
@@ -1040,11 +1045,13 @@ def server(input: Inputs, output: Outputs, session: Session):
         imputation = int(input.imputation_method.get())
         pi_method = input.pi_method.get() if imputation == 2 else None
         pi_bait = input.pi_bait.get() if pi_method == 'single_bait' else None
+        aft_min_obs = input.aft_min_obs.get() if imputation in (2, 3) else None
         try:
             with ui.Progress(min=0, max=1) as progress:
                 backend.run_score(dataset_name, imputation, input.wdfdr_iterations.get(),
                                   input.organism.get(), input.exclude_hcm.get(),
-                                  pi_method=pi_method, pi_bait=pi_bait, actor='gui',
+                                  pi_method=pi_method, pi_bait=pi_bait, aft_min_obs=aft_min_obs,
+                                  actor='gui',
                                   progress=lambda message, value: progress.set(
                                       value, message="Scoring data", detail=message))
             notify(f"Successfully scored and annotated dataset '{dataset_name}'",

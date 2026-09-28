@@ -24,7 +24,8 @@ the SAINT and CompPASS inputs and adds a row to the session table.
 
 **Scoring** picks a parsed dataset, the organism, the imputation method for missing
 control values (AFT imputation applies to intensity data; a spectral-count dataset
-offers Default only), how π is estimated (imputation 2 only), the number of WDFDR
+offers Default only), how π is estimated (imputation 2 only), the sigma floor's minimum
+observation count (imputation 2 and 3; default 4, 0 disables it), the number of WDFDR
 permutations, and for human data whether Human Cell Map evidence is excluded from
 BioGRID. *Score Data* runs SAINTexpress and CompPASS, then annotates the result; the
 row's Scored column flips to Yes. Scoring blocks the page until it finishes.
