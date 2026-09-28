@@ -11,6 +11,16 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
+### Added
+- Sigma floor for the one- and two-component AFT imputations: a prey observed in fewer
+  than N runs is fitted with the dataset median per-prey SD as its sigma lower bound, so
+  its imputed control mean is not pinned near its own few observations. N is 4 by
+  default (`--aft-min-obs`, the Scoring card's *Sigma Floor* field, `aft_min_obs` in the
+  MCP `score_dataset` operation); 0 reproduces earlier results. `imputed_params.csv`
+  gains `n_obs`, `floored` and `sigma_floor` columns.
+
 ## [0.2.1] - 2026-09-24
 
 ### Changed

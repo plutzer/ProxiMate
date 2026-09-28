@@ -40,6 +40,7 @@ TOOLTIPS = {
     "imputation_method": "How missing control values are filled in before SAINT scoring. Default = no fill-in; the AFT options model the chance an intensity is missing because it fell below detection, so they apply to intensity data only. Use Default for MSstats input.",  # tooltip
     "pi_method": "π is the estimated share of missing values that are true absences rather than below-detection signals. Choose to estimate it from all control baits or fit it from a single one.",  # tooltip
     "pi_bait": "The control bait whose replicates are used to fit π. Pick one with several replicates.",  # tooltip
+    "aft_min_obs": "Sigma floor for the AFT fit. A prey seen in fewer than this many runs is fitted with the dataset's median per-prey spread instead of its own, which keeps its imputed control mean from being pinned to the bait intensity in small designs. 4 is recommended; 0 turns the floor off.",  # tooltip
     "wdfdr_iterations": "Number of data shuffles used to estimate the WD score's false discovery rate (WDFDR). More iterations are slower but more stable; 0 skips WDFDR entirely.",  # tooltip
     "clear_datasets": "Removes every dataset in this session, including results stored on the server. Download a session zip first if you want to keep them.",  # tooltip
     "download_session": "Saves every dataset in this session, with its results, as one zip you can restore later with Upload Session Zip.",  # tooltip
@@ -131,7 +132,7 @@ SECTIONS = {
         "dataset_name", "input_format", "quant_type", "pg_file", "diann_matrix_file",
         "pioneer_matrix_file", "fragpipe_file", "msstats_file", "ed_file", "ed_file_msstats",
         "saint_bait", "saint_prey", "saint_interaction", "organism", "exclude_hcm",
-        "imputation_method", "pi_method", "pi_bait", "wdfdr_iterations", "clear_datasets",
+        "imputation_method", "pi_method", "pi_bait", "aft_min_obs", "wdfdr_iterations", "clear_datasets",
         "download_session", "session_file",
     ],
     "Data Thresholding": [

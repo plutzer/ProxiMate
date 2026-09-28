@@ -118,13 +118,15 @@ def test_score_runs_both_stages_with_the_given_settings_and_marks_the_row(out_di
     calls = []
     _fake_stages(monkeypatch, calls)
     result = backend.run_score('ds1', imputation=2, wdfdr_iterations=5, organism='human',
-                               exclude_hcm=True, pi_method='single_bait', pi_bait='Ctrl', seed=7)
+                               exclude_hcm=True, pi_method='single_bait', pi_bait='Ctrl',
+                               aft_min_obs=0, seed=7)
     score_cmd, ann_cmd = calls
     assert score_cmd[1].endswith('score.py')
     assert score_cmd[score_cmd.index('--quantType') + 1] == 'Intensity'
     assert score_cmd[score_cmd.index('--imputation') + 1] == '2'
     assert score_cmd[score_cmd.index('--n-iterations') + 1] == '5'
     assert score_cmd[score_cmd.index('--pi-bait') + 1] == 'Ctrl'
+    assert score_cmd[score_cmd.index('--aft-min-obs') + 1] == '0'
     assert score_cmd[score_cmd.index('--seed') + 1] == '7'
     assert ann_cmd[1].endswith('annotator.py') and '--excludeHCM' in ann_cmd
     assert store.row('ds1')['Scored'] == 'Yes'

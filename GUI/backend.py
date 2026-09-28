@@ -285,11 +285,12 @@ def _run_stage_subprocess(command, dataset_path, run_id):
 
 
 def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_method=None,
-              pi_bait=None, seed=None, actor='gui', run_id=None, progress=None):
+              pi_bait=None, aft_min_obs=None, seed=None, actor='gui', run_id=None, progress=None):
     """Score and annotate a parsed dataset; on success its row reads Scored = Yes.
 
     ``imputation`` is 0-3 as ``score.py`` takes it; ``pi_method``/``pi_bait`` apply to
-    imputation 2 only.  Raises ``StageError`` with the stage's log when either script
+    imputation 2 only and ``aft_min_obs`` (the sigma floor, None for score.py's default
+    of 4) to imputation 2 and 3.  Raises ``StageError`` with the stage's log when either script
     fails, and ``BusyError`` when the dataset is already being worked on.
     """
     row = store.row(name)
@@ -306,6 +307,8 @@ def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_meth
         raise ValueError(f"pi_method must be one of {PI_METHODS}, got {pi_method!r}")
     if pi_method == 'single_bait' and not pi_bait:
         raise ValueError("pi_method 'single_bait' needs pi_bait")
+    if aft_min_obs is not None and int(aft_min_obs) < 0:
+        raise ValueError("aft_min_obs must be >= 0")
     wdfdr_iterations = int(wdfdr_iterations)
     if wdfdr_iterations < 0:
         raise ValueError("wdfdr_iterations must be >= 0")
@@ -324,6 +327,8 @@ def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_meth
         score_cmd += ['--pi-method', pi_method]
         if pi_method == 'single_bait':
             score_cmd += ['--pi-bait', str(pi_bait)]
+    if imputation in (2, 3) and aft_min_obs is not None:
+        score_cmd += ['--aft-min-obs', str(int(aft_min_obs))]
     if seed is not None:
         score_cmd += ['--seed', str(int(seed))]
     ann_cmd = [sys.executable, os.path.join(SCRIPTS_DIR, 'annotator.py'),
