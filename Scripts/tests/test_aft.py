@@ -352,11 +352,17 @@ def test_min_obs_floors_sigma_of_sparse_preys_only(module, sparse_prey_inputs):
     floor = _expected_floor(sparse_prey_inputs["interaction"], 4)
 
     assert floored.loc[SPARSE_PREY, "imputed"] and unfloored.loc[SPARSE_PREY, "imputed"]
+    assert floored.loc[SPARSE_PREY, "n_obs"] == 2 and floored.loc[SPARSE_PREY, "floored"]
+    assert not unfloored["floored"].any() and unfloored["sigma_floor"].isna().all()
+    assert floored.loc[SPARSE_PREY, "sigma_floor"] == pytest.approx(floor, abs=1e-3)
     assert floored.loc[SPARSE_PREY, "sigma"] == pytest.approx(floor, abs=1e-3)
     assert floored.loc[SPARSE_PREY, "mu"] <= unfloored.loc[SPARSE_PREY, "mu"] - 0.3
 
     well_observed = [p for p in floored.index if p != SPARSE_PREY]
-    pd.testing.assert_frame_equal(floored.loc[well_observed], unfloored.loc[well_observed])
+    assert not floored.loc[well_observed, "floored"].any()
+    fit_columns = [c for c in floored.columns if c != "sigma_floor"]
+    pd.testing.assert_frame_equal(floored.loc[well_observed, fit_columns],
+                                  unfloored.loc[well_observed, fit_columns])
 
 
 @pytest.mark.parametrize("module", [one_component_aft, refactored_aft],

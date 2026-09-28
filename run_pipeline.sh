@@ -31,7 +31,7 @@ usage() {
     echo "  --pi-method   - weighted_average (default) or single_bait; applies when imputation=2"
     echo "  --pi-bait     - required when --pi-method=single_bait: control Bait name"
     echo "  --aft-min-obs - preys observed in fewer than N runs take the dataset median per-prey SD"
-    echo "                  as their sigma lower bound (imputation 2 or 3); default 0 (off)"
+    echo "                  as their sigma lower bound (imputation 2 or 3); default 4, 0 disables"
     echo "  --seed        - CompPASS permutation seed, so WD p-values reproduce"
     echo ""
     echo "Arguments:"
@@ -52,7 +52,7 @@ usage() {
 organism="human"
 pi_method="weighted_average"
 pi_bait=""
-aft_min_obs="0"
+aft_min_obs="4"
 seed=""
 hcm_args=()
 while true; do

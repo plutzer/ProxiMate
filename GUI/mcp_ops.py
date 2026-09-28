@@ -199,18 +199,21 @@ def parse_dataset(dataset: str, input_format: str, files: dict, quant_type: str 
           tags=('score', 'saint', 'comppass', 'annotate', 'imputation', 'wdfdr'))
 def score_dataset(dataset: str, imputation: int = 0, wdfdr_iterations: int = 1000,
                   organism: str = 'human', exclude_hcm: bool = False, pi_method: str = None,
-                  pi_bait: str = None, seed: int = None) -> dict:
+                  pi_bait: str = None, aft_min_obs: int = None, seed: int = None) -> dict:
     """Runs score.py and annotator.py on the dataset, as the Scoring card does; the
     defaults are the Scoring card's.  ``imputation``: 0 none, 1 prey-specific AFT, 2
     refactored AFT, 3 one-component AFT (intensity data only).  ``wdfdr_iterations``:
     permutations for the WD FDR (0 skips it).  ``organism``: human, mouse or yeast.
     ``exclude_hcm`` removes Human Cell Map evidence from BioGRID (human only).
     ``pi_method`` (weighted_average or single_bait, with ``pi_bait``) applies to
-    imputation 2.  ``seed`` fixes the CompPASS permutations.  Blocks until both
+    imputation 2.  ``aft_min_obs`` applies to imputation 2 and 3: preys observed in
+    fewer than that many runs are fitted with the dataset median per-prey SD as their
+    sigma lower bound (default 4; 0 disables the floor).  ``seed`` fixes the CompPASS permutations.  Blocks until both
     stages finish (minutes); refused while the GUI or another call is working on the
     dataset."""
     return _json(backend.run_score(dataset, imputation, wdfdr_iterations, organism, exclude_hcm,
-                                   pi_method=pi_method, pi_bait=pi_bait, seed=seed, actor=ACTOR))
+                                   pi_method=pi_method, pi_bait=pi_bait, aft_min_obs=aft_min_obs,
+                                   seed=seed, actor=ACTOR))
 
 
 @register('dataset', "Replace the whole session with the datasets in a session zip. Destructive; needs confirm=true.",

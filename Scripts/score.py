@@ -198,9 +198,9 @@ def main():
                         help="Refactored AFT (imputation=2): how to estimate pi from controls.")
     parser.add_argument("--pi-bait", dest="pi_bait", default=None,
                         help="Required when --pi-method=single_bait: control Bait name to fit.")
-    parser.add_argument("--aft-min-obs", dest="aft_min_obs", type=int, default=0,
+    parser.add_argument("--aft-min-obs", dest="aft_min_obs", type=int, default=4,
                         help="AFT (imputation=2 or 3): preys observed in fewer than N runs take the "
-                             "dataset median per-prey SD as their sigma lower bound. 0 (default) disables.")
+                             "dataset median per-prey SD as their sigma lower bound. Default 4; 0 disables.")
 
     args = parser.parse_args()
 

@@ -138,6 +138,8 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
         imputed = []
         iterations = []
         original_b = []
+        n_obs = []
+        floored = []
         pi_list = []
 
         mu_lower_bound = interaction_nonzero['Intensity_log'].min() - interaction_nonzero['Intensity_log'].std() * 5
@@ -154,7 +156,8 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
             prey_sd = interaction_nonzero.groupby('Prey')['Intensity_log'].agg(['std', 'size'])
             well_observed = prey_sd.loc[prey_sd['size'] >= min_obs, 'std'].dropna()
             if well_observed.empty:
-                raise ValueError(f"no prey has >= {min_obs} observations; cannot set a sigma floor")
+                raise ValueError(f"no prey has >= {min_obs} observations, so no sigma floor can be set; "
+                                 f"lower --aft-min-obs (0 disables the floor)")
             sigma_floor = well_observed.median()
             logger.info("AFT sigma floor %.4f for preys with < %d observations", sigma_floor, min_obs)
 
@@ -181,6 +184,8 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
                 tlim_list.append(upper_Tlim)
                 iterations.append(0)
                 original_b.append(0)
+                n_obs.append(0)
+                floored.append(False)
                 pi_list.append(pi)
                 imputed.append(False)
                 prey_data.loc[prey_data['PreyID'] == prey, 'mu'] = 0.0
@@ -211,6 +216,8 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
                 tlim_list.append(Tlim)
                 iterations.append(0)
                 original_b.append(0)
+                n_obs.append(0)
+                floored.append(False)
                 pi_list.append(pi)
                 imputed.append(False)
                 prey_data.loc[prey_data['PreyID'] == prey, 'mu'] = 0.0
@@ -226,7 +233,8 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
             obs_sigma = b
 
             sigma_lo = sigma_lower_bound
-            if len(nonzero_vals) < min_obs:
+            is_floored = len(nonzero_vals) < min_obs
+            if is_floored:
                 sigma_lo = max(sigma_lower_bound, sigma_floor)
                 obs_sigma = max(obs_sigma, sigma_floor)
             bounds = ((mu_lower_bound, mu_upper_bound), (sigma_lo, sigma_lo * 3 + 3 * obs_sigma))
@@ -252,6 +260,8 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
             tlim_list.append(Tlim)
             iterations.append(res.nit)
             original_b.append(b)
+            n_obs.append(len(nonzero_vals))
+            floored.append(is_floored)
             pi_list.append(pi)
 
             # Change the intensity values for the current prey to the imputed values
@@ -281,7 +291,7 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
                 imputed[i] = False
 
         # Write a csv output file using the prey names and the optimized parameters
-        output = pd.DataFrame({'Prey': preys[:len(mu_list)], 'mu': mu_list, 'sigma': sigma_list, 'originalSigma': original_b, 'Tlim': tlim_list, 'iterations': iterations, 'imputed': imputed, 'pi': pi_list})
+        output = pd.DataFrame({'Prey': preys[:len(mu_list)], 'mu': mu_list, 'sigma': sigma_list, 'originalSigma': original_b, 'Tlim': tlim_list, 'iterations': iterations, 'imputed': imputed, 'n_obs': n_obs, 'floored': floored, 'sigma_floor': sigma_floor, 'pi': pi_list})
         if impute:
             output.to_csv(output_dir + 'imputed_params.csv', index=False)
 
