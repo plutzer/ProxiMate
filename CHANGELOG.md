@@ -11,6 +11,8 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
 ### Added
 - Sigma floor for the one- and two-component AFT imputations: a prey observed in fewer
   than N runs is fitted with the dataset median per-prey SD as its sigma lower bound, so
