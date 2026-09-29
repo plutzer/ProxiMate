@@ -281,10 +281,12 @@ def test_estimate_pi_rejects_unusable_selections(kwargs):
 CONTROL_BAIT = "Ctrl"
 SPARSE_PREY = "SP"
 N_WELL_OBSERVED = 24
+WILD_PREY = "WP"
+# log10 level per run in fixture order; None is a zero (the prey is absent from c_r1)
+WILD_LEVELS = [None, 7.0, 2.5, 6.5, 3.0, 7.5, 2.0]
 
 
-@pytest.fixture
-def sparse_prey_inputs(tmp_path):
+def _build_inputs(tmp_path, wild_prey=False):
     """prey.txt, interaction.txt and ED.csv for an imputation run with one sparse prey.
 
     Seven runs: a control bait with three replicates (so refactored_aft can fit pi from
@@ -293,6 +295,8 @@ def sparse_prey_inputs(tmp_path):
     the low end, so the dataset SD distribution has spread and missingness falls with
     intensity. The sparse prey is seen only in BaitA's two replicates near log10 5.
     Bait IDs are not prey IDs, so the self-interaction filter drops nothing.
+    With wild_prey, one more prey is seen in all runs but one at log10 levels spanning 2
+    to 7.5, so its fitted sigma lies far outside the dataset's and the 3-SD check rejects it.
     """
     rng = np.random.default_rng(3)
     runs = [(f"c_r{r}", CONTROL_BAIT, "C", r, "CTRL_ID") for r in (1, 2, 3)]
@@ -310,6 +314,10 @@ def sparse_prey_inputs(tmp_path):
     for exp, bait, _, _, _ in runs:
         value = {"a_r1": 10 ** 5.0, "a_r2": 10 ** 5.1}.get(exp, 0.0)
         rows.append((exp, bait, SPARSE_PREY, value))
+    if wild_prey:
+        preys.append(WILD_PREY)
+        for (exp, bait, _, _, _), level in zip(runs, WILD_LEVELS):
+            rows.append((exp, bait, WILD_PREY, 0.0 if level is None else 10 ** level))
 
     with open(tmp_path / "interaction.txt", "w", newline="") as handle:
         for exp, bait, prey, value in rows:
@@ -322,6 +330,16 @@ def sparse_prey_inputs(tmp_path):
 
     interaction = pd.DataFrame(rows, columns=["ExperimentID", "Bait", "Prey", "Intensity"])
     return {"dir": tmp_path, "interaction": interaction}
+
+
+@pytest.fixture
+def sparse_prey_inputs(tmp_path):
+    return _build_inputs(tmp_path)
+
+
+@pytest.fixture
+def wild_prey_inputs(tmp_path):
+    return _build_inputs(tmp_path, wild_prey=True)
 
 
 def _impute(module, inputs, out_name, **kwargs):
@@ -370,3 +388,67 @@ def test_min_obs_floors_sigma_of_sparse_preys_only(module, sparse_prey_inputs):
 def test_min_obs_without_a_qualifying_prey_is_refused(module, sparse_prey_inputs):
     with pytest.raises(ValueError, match="sigma floor"):
         _impute(module, sparse_prey_inputs, "out99", min_obs=99)
+
+
+# --- fallback for fits rejected by the 3-SD check (reject_fallback) --------------
+
+@pytest.mark.parametrize("module", [one_component_aft, refactored_aft],
+                         ids=["one-component", "two-component"])
+def test_rejected_fit_falls_back_to_saint_by_default(module, wild_prey_inputs):
+    """A rejected prey gets mu 0, which SAINTexpress replaces with its global default;
+    the fit it rejected stays on record in fit_mu and fit_sigma."""
+    params = _impute(module, wild_prey_inputs, "out_saint", min_obs=4)
+    wild = params.loc[WILD_PREY]
+
+    assert wild["rejected"] and not wild["imputed"] and not wild["fallback"]
+    assert wild["mu"] == 0.0 and np.isfinite(wild["fit_mu"]) and wild["fit_mu"] != 0.0
+    assert wild["fit_sigma"] == wild["sigma"] and wild["sigma"] > 1.5
+    assert params["rejected"].sum() == (~params["imputed"]).sum()
+
+
+@pytest.mark.parametrize("module", [one_component_aft, refactored_aft],
+                         ids=["one-component", "two-component"])
+def test_rejected_fit_is_refit_with_sigma_at_the_floor(module, wild_prey_inputs):
+    """With reject_fallback='floor' a rejected prey is refit with sigma held at the
+    sigma floor: its mu minimizes the module's own likelihood at that sigma and moves
+    away from the rejected fit. Every prey the 3-SD check accepted is untouched."""
+    saint = _impute(module, wild_prey_inputs, "out_saint", min_obs=4)
+    floor = _impute(module, wild_prey_inputs, "out_floor", min_obs=4, reject_fallback="floor")
+    wild = floor.loc[WILD_PREY]
+
+    assert wild["rejected"] and wild["fallback"] and wild["imputed"]
+    assert wild["sigma"] == pytest.approx(wild["sigma_floor"])
+    assert abs(wild["mu"] - wild["fit_mu"]) > 0.05
+
+    y = np.array([0.0 if level is None else level for level in WILD_LEVELS])
+    extra = (wild["pi"],) if module is refactored_aft else ()
+    def nll(mu):
+        return module.neg_likelihood([mu, wild["sigma_floor"]], y, wild["Tlim"], *extra)
+    assert nll(wild["mu"]) <= min(nll(wild["mu"] - 0.01), nll(wild["mu"] + 0.01))
+    assert wild["fit_sigma"] == saint.loc[WILD_PREY, "fit_sigma"]
+
+    imputed_prey = pd.read_csv(wild_prey_inputs["dir"] / "out_floor" / "imputed_prey.txt",
+                               sep="	", header=None, index_col=0)
+    assert imputed_prey.loc[WILD_PREY, 2] == pytest.approx(10 ** wild["mu"])
+
+    accepted = saint.index[~saint["rejected"]]
+    assert not floor.loc[accepted, "fallback"].any()
+    pd.testing.assert_frame_equal(floor.loc[accepted], saint.loc[accepted])
+
+
+@pytest.mark.parametrize("module", [one_component_aft, refactored_aft],
+                         ids=["one-component", "two-component"])
+def test_floor_fallback_without_a_floor_is_refused(module, wild_prey_inputs):
+    with pytest.raises(ValueError, match="min_obs"):
+        _impute(module, wild_prey_inputs, "out_nofloor", min_obs=0, reject_fallback="floor")
+
+
+@pytest.mark.parametrize("module", [one_component_aft, refactored_aft],
+                         ids=["one-component", "two-component"])
+def test_n_ctrl_obs_counts_control_runs_with_the_prey(module, wild_prey_inputs):
+    """n_ctrl_obs is the number of control runs with a nonzero intensity: SAINT uses
+    the imputed value as a prey's control mean only when it is 0."""
+    params = _impute(module, wild_prey_inputs, "out_ctrl", min_obs=4)
+    assert params.loc[SPARSE_PREY, "n_ctrl_obs"] == 0
+    assert params.loc[WILD_PREY, "n_ctrl_obs"] == 2
+    assert params.loc["P10", "n_ctrl_obs"] == 3

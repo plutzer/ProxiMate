@@ -201,6 +201,11 @@ def main():
     parser.add_argument("--aft-min-obs", dest="aft_min_obs", type=int, default=4,
                         help="AFT (imputation=2 or 3): preys observed in fewer than N runs take the "
                              "dataset median per-prey SD as their sigma lower bound. Default 4; 0 disables.")
+    parser.add_argument("--aft-reject-fallback", dest="aft_reject_fallback", choices=["saint", "floor"],
+                        default="saint",
+                        help="AFT (imputation=2 or 3): a prey whose fit fails the 3-SD check gets SAINT's "
+                             "default control level (saint) or is refit with sigma at the sigma floor "
+                             "(floor, needs --aft-min-obs > 0).")
 
     args = parser.parse_args()
 
@@ -242,8 +247,9 @@ def _score(args, record):
             if args.pi_method == "single_bait" and not args.pi_bait:
                 logger.error("--pi-method=single_bait requires --pi-bait")
                 sys.exit(1)
-            logger.info("Running refactored AFT imputation (pi_method=%s, pi_bait=%s, aft_min_obs=%d)...",
-                        args.pi_method, args.pi_bait, args.aft_min_obs)
+            logger.info("Running refactored AFT imputation (pi_method=%s, pi_bait=%s, aft_min_obs=%d, "
+                        "aft_reject_fallback=%s)...",
+                        args.pi_method, args.pi_bait, args.aft_min_obs, args.aft_reject_fallback)
             refactored_aft.filter_impute(
                 f"{args.scoreInputs}/prey.txt",
                 f"{args.scoreInputs}/interaction.txt",
@@ -252,16 +258,19 @@ def _score(args, record):
                 impute=True,
                 pi_method=args.pi_method,
                 pi_bait=args.pi_bait,
-                min_obs=args.aft_min_obs)
+                min_obs=args.aft_min_obs,
+                reject_fallback=args.aft_reject_fallback)
         elif args.imputation == "3":
-            logger.info("Running one-component AFT imputation (aft_min_obs=%d)...", args.aft_min_obs)
+            logger.info("Running one-component AFT imputation (aft_min_obs=%d, aft_reject_fallback=%s)...",
+                        args.aft_min_obs, args.aft_reject_fallback)
             one_component_aft.filter_impute(
                 f"{args.scoreInputs}/prey.txt",
                 f"{args.scoreInputs}/interaction.txt",
                 f"{args.scoreInputs}/",
                 args.experimentalDesign,
                 impute=True,
-                min_obs=args.aft_min_obs)
+                min_obs=args.aft_min_obs,
+                reject_fallback=args.aft_reject_fallback)
         else:
             logger.info("Running imputation filter (impute=%s)...", bool(int(args.imputation)))
             aft_impute_saint.filter_impute(

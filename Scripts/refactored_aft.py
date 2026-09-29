@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
+from scipy.optimize import minimize, minimize_scalar
 import time
 from scipy.stats import norm
 from patsy import dmatrix
@@ -108,7 +108,12 @@ def estimate_pi(interaction, ed, method, selected_bait=None, min_replicates=3):
 #### MAIN function ####
 
 def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False,
-                  pi_method='weighted_average', pi_bait=None, min_obs=0):
+                  pi_method='weighted_average', pi_bait=None, min_obs=0, reject_fallback='saint'):
+    if reject_fallback not in ('saint', 'floor'):
+        raise ValueError(f"unknown reject_fallback: {reject_fallback}")
+    if reject_fallback == 'floor' and min_obs <= 0:
+        raise ValueError("reject_fallback='floor' refits with sigma at the sigma floor, "
+                         "which needs min_obs (--aft-min-obs) > 0")
     interaction, ed, bait_dict = read_saint_inputs(interaction_path, ed_path)
 
     if impute:
@@ -139,7 +144,9 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
         iterations = []
         original_b = []
         n_obs = []
+        n_ctrl_obs = []
         floored = []
+        fit_inputs = []
         pi_list = []
 
         mu_lower_bound = interaction_nonzero['Intensity_log'].min() - interaction_nonzero['Intensity_log'].std() * 5
@@ -166,6 +173,7 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
 
         # Pre-group interaction by Prey for fast lookup
         grouped = interaction.groupby('Prey')
+        control_runs = set(ed.loc[ed['Type'] == 'C', 'Experiment Name'])
 
         # Loop through the preys and impute the intensity values
         for n, prey in enumerate(preys, 1):
@@ -185,7 +193,9 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
                 iterations.append(0)
                 original_b.append(0)
                 n_obs.append(0)
+                n_ctrl_obs.append(0)
                 floored.append(False)
+                fit_inputs.append(None)
                 pi_list.append(pi)
                 imputed.append(False)
                 prey_data.loc[prey_data['PreyID'] == prey, 'mu'] = 0.0
@@ -217,7 +227,9 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
                 iterations.append(0)
                 original_b.append(0)
                 n_obs.append(0)
+                n_ctrl_obs.append(0)
                 floored.append(False)
+                fit_inputs.append(None)
                 pi_list.append(pi)
                 imputed.append(False)
                 prey_data.loc[prey_data['PreyID'] == prey, 'mu'] = 0.0
@@ -261,7 +273,9 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
             iterations.append(res.nit)
             original_b.append(b)
             n_obs.append(len(nonzero_vals))
+            n_ctrl_obs.append(int((nonzero_mask & prey_interaction['ExperimentID'].isin(control_runs).values).sum()))
             floored.append(is_floored)
+            fit_inputs.append(prey_intensities_log)
             pi_list.append(pi)
 
             # Change the intensity values for the current prey to the imputed values
@@ -277,21 +291,39 @@ def filter_impute(prey_path, interaction_path, output_dir, ed_path, impute=False
         mean_sigma = np.nanmean(sigma_list)
         sd_sigma = np.nanstd(sigma_list)
 
-        # iterate through the prey data
+        # A prey whose mu or sigma lies more than 3 SD from the dataset mean gets mu 0,
+        # which SAINTexpress replaces with its global default control level. Preys
+        # without a fit (no nonzero values) are zeroed too but are not counted as rejected.
+        fit_mu = [m if y is not None else np.nan for m, y in zip(mu_list, fit_inputs)]
+        fit_sigma = list(sigma_list)
+        rejected = [False] * len(mu_list)
         for i in range(len(mu_list)):
-            # Check to see if mu is within 3 standard deviations of the mean
-            if (mu_list[i] < mean_mu - 3 * sd_mu) or (mu_list[i] > mean_mu + 3 * sd_mu):
+            mu_out = (mu_list[i] < mean_mu - 3 * sd_mu) or (mu_list[i] > mean_mu + 3 * sd_mu)
+            sigma_out = (sigma_list[i] < mean_sigma - 3 * sd_sigma) or (sigma_list[i] > mean_sigma + 3 * sd_sigma)
+            if mu_out or sigma_out:
                 prey_data.loc[i, 'mu'] = 0.0
                 mu_list[i] = 0.0
                 imputed[i] = False
-            # Check to see if sigma is within 3 standard deviations of the mean
-            if (sigma_list[i] < mean_sigma - 3 * sd_sigma) or (sigma_list[i] > mean_sigma + 3 * sd_sigma):
-                prey_data.loc[i, 'mu'] = 0.0
-                mu_list[i] = 0.0
-                imputed[i] = False
+                rejected[i] = fit_inputs[i] is not None
+        logger.info("AFT 3-SD check rejected %d of %d fitted preys",
+                    sum(rejected), sum(y is not None for y in fit_inputs))
+
+        # Floor fallback: refit mu of each rejected prey with sigma held at the sigma floor.
+        fallback = [False] * len(mu_list)
+        if reject_fallback == 'floor':
+            for i in np.flatnonzero(rejected):
+                res = minimize_scalar(lambda m: neg_likelihood([m, sigma_floor], fit_inputs[i], tlim_list[i], pi),
+                                      bounds=(mu_lower_bound, mu_upper_bound), method='bounded')
+                mu_list[i] = res.x
+                sigma_list[i] = sigma_floor
+                prey_data.loc[i, 'mu'] = 10**res.x
+                imputed[i] = True
+                fallback[i] = True
+            logger.info("AFT rejection fallback: refit %d rejected preys with sigma fixed at the floor %.4f",
+                        sum(fallback), sigma_floor)
 
         # Write a csv output file using the prey names and the optimized parameters
-        output = pd.DataFrame({'Prey': preys[:len(mu_list)], 'mu': mu_list, 'sigma': sigma_list, 'originalSigma': original_b, 'Tlim': tlim_list, 'iterations': iterations, 'imputed': imputed, 'n_obs': n_obs, 'floored': floored, 'sigma_floor': sigma_floor, 'pi': pi_list})
+        output = pd.DataFrame({'Prey': preys[:len(mu_list)], 'mu': mu_list, 'sigma': sigma_list, 'originalSigma': original_b, 'Tlim': tlim_list, 'iterations': iterations, 'imputed': imputed, 'n_obs': n_obs, 'n_ctrl_obs': n_ctrl_obs, 'floored': floored, 'sigma_floor': sigma_floor, 'rejected': rejected, 'fit_mu': fit_mu, 'fit_sigma': fit_sigma, 'fallback': fallback, 'pi': pi_list})
         if impute:
             output.to_csv(output_dir + 'imputed_params.csv', index=False)
 

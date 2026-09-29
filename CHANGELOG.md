@@ -11,6 +11,12 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+### Added
+- `--aft-reject-fallback floor` for the one- and two-component AFT imputations: a prey
+  whose fit fails the 3-SD check is refit with sigma held at the sigma floor instead of
+  taking SAINT's default control level. The default, `saint`, keeps the current scores.
+  `imputed_params.csv` gains `n_ctrl_obs`, `rejected`, `fit_mu`, `fit_sigma` and `fallback`.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added

@@ -32,6 +32,8 @@ usage() {
     echo "  --pi-bait     - required when --pi-method=single_bait: control Bait name"
     echo "  --aft-min-obs - preys observed in fewer than N runs take the dataset median per-prey SD"
     echo "                  as their sigma lower bound (imputation 2 or 3); default 4, 0 disables"
+    echo "  --aft-reject-fallback - saint (default) or floor: a prey whose AFT fit fails the 3-SD check"
+    echo "                  gets SAINT's default control level, or is refit with sigma at the sigma floor"
     echo "  --seed        - CompPASS permutation seed, so WD p-values reproduce"
     echo ""
     echo "Arguments:"
@@ -53,6 +55,7 @@ organism="human"
 pi_method="weighted_average"
 pi_bait=""
 aft_min_obs="4"
+aft_reject_fallback="saint"
 seed=""
 hcm_args=()
 while true; do
@@ -61,6 +64,7 @@ while true; do
         --pi-method)  pi_method="$2"; shift 2 ;;
         --pi-bait)    pi_bait="$2"; shift 2 ;;
         --aft-min-obs) aft_min_obs="$2"; shift 2 ;;
+        --aft-reject-fallback) aft_reject_fallback="$2"; shift 2 ;;
         --seed)       seed="$2"; shift 2 ;;
         --exclude-hcm) hcm_args=(--excludeHCM); shift ;;
         *) break ;;
@@ -70,7 +74,7 @@ done
 # Reusable arg arrays threaded into each score.py invocation
 pi_args=(--pi-method "$pi_method")
 [ -n "$pi_bait" ] && pi_args+=(--pi-bait "$pi_bait")
-aft_args=(--aft-min-obs "$aft_min_obs")
+aft_args=(--aft-min-obs "$aft_min_obs" --aft-reject-fallback "$aft_reject_fallback")
 seed_args=()
 [ -n "$seed" ] && seed_args=(--seed "$seed")
 
