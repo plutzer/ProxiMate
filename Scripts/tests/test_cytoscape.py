@@ -501,6 +501,25 @@ def test_packing_keeps_communities_apart_and_members_on_one_circle():
         assert np.linalg.norm(ca - cb) >= ra + rb
 
 
+@pytest.mark.parametrize('method', ['force-directed', 'kamada-kawai'])
+def test_force_layouts_keep_communities_apart_and_members_spaced(method):
+    edges = _two_cliques()
+    ids = [f'{g}{k}' for g in 'AB' for k in range(4)]
+    membership = pd.Series([0] * 4 + [1] * 4, index=ids)
+    positions = {i: (10.0 * k + 100, 200.0) for k, i in enumerate(ids)}
+
+    placed = cn.layout_communities(membership, edges, positions, method, seed=3)
+
+    assert set(placed) == set(ids)
+    assert min(x for x, _ in placed.values()) == pytest.approx(100)
+    assert min(y for _, y in placed.values()) == pytest.approx(200)
+    for a, b in itertools.combinations(ids, 2):
+        gap = np.linalg.norm(np.subtract(placed[a], placed[b]))
+        assert gap >= cn.NODE_SPACING * 0.99, (a, b, gap)
+    with pytest.raises(ValueError, match='circles'):
+        cn.layout_communities(membership, edges, positions, 'spiral')
+
+
 # =============================================================================================
 # cytoscape_ctl: the controller over a stubbed CyREST
 # =============================================================================================
@@ -560,6 +579,7 @@ def test_restyle_switches_the_preset_in_place_and_keeps_community_fills(controll
     nodes = ctl.STATE['nodes']
     nodes['community'] = np.nan
     nodes.loc[nodes['id'] == 'P1', ['community', 'fill']] = [0, cn.COMMUNITY_FILL[0]]
+    nodes.loc[nodes['id'] == 'P2', 'community'] = 1                # a singleton keeps the preset fill
 
     ctl.restyle('highlight_knowns', 'uniform', False, 'all')
 
@@ -664,6 +684,36 @@ def test_a_second_clustering_numbers_above_the_first(clusterable, cytoscape):
 
     second = ctl.STATE['nodes'].set_index('id').loc[['P2', 'P4'], 'community'].min()
     assert second > first
+
+
+def test_a_singleton_community_keeps_its_fill(clusterable, cytoscape):
+    cytoscape['selected'] = ['P1', 'P2', 'P4', 'P5']       # only P1-P2 share an edge
+
+    result = ctl.cluster_selection()
+
+    nodes = ctl.STATE['nodes'].set_index('id')
+    prey_fill = cn.STYLE_PRESETS['abundance_weighted']['node_fill']['prey']
+    assert result['recolored'] == 2 and result['layout'] == 'circles'
+    assert nodes.loc['P1', 'fill'] in cn.COMMUNITY_FILL and nodes.loc['P4', 'fill'] == prey_fill
+    assert nodes.loc[['P1', 'P2', 'P4', 'P5'], 'community'].notna().all()
+    pushed = _last(cytoscape['calls'], 'nodes')[0].set_index('name')
+    assert pushed.loc['P4', 'fill'] == prey_fill and set(pushed.columns) == {'community', 'fill'}
+
+
+def test_recolor_off_and_a_force_layout(clusterable, cytoscape):
+    cytoscape['selected'] = ['P1', 'P2', 'P4', 'P5']
+    with pytest.raises(ValueError, match='circles'):
+        ctl.cluster_selection(layout='spiral')
+    assert not cytoscape['calls']
+
+    result = ctl.cluster_selection(layout='force-directed', recolor=False)
+
+    prey_fill = cn.STYLE_PRESETS['abundance_weighted']['node_fill']['prey']
+    assert result['recolored'] == 0
+    assert (ctl.STATE['nodes']['fill'] == prey_fill).sum() == 4
+    assert set(_last(cytoscape['calls'], 'positions')[0]) == {'P1', 'P2', 'P4', 'P5'}
+    detail = ctl.snapshot()['log'][-1]['detail']
+    assert 'force-directed' in detail and 'not recolored' in detail
 
 
 # =============================================================================================

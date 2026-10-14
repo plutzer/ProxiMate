@@ -145,8 +145,12 @@ the preys whose only visible neighbor it is and *Select Satellites* adds the two
 preys that currently sit nearer to it. *Select by relation* names a seed and selects its
 interactors (with SAINT, BFDR and abundance cuts), singletons, BioGRID or complex
 partners, or CORUM co-complex members, replacing or adding to the selection. *Cluster
-and Repack* runs Leiden over the selected nodes, colors them by community and re-packs
-each community on its own circle inside the box the selection occupies; only the
+and Repack* runs Leiden over the selected nodes and arranges each community inside the
+box the selection occupies: *Circles* puts each community on its own ring, tiled in
+rows; *Force-directed* and *Kamada-Kawai* lay each community out by its own edges inside
+a disc sized by its membership and place the discs by the edges between communities,
+which suits large selections. Communities of two or more nodes take a color of their own
+unless *Recolor communities* is off; a community of one node keeps its color. Only the
 selected nodes move, and the community number lands in the node table.
 
 **Layouts.** *Save Layout* writes where every drawn node sits to

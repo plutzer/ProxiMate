@@ -576,6 +576,13 @@ app_ui = ui.page_navbar(
                     ui.input_numeric("cy_cl_lit_weight", tip("Reference weight", "cy_cl_lit_weight"), value=1.0, min=0, step=0.25),
                     col_widths=(4, 4, 4),
                 ),
+                ui.layout_columns(
+                    ui.input_select("cy_cl_layout", tip("Cluster layout", "cy_cl_layout"),
+                                    choices={"circles": "Circles", "force-directed": "Force-directed",
+                                             "kamada-kawai": "Kamada-Kawai"}),
+                    ui.input_checkbox("cy_cl_recolor", tip("Recolor communities", "cy_cl_recolor"), value=True),
+                    col_widths=(6, 6),
+                ),
                 ui.div(
                     ui.tooltip(ui.input_action_button("cy_cluster", "Cluster and Repack", class_="btn-sm btn-outline-primary"),
                                TOOLTIPS["cy_cluster"]),
@@ -2564,10 +2571,12 @@ def server(input: Inputs, output: Outputs, session: Session):
             notify("Fill in resolution, seed and reference weight first.", type="error")
             return
         result = cy_call("cluster the selection", cytoscape_ctl.cluster_selection,
-                         resolution=float(resolution), seed=int(seed), literature_weight=float(weight))
+                         resolution=float(resolution), seed=int(seed), literature_weight=float(weight),
+                         layout=input.cy_cl_layout.get(), recolor=input.cy_cl_recolor.get())
         if result:
             notify(f"{result['n']} preys clustered into {result['n_communities']} communities "
-                   f"(sizes {result['sizes']}); {len(result['baits_left'])} bait(s) left in place.")
+                   f"(sizes {result['sizes']}), {result['recolored']} recolored; "
+                   f"{len(result['baits_left'])} bait(s) left in place.")
 
     @reactive.effect
     @reactive.event(input.cy_read_selection)

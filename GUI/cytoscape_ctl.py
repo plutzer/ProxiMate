@@ -160,8 +160,8 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
 
 def restyle(preset, width_source, literature_weighted, biogrid_scope, actor='gui'):
     """Apply a style preset, the edge widths and the BioGRID scope to the drawn network
-    in place: a column update, so nothing moves.  Clustered nodes keep their community
-    fill.  Returns the number of edges whose look or visibility changed."""
+    in place: a column update, so nothing moves.  Nodes carrying a community color keep
+    it.  Returns the number of edges whose look or visibility changed."""
     suid = _net()
     nodes, edges = STATE['nodes'], STATE['edges']
     styled_nodes, styled_edges = net.style_tables(nodes.copy(), edges.copy(), preset,
@@ -171,9 +171,8 @@ def restyle(preset, width_source, literature_weighted, biogrid_scope, actor='gui
                           | (styled_edges[net.EDGE_LOOK] != edges[net.EDGE_LOOK]).any(axis=1)]
     with STATE['lock']:
         edges[net.EDGE_LOOK] = styled_edges[net.EDGE_LOOK]
-        if 'community' in nodes.columns:
-            clustered = nodes['community'].notna()
-            styled_nodes.loc[clustered, 'fill'] = nodes.loc[clustered, 'fill']
+        colored = nodes['fill'].isin(net.COMMUNITY_FILL)
+        styled_nodes.loc[colored, 'fill'] = nodes.loc[colored, 'fill']
         nodes[net.NODE_LOOK] = styled_nodes[net.NODE_LOOK]
     _push_visibility(suid, want, changed, extra_columns=net.EDGE_LOOK)
     with STATE['cy_lock']:
@@ -498,11 +497,16 @@ def _symbols():
     return dict(zip(STATE['nodes']['id'], STATE['nodes']['symbol']))
 
 
-def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0, actor='gui'):
-    """Leiden over the selected preys, then re-pack them by community inside the box
-    they occupy.  Only those move; they recolour by community and carry it in the node
-    table.  Selected baits stay where they are: a bait links every prey around it, so
-    it would pull them into one community and then land on the circle among them."""
+def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0, layout='circles',
+                      recolor=True, actor='gui'):
+    """Leiden over the selected preys, then re-arrange them by community inside the box
+    they occupy: ``layout`` names a ``net.CLUSTER_LAYOUTS`` entry.  Only those move; they
+    carry their community in the node table and, when ``recolor`` is set, communities of
+    two or more nodes take a community fill.  Selected baits stay where they are: a bait
+    links every prey around it, so it would pull them into one community and then land
+    among them."""
+    if layout not in net.CLUSTER_LAYOUTS:
+        raise ValueError(f"cluster layout must be one of {tuple(net.CLUSTER_LAYOUTS)}; got {layout!r}")
     suid = _net()
     with STATE['cy_lock']:
         selected = cy.selected_nodes(suid)
@@ -517,31 +521,34 @@ def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0, actor='gui
         raise ValueError("only baits are selected; select the preys to cluster")
     with _busy(f'clustering {len(selected)} selected nodes'):
         membership = net.cluster(STATE['edges'], selected, resolution, seed, literature_weight)
-        placed = net.pack_communities(membership, positions)
+        placed = (net.pack_communities(membership, positions) if layout == 'circles' else
+                  net.layout_communities(membership, STATE['edges'], positions, layout, seed, literature_weight))
     # Numbers continue above any community already assigned, so two clustered regions
     # never share one.
     if 'community' in nodes.columns:
         membership = membership + int(nodes['community'].fillna(-1).max()) + 1
-    fill = net.community_fill(membership)
+    sizes = membership.value_counts()
+    fill = net.community_fill(membership[membership.map(sizes) > 1] if recolor else membership.iloc[:0])
     with STATE['lock']:
         if 'community' not in nodes.columns:
             nodes['community'] = np.nan
         chosen = nodes['id'].isin(membership.index)
         nodes.loc[chosen, 'community'] = nodes.loc[chosen, 'id'].map(membership).to_numpy()
-        nodes.loc[chosen, 'fill'] = nodes.loc[chosen, 'id'].map(fill).to_numpy()
+        nodes.loc[chosen, 'fill'] = nodes.loc[chosen, 'id'].map(fill).fillna(nodes.loc[chosen, 'fill']).to_numpy()
         nodes.loc[chosen, 'x'] = nodes.loc[chosen, 'id'].map(lambda i: placed[i][0]).to_numpy()
         nodes.loc[chosen, 'y'] = nodes.loc[chosen, 'id'].map(lambda i: placed[i][1]).to_numpy()
+        pushed = nodes.loc[chosen, ['id', 'community', 'fill']].rename(columns={'id': 'name'})
     with STATE['cy_lock']:
-        cy.update_node_columns(suid, pd.DataFrame({'name': membership.index,
-                                                   'community': membership.astype(int).to_numpy(),
-                                                   'fill': fill.to_numpy()}))
+        cy.update_node_columns(suid, pushed.astype({'community': int}))
         cy.set_positions(suid, placed)
-    sizes = membership.value_counts().sort_index().tolist()
+    sizes = sizes.sort_index().tolist()
     with _mutate('cluster_selection', f'{len(membership)} nodes -> {len(sizes)} communities '
-                 f'{sizes} (resolution {resolution}, seed {seed}); {len(baits)} bait(s) left in place',
+                 f'{sizes} (resolution {resolution}, seed {seed}, {layout}'
+                 f'{"" if recolor else ", not recolored"}); {len(baits)} bait(s) left in place',
                  actor=actor):
         pass
-    return {'n': len(membership), 'n_communities': len(sizes), 'sizes': sizes, 'baits_left': baits}
+    return {'n': len(membership), 'n_communities': len(sizes), 'sizes': sizes, 'layout': layout,
+            'recolored': len(fill), 'baits_left': baits}
 
 
 def export_image(out_dir, height=2000, actor='gui'):

@@ -20,6 +20,11 @@ section to the version and date and starts a fresh Unreleased section above it.
   between presets in place. The MCP `cytoscape_send` and `cytoscape_restyle` operations
   take `preset`, and `cytoscape_list_style_presets` lists the presets with their send
   options.
+- *Cluster and Repack* gains a *Cluster layout* select (*Circles*, the ring packing;
+  *Force-directed* and *Kamada-Kawai*, which lay each community out by its own edges inside
+  a disc and place the discs by the edges between communities) and a *Recolor communities*
+  checkbox. A community of one node keeps its color. The MCP `cytoscape_cluster_selection`
+  operation takes `layout` and `recolor`.
 
 ### Changed
 - BioGRID prey-prey edges are weighted by publication count by default.

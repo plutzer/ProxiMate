@@ -81,8 +81,11 @@ layout survives (loosening needs a new send); *Apply Style* applies the preset a
 options in place; *Read Selection* lists the selected nodes with the
 scores of their edges; the hide/show buttons act on edges around the selection; the
 selection tools pick a bait's loners or satellites or the nodes a relation names for a
-seed; *Cluster and Repack* runs Leiden over the selected preys and re-packs them by
-community, leaving selected baits in place; *Save Layout* writes every drawn node's
+seed; *Cluster and Repack* runs Leiden over the selected preys and arranges them by
+community with the chosen cluster layout (circles, or a force-directed or Kamada-Kawai
+layout of each community inside its own disc), coloring communities of two or more nodes
+unless *Recolor communities* is off, and leaving selected baits in place; *Save Layout*
+writes every drawn node's
 position to a named `id,x,y` file under the dataset's `cytoscape/layouts/` folder, merging
 into an earlier save of that name so one layout can cover several bait subsets; *Load
 Layout* moves the drawn nodes a saved layout names back to those positions and leaves

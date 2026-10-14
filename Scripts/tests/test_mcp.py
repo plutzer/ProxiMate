@@ -252,7 +252,8 @@ def drawn(monkeypatch):
     monkeypatch.setattr(ctl.cy, 'update_node_columns', lambda net, frame: calls.append(('nodes', frame)))
     monkeypatch.setattr(ctl.p4c, 'fit_content', lambda **k: calls.append('fit'))
     nodes = pd.DataFrame({'id': ['BA', 'P1', 'P2'], 'symbol': ['GA', 'G1', 'G2'], 'accession': ['QA', 'P1', 'P2'],
-                          'role': ['bait', 'prey', 'prey'], 'x': [0.0] * 3, 'y': [0.0] * 3})
+                          'role': ['bait', 'prey', 'prey'], 'fill': ['#E69F00', '#B8C4D6', '#B8C4D6'],
+                          'x': [0.0] * 3, 'y': [0.0] * 3})
     edges = pd.DataFrame({'name': ['e1', 'e2'], 'source': ['BA', 'BA'], 'target': ['P1', 'P2'],
                           'interaction': ['proximity'] * 2, 'visible': [True, True],
                           'SaintScore': [0.9, 0.8], 'BFDR': [0.01, 0.02], 'WD': [2.0, 1.0],
@@ -346,6 +347,14 @@ def test_style_preset_ops_through_the_registry(drawn):
     assert ctl.snapshot()['log'][-1]['actor'] == 'mcp' and ctl.snapshot()['log'][-1]['op'] == 'restyle'
     with pytest.raises(ValueError, match='preset'):
         registry.call('cytoscape_restyle', {'preset': 'neon'})
+
+
+def test_cluster_selection_takes_a_layout_and_a_recolor_flag(drawn):
+    props = registry.details('cytoscape_cluster_selection')['schema']['properties']
+    assert props['layout']['default'] == 'circles' and props['recolor']['default'] is True
+    with pytest.raises(ValueError, match='circles'):
+        registry.call('cytoscape_cluster_selection', {'layout': 'spiral'})
+    assert not drawn['calls']
 
 
 def test_layout_ops_save_list_and_load_through_the_registry(scored, drawn):

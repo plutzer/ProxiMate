@@ -417,13 +417,19 @@ def cytoscape_move_nodes(positions: dict) -> dict:
     return {'moved': int(ctl.move_nodes(positions, actor=ACTOR))}
 
 
-@register('cytoscape', "Leiden over the selected preys, colored by community and re-packed inside their box.",
-          tags=('cytoscape', 'cluster', 'leiden', 'community', 'repack'))
+@register('cytoscape', "Leiden over the selected preys, colored by community and re-arranged inside their box.",
+          tags=('cytoscape', 'cluster', 'leiden', 'community', 'repack', 'layout'))
 def cytoscape_cluster_selection(resolution: float = 1.0, seed: int = 17,
-                                literature_weight: float = 1.0) -> dict:
+                                literature_weight: float = 1.0, layout: str = 'circles',
+                                recolor: bool = True) -> dict:
     """Only the selected preys move; the community number lands in the node table.
-    Selected baits keep their place and are returned in ``baits_left``."""
-    return _json(ctl.cluster_selection(resolution, seed, literature_weight, actor=ACTOR))
+    ``layout`` is ``circles`` (each community on its own ring, tiled in rows),
+    ``force-directed`` or ``kamada-kawai`` (each community laid out by its own edges
+    inside a disc, the discs placed by the edges between communities).  ``recolor``
+    gives each community of two or more nodes a fill of its own; a community of one
+    node always keeps its color.  Selected baits keep their place and are returned in
+    ``baits_left``."""
+    return _json(ctl.cluster_selection(resolution, seed, literature_weight, layout, recolor, actor=ACTOR))
 
 
 def _drawn_dataset_path():

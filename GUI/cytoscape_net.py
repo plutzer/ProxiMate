@@ -88,6 +88,10 @@ CLUSTER_WEIGHT = (0.5, 1.5)
 MIN_CLUSTER_NODES = 4
 # Centre-to-centre spacing of packed nodes, above the largest node size.
 NODE_SPACING = 70.0
+# How clustered communities are arranged: packed circles, or an igraph layout of each
+# community inside its own disc with the discs placed by the edges between communities.
+CLUSTER_LAYOUTS = {'circles': None, 'force-directed': 'layout_fruchterman_reingold',
+                   'kamada-kawai': 'layout_kamada_kawai'}
 
 ISOFORM = re.compile(r'-\d+$')
 
@@ -544,19 +548,13 @@ def related(nodes, edges, seed, relation, min_saint=None, max_bfdr=None,
                   if i != sid and c and set(c.split(';')) & mine)
 
 
-def cluster(edges, ids, resolution=1.0, seed=17, literature_weight=1.0):
-    """Leiden communities (modularity) over the visible edges among ``ids``.
-
-    Proximity edges weigh their banded log abundance; literature edges
-    ``literature_weight`` times log1p publications; complex edges ``literature_weight``.
-    A weight of zero drops the reference layers.  Returns a Series of community
-    numbers indexed by id, numbered by size, largest first.
-    """
+def _weighted_graph(edges, ids, literature_weight):
+    """An igraph over the visible edges among ``ids`` with edge attribute ``weight``:
+    proximity edges weigh their banded log abundance, literature edges
+    ``literature_weight`` times log1p publications, complex edges ``literature_weight``.
+    A weight of zero drops the edge."""
     import igraph
 
-    ids = list(dict.fromkeys(str(i) for i in ids))
-    if len(ids) < MIN_CLUSTER_NODES:
-        raise ValueError(f"a selection needs at least {MIN_CLUSTER_NODES} nodes to cluster; got {len(ids)}")
     row = {i: k for k, i in enumerate(ids)}
     live = _visible(edges)
     among = live[live['source'].isin(row) & live['target'].isin(row)]
@@ -568,11 +566,24 @@ def cluster(edges, ids, resolution=1.0, seed=17, literature_weight=1.0):
     literature = among['interaction'] == 'literature'
     weight[literature] = literature_weight * np.log1p(among.loc[literature, 'n_publications'].astype(float))
     among, weight = among[weight > 0], weight[weight > 0]
-
-    igraph.set_random_number_generator(random.Random(seed))
     graph = igraph.Graph(n=len(ids), edges=[(row[s], row[t]) for s, t in zip(among['source'], among['target'])])
+    graph.es['weight'] = weight.tolist()
+    return graph
+
+
+def cluster(edges, ids, resolution=1.0, seed=17, literature_weight=1.0):
+    """Leiden communities (modularity) over the visible edges among ``ids``, weighted
+    as in ``_weighted_graph``.  Returns a Series of community numbers indexed by id,
+    numbered by size, largest first."""
+    import igraph
+
+    ids = list(dict.fromkeys(str(i) for i in ids))
+    if len(ids) < MIN_CLUSTER_NODES:
+        raise ValueError(f"a selection needs at least {MIN_CLUSTER_NODES} nodes to cluster; got {len(ids)}")
+    graph = _weighted_graph(edges, ids, literature_weight)
+    igraph.set_random_number_generator(random.Random(seed))
     parts = graph.community_leiden(objective_function='modularity', resolution=resolution,
-                                   weights=weight.tolist() if len(weight) else None, n_iterations=-1)
+                                   weights='weight' if graph.ecount() else None, n_iterations=-1)
     membership = pd.Series(parts.membership, index=ids)
     by_size = sorted(membership.unique(), key=lambda c: (-int((membership == c).sum()), c))
     return membership.map({c: k for k, c in enumerate(by_size)})
@@ -612,6 +623,71 @@ def pack_communities(membership, positions):
         x += 2 * radius + gap
         row_height = max(row_height, 2 * radius)
     return placed
+
+
+def _spread(points, radii, gap, rounds=500):
+    """Push points apart until each pair sits at least ``radii[a] + radii[b] + gap``
+    apart.  Each round a point moves by the mean of its half-overlaps, so a point
+    overlapping many others does not overshoot."""
+    points = np.array(points, float)
+    need = radii[:, None] + radii[None, :] + gap
+    np.fill_diagonal(need, 0.0)
+    for _ in range(rounds):
+        v = points[:, None, :] - points[None, :, :]
+        d = np.maximum(np.linalg.norm(v, axis=2), 1e-6)
+        over = np.clip(need - d, 0.0, None)
+        if not over.any():
+            break
+        hits = np.maximum((over > 0).sum(axis=1), 1)
+        points += ((over / d)[:, :, None] * v).sum(axis=1) / (2 * hits[:, None])
+    return points
+
+
+def _shape(graph, method, seed, spacing=NODE_SPACING):
+    """Centered coordinates of ``graph`` by the igraph layout ``CLUSTER_LAYOUTS[method]``,
+    scaled so the median nearest-neighbor distance is ``spacing`` and spread so no two
+    nodes sit closer than ``NODE_SPACING``.  Kamada-Kawai reads weights as lengths, so
+    it takes their inverse."""
+    import igraph
+    from scipy.spatial import cKDTree
+
+    if graph.vcount() == 1:
+        return np.zeros((1, 2))
+    weights = np.array(graph.es['weight'], float) if graph.ecount() else None
+    if weights is not None and method == 'kamada-kawai':
+        weights = 1 / weights
+    igraph.set_random_number_generator(random.Random(seed))
+    xy = np.array(getattr(graph, CLUSTER_LAYOUTS[method])(weights=weights).coords, float)
+    xy -= xy.mean(axis=0)
+    nearest = cKDTree(xy).query(xy, k=2)[0][:, 1]
+    xy *= spacing / max(np.median(nearest), 1e-6)
+    return _spread(xy, np.full(len(xy), NODE_SPACING / 2), 0.0)
+
+
+def layout_communities(membership, edges, positions, method, seed=17, literature_weight=1.0):
+    """Positions that lay each community out by ``method`` over its own edges inside a
+    disc, the discs placed by the same layout over the summed weight between communities
+    and pushed apart until none overlap.  The result keeps the top-left corner of the
+    box the nodes occupy now.  Returns ``{id: (x, y)}``."""
+    if method not in CLUSTER_LAYOUTS or CLUSTER_LAYOUTS[method] is None:
+        raise ValueError(f"cluster layout must be one of {tuple(CLUSTER_LAYOUTS)}; got {method!r}")
+    ids = list(membership.index)
+    graph = _weighted_graph(edges, ids, literature_weight)
+    communities = sorted(membership.unique())
+    members = [[k for k, i in enumerate(ids) if membership[i] == c] for c in communities]
+    shapes = [_shape(graph.induced_subgraph(m), method, seed) for m in members]
+    radii = np.array([np.linalg.norm(shape, axis=1).max() + NODE_SPACING / 2 for shape in shapes])
+
+    quotient = graph.copy()
+    quotient.contract_vertices([communities.index(membership[i]) for i in ids])
+    quotient.simplify(combine_edges='sum')
+    centres = _spread(_shape(quotient, method, seed, 2 * np.median(radii)), radii, NODE_SPACING / 2)
+
+    xy = np.zeros((len(ids), 2))
+    for m, centre, shape in zip(members, centres, shapes):
+        xy[m] = centre + shape
+    xy += np.array([min(positions[i][0] for i in ids), min(positions[i][1] for i in ids)]) - xy.min(axis=0)
+    return {i: (float(x), float(y)) for i, (x, y) in zip(ids, xy)}
 
 
 def community_fill(membership):
