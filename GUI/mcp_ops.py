@@ -238,13 +238,32 @@ def _network():
             'thresholds': snap['thresholds'], 'style': snap['style'], 'busy': snap['busy']}
 
 
+def _validate_preset(preset):
+    if preset not in cytoscape_net.STYLE_PRESETS:
+        raise ValueError(f"preset must be one of {tuple(cytoscape_net.STYLE_PRESETS)}")
+    return preset
+
+
+@register('read', "The style presets a network can be drawn or restyled with, and the send options each pairs with.",
+          tags=('cytoscape', 'style', 'preset', 'look'))
+def cytoscape_list_style_presets() -> dict:
+    """Each preset's name (the value ``cytoscape_send`` and ``cytoscape_restyle`` take),
+    label, description and ``send_options``: the prey_prey, biogrid_scope,
+    literature_weighted, corum, width_source and layout values the GUI sets when the
+    preset is picked.  Pass them to ``cytoscape_send`` to draw the preset as designed."""
+    return {'presets': [{'name': name, 'label': p['label'], 'description': p['description'],
+                         'send_options': dict(p['send_options'])}
+                        for name, p in cytoscape_net.STYLE_PRESETS.items()]}
+
+
 @register('cytoscape', "Draw a dataset's thresholded network in Cytoscape; replace=true when one is already drawn.",
-          tags=('cytoscape', 'send', 'draw', 'network', 'layout', 'biogrid', 'corum'))
+          tags=('cytoscape', 'send', 'draw', 'network', 'layout', 'biogrid', 'corum', 'preset'))
 def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey: bool = True,
                    label_policy: str = 'all', layout: str = 'force-directed',
                    width_source: str = 'abundance', literature_weighted: bool = False,
                    biogrid_scope: str = 'all', corum: bool = False, corum_min_members: int = 3,
-                   corum_min_fraction: float = 0.5, replace: bool = False) -> dict:
+                   corum_min_fraction: float = 0.5, preset: str = 'abundance_weighted',
+                   replace: bool = False) -> dict:
     """As the Cytoscape tab's Send button, with every option explicit.  Drawing
     removes every ProxiMate network from Cytoscape, with its layout and clustering;
     while one is drawn the call is refused unless ``replace`` is true, so ask the
@@ -253,14 +272,18 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
     ``literature_weighted`` thickens them by publications.  ``corum`` adds complex
     edges (human datasets only) under the two criteria.  ``label_policy`` all, baits
     or none.  ``width_source`` abundance, SaintScore, WD, FoldChange or uniform.
-    ``layout`` is a Cytoscape layout name (force-directed, grid, circular, ...).  The
-    thresholds and options are recorded in the dataset's run.json; the GUI's own
-    sliders keep the user's values."""
+    ``layout`` is a Cytoscape layout name (force-directed, grid, circular, ...).
+    ``preset`` is the look: abundance_weighted or highlight_knowns (red border on preys
+    whose bait interaction is BioGRID-multivalidated); ``cytoscape_list_style_presets``
+    gives the send options each preset is designed for.  The thresholds and options
+    are recorded in the dataset's run.json; the GUI's own sliders keep the user's
+    values."""
     drawn = ctl.snapshot()['dataset']
     if drawn is not None and not replace:
         raise ValueError(f"a network for dataset {drawn!r} is drawn; pass replace=true to remove "
                          "it and draw this one")
     thresholds = backend.validate_thresholds(thresholds)
+    _validate_preset(preset)
     if width_source not in cytoscape_net.EDGE_WIDTH_SOURCES:
         raise ValueError(f"width_source must be one of {cytoscape_net.EDGE_WIDTH_SOURCES}")
     if label_policy not in cytoscape_net.LABEL_POLICIES:
@@ -283,7 +306,7 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
               'label_policy': label_policy, 'layout': layout, 'width_source': width_source,
               'literature_weighted': literature_weighted, 'biogrid_scope': biogrid_scope,
               'corum': corum, 'corum_min_members': corum_min_members,
-              'corum_min_fraction': corum_min_fraction, 'actor': ACTOR}
+              'corum_min_fraction': corum_min_fraction, 'preset': preset, 'actor': ACTOR}
     with provenance.stage(dataset_path, 'cytoscape', entrypoint='mcp.cytoscape_send',
                           params=params) as record:
         record.add_input(scores_path, role='scores')
@@ -292,7 +315,7 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
                  width_source=width_source, literature_weighted=literature_weighted,
                  biogrid_scope=biogrid_scope, corum_path=corum_path,
                  corum_min_members=int(corum_min_members),
-                 corum_min_fraction=float(corum_min_fraction), actor=ACTOR)
+                 corum_min_fraction=float(corum_min_fraction), preset=preset, actor=ACTOR)
         network = _network()
         record.metric('n_nodes', network['n_nodes'])
         record.metric('n_edges', network['n_edges'])
@@ -308,13 +331,19 @@ def cytoscape_apply_thresholds(thresholds: dict) -> dict:
     return {'hidden': int(hidden), 'network': _json(_network())}
 
 
-@register('cytoscape', "Restyle the drawn network: edge width source, BioGRID scope, publication weighting.",
-          tags=('cytoscape', 'style', 'edge width', 'biogrid'))
-def cytoscape_restyle(width_source: str = 'abundance', literature_weighted: bool = False,
-                      biogrid_scope: str = 'all') -> dict:
-    """A style update in place; nothing moves.  Returns how many edges changed."""
-    changed = ctl.restyle_edges(width_source, literature_weighted, biogrid_scope, actor=ACTOR)
-    return {'changed': int(changed)}
+@register('cytoscape', "Restyle the drawn network in place: style preset, edge width source, BioGRID scope, publication weighting.",
+          tags=('cytoscape', 'style', 'preset', 'edge width', 'biogrid'))
+def cytoscape_restyle(preset: str = None, width_source: str = 'abundance',
+                      literature_weighted: bool = False, biogrid_scope: str = 'all') -> dict:
+    """A style update in place; nothing moves and clustered nodes keep their community
+    colors.  ``preset`` defaults to the drawn one (see ``cytoscape_list_style_presets``).
+    Adding prey-prey or complex edges needs ``cytoscape_send``.  Returns how many edges
+    changed and the network's style."""
+    if preset is None:
+        preset = ctl.snapshot()['style']['preset']
+    changed = ctl.restyle(_validate_preset(preset), width_source, literature_weighted,
+                          biogrid_scope, actor=ACTOR)
+    return {'changed': int(changed), 'network': _json(_network())}
 
 
 @register('read', "The nodes selected in Cytoscape with the scores of their edges.",

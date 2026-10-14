@@ -11,7 +11,18 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+### Added
+- A *Style preset* select on the Cytoscape tab. *Abundance/literature weighted* is the
+  existing look; *Highlight knowns* draws black ellipse baits, grey rounded preys with a
+  red border on preys whose bait interaction is BioGRID-multivalidated, and grey edges of
+  one width with black complex edges. Picking a preset sets the send options it is
+  designed for, and *Apply Style* (formerly *Apply Edge Style*) switches the drawn network
+  between presets in place. The MCP `cytoscape_send` and `cytoscape_restyle` operations
+  take `preset`, and `cytoscape_list_style_presets` lists the presets with their send
+  options.
+
 ### Changed
+- BioGRID prey-prey edges are weighted by publication count by default.
 - The Cytoscape tab's *Sync Positions* button is replaced by *Save Layout* and *Load
   Layout*: a layout is a named `id,x,y` CSV under `<dataset>/cytoscape/layouts/`, saved by
   merging over an earlier save of that name and loaded onto whichever of its nodes are

@@ -43,24 +43,22 @@ STATE = {
     'nodes': None,        # DataFrame as drawn
     'edges': None,        # DataFrame as drawn, 'visible' kept current
     'thresholds': None,   # the thresholds the edges were drawn at
-    'style': None,        # {'width_source', 'literature_weighted', 'biogrid_scope'} as drawn
+    'style': None,        # {'preset', 'width_source', 'literature_weighted', 'biogrid_scope'} as drawn
     'busy': '',
 }
 
 PASSTHROUGH = [
-    ('NODE_LABEL', 'display_label'), ('NODE_SHAPE', 'shape'), ('NODE_SIZE', 'size'),
+    ('NODE_LABEL', 'display_label'), ('NODE_SHAPE', 'shape'),
+    ('NODE_WIDTH', 'node_width'), ('NODE_HEIGHT', 'node_height'),
     ('NODE_FILL_COLOR', 'fill'), ('NODE_BORDER_WIDTH', 'border'),
     ('NODE_BORDER_PAINT', 'border_color'), ('NODE_LABEL_FONT_SIZE', 'label_size'),
-    ('NODE_TRANSPARENCY', 'node_alpha'),
+    ('NODE_LABEL_COLOR', 'label_color'), ('NODE_TRANSPARENCY', 'node_alpha'),
     ('EDGE_WIDTH', 'width'), ('EDGE_STROKE_UNSELECTED_PAINT', 'color'),
     ('EDGE_TRANSPARENCY', 'alpha'), ('EDGE_VISIBLE', 'visible'),
 ]
-STYLE_DEFAULTS = {
-    'NODE_SHAPE': 'ELLIPSE', 'NODE_SIZE': net.NODE_SIZE['prey'],
-    'NODE_FILL_COLOR': net.NODE_FILL['prey'], 'NODE_BORDER_WIDTH': net.NODE_BORDER['prey'],
-    'NODE_BORDER_PAINT': net.NODE_BORDER_COLOR, 'NODE_LABEL_FONT_SIZE': net.LABEL_SIZE['prey'],
-    'NODE_LABEL_COLOR': '#1F2933', 'EDGE_WIDTH': 2.0, 'NETWORK_BACKGROUND_PAINT': '#FFFFFF',
-}
+# Every node and edge carries every look column, so the style's own defaults only cover
+# what no column maps.
+STYLE_DEFAULTS = {'EDGE_TARGET_ARROW_SHAPE': 'NONE', 'NETWORK_BACKGROUND_PAINT': '#FFFFFF'}
 
 VISIBILITY_ACTIONS = ('hide_selected', 'show_selected', 'hide_unselected', 'show_all')
 
@@ -129,7 +127,7 @@ def current_network():
 def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_path=None,
          label_policy='all', layout='force-directed', width_source='abundance',
          literature_weighted=False, biogrid_scope='all', corum_path=None,
-         corum_min_members=3, corum_min_fraction=0.5, actor='gui'):
+         corum_min_members=3, corum_min_fraction=0.5, preset='abundance_weighted', actor='gui'):
     """Build the thresholded network and draw it, replacing every ProxiMate network
     in Cytoscape.  Recreating the style leaves any earlier ProxiMate network on
     Cytoscape's default style, so none may survive a draw."""
@@ -138,11 +136,11 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
                              biogrid_path=biogrid_path, label_policy=label_policy,
                              width_source=width_source, literature_weighted=literature_weighted,
                              corum_path=corum_path, corum_min_members=corum_min_members,
-                             corum_min_fraction=corum_min_fraction)
+                             corum_min_fraction=corum_min_fraction, preset=preset)
     edges['visible'] = net.edge_visibility(edges, thresholds, biogrid_scope).to_numpy()
     nodes['node_alpha'] = net.node_alpha(nodes, edges).to_numpy()
-    style = {'width_source': width_source, 'literature_weighted': bool(literature_weighted),
-             'biogrid_scope': biogrid_scope}
+    style = {'preset': preset, 'width_source': width_source,
+             'literature_weighted': bool(literature_weighted), 'biogrid_scope': biogrid_scope}
     title = cy.TITLE_PREFIX + dataset
     with _busy(f'drawing {title}'), STATE['cy_lock']:
         for old in cy.proximate_networks():
@@ -160,21 +158,31 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
     return snapshot()
 
 
-def restyle_edges(width_source, literature_weighted, biogrid_scope, actor='gui'):
-    """Recompute edge widths and the BioGRID scope on the drawn network, in place."""
+def restyle(preset, width_source, literature_weighted, biogrid_scope, actor='gui'):
+    """Apply a style preset, the edge widths and the BioGRID scope to the drawn network
+    in place: a column update, so nothing moves.  Clustered nodes keep their community
+    fill.  Returns the number of edges whose look or visibility changed."""
     suid = _net()
-    edges = STATE['edges']
-    width = net.edge_widths(edges, width_source, literature_weighted)
+    nodes, edges = STATE['nodes'], STATE['edges']
+    styled_nodes, styled_edges = net.style_tables(nodes.copy(), edges.copy(), preset,
+                                                  width_source, literature_weighted)
     want = net.edge_visibility(edges, STATE['thresholds'], biogrid_scope)
-    changed = edges.index[(want != edges['visible'].astype(bool)) | (width != edges['width'])]
+    changed = edges.index[(want != edges['visible'].astype(bool))
+                          | (styled_edges[net.EDGE_LOOK] != edges[net.EDGE_LOOK]).any(axis=1)]
     with STATE['lock']:
-        edges['width'] = width.to_numpy()
-    _push_visibility(suid, want, changed, extra_columns=['width'])
-    with _mutate('restyle_edges', f'width by {width_source}, literature '
-                 f'{"weighted" if literature_weighted else "unweighted"}, BioGRID {biogrid_scope}: '
-                 f'{len(changed)} edge(s) changed', actor=actor):
-        STATE['style'] = {'width_source': width_source, 'literature_weighted': bool(literature_weighted),
-                          'biogrid_scope': biogrid_scope}
+        edges[net.EDGE_LOOK] = styled_edges[net.EDGE_LOOK]
+        if 'community' in nodes.columns:
+            clustered = nodes['community'].notna()
+            styled_nodes.loc[clustered, 'fill'] = nodes.loc[clustered, 'fill']
+        nodes[net.NODE_LOOK] = styled_nodes[net.NODE_LOOK]
+    _push_visibility(suid, want, changed, extra_columns=net.EDGE_LOOK)
+    with STATE['cy_lock']:
+        cy.update_node_columns(suid, nodes[['id', *net.NODE_LOOK]].rename(columns={'id': 'name'}))
+    with _mutate('restyle', f'{net.STYLE_PRESETS[preset]["label"]}, width by {width_source}, '
+                 f'literature {"weighted" if literature_weighted else "unweighted"}, '
+                 f'BioGRID {biogrid_scope}: {len(changed)} edge(s) changed', actor=actor):
+        STATE['style'] = {'preset': preset, 'width_source': width_source,
+                          'literature_weighted': bool(literature_weighted), 'biogrid_scope': biogrid_scope}
     return len(changed)
 
 

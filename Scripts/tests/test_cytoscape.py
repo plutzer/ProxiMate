@@ -34,16 +34,17 @@ def no_bypass(monkeypatch):
 
 
 def _row(bait, bait_acc, prey, gene, saint=0.9, bfdr=0.01, wd=2.0, wdfdr=0.01,
-         intensity=1e6, known=False):
+         intensity=1e6, known=False, mv=False):
     return {'Experiment.ID': bait, 'Bait_Accession': bait_acc, 'First_ID': prey,
             'First_Prey_Gene': gene, 'SaintScore': saint, 'BFDR': bfdr, 'WD': wd,
-            'WDFDR': wdfdr, 'FoldChange': 3.0, 'AvgIntensity': intensity, 'In.BioGRID': known}
+            'WDFDR': wdfdr, 'FoldChange': 3.0, 'AvgIntensity': intensity, 'In.BioGRID': known,
+            'Multivalidated': mv}
 
 
 @pytest.fixture
 def scores():
     return pd.DataFrame([
-        _row('BaitA', 'PA', 'P1', 'G1', intensity=1e5, known=True),
+        _row('BaitA', 'PA', 'P1', 'G1', intensity=1e5, known=True, mv=True),
         _row('BaitA', 'PA', 'P2', 'G2', intensity=1e7),
         _row('BaitA', 'PA', 'P3', 'G3', saint=0.2),          # fails SaintScore
         _row('BaitB', 'PB', 'P2', 'G2', intensity=1e6),
@@ -130,10 +131,59 @@ def test_label_policies(scores, policy, expected):
 
 
 @pytest.mark.parametrize('kwargs', [
-    {'label_policy': 'some'}, {'width_source': 'Entropy'}])
+    {'label_policy': 'some'}, {'width_source': 'Entropy'}, {'preset': 'neon'}])
 def test_an_unknown_option_raises(scores, kwargs):
     with pytest.raises(ValueError):
         cn.build(scores, PASSING, prey_prey=False, **kwargs)
+
+
+# --- style presets ------------------------------------------------------------------------
+
+def test_the_default_preset_keeps_role_encodings(scores):
+    nodes, edges = cn.build(scores, PASSING, prey_prey=False)
+
+    by_id = nodes.set_index('id')
+    assert by_id.loc['BaitA', 'shape'] == 'DIAMOND' and by_id.loc['P1', 'shape'] == 'ELLIPSE'
+    assert by_id.loc['BaitA', 'fill'] == '#E69F00' and by_id.loc['P1', 'fill'] == '#B8C4D6'
+    assert by_id.loc['P1', 'node_width'] == by_id.loc['P1', 'node_height'] == 35.0
+    assert by_id.loc['P1', 'border'] == 1.0            # no known marker in this preset
+    assert set(edges['color']) == {'#0072B2'}
+
+
+def test_highlight_knowns_reproduces_the_manuscript_look(scores, tmp_path):
+    biogrid = _biogrid(tmp_path, [('P1', 'P2', 2, True)])
+
+    nodes, edges = cn.build(scores, PASSING, biogrid_path=biogrid, preset='highlight_knowns',
+                            width_source='uniform')
+
+    by_id = nodes.set_index('id')
+    assert by_id.loc['P1', 'shape'] == 'ROUND_RECTANGLE'
+    assert (by_id.loc['P1', 'node_width'], by_id.loc['P1', 'node_height']) == (60.0, 20.0)
+    assert by_id.loc['BaitA', 'shape'] == 'ELLIPSE'
+    assert (by_id.loc['BaitA', 'node_width'], by_id.loc['BaitA', 'node_height']) == (100.0, 60.0)
+    assert by_id.loc['BaitA', 'label_color'] == '#FFFFFF' and by_id.loc['P1', 'label_color'] == '#000000'
+    # P1 is multivalidated with BaitA, P2 is not known with either bait
+    assert by_id.loc['P1', 'border'] == 4.0 and by_id.loc['P1', 'border_color'] == '#B30000'
+    assert by_id.loc['P2', 'border'] == 0.0 and by_id.loc['BaitA', 'border'] == 0.0
+    by_kind = edges.groupby('interaction')['color'].agg(set)
+    assert by_kind['proximity'] == {'#888888'} and by_kind['literature'] == {'#CCCCCC'}
+    assert set(edges['width']) == {2.5}
+
+
+def test_highlight_knowns_needs_the_multivalidated_column(scores):
+    with pytest.raises(KeyError, match='Multivalidated'):
+        cn.build(scores.drop(columns=['Multivalidated']), PASSING, prey_prey=False,
+                 preset='highlight_knowns')
+
+
+def test_style_tables_restyles_drawn_tables_in_place(scores):
+    nodes, edges = cn.build(scores, PASSING, prey_prey=False)
+
+    cn.style_tables(nodes, edges, 'highlight_knowns', width_source='uniform')
+
+    assert set(nodes['shape']) == {'ELLIPSE', 'ROUND_RECTANGLE'}
+    assert set(edges['color']) == {'#888888'} and set(edges['width']) == {2.5}
+    assert set(cn.NODE_LOOK) <= set(nodes.columns) and set(cn.EDGE_LOOK) <= set(edges.columns)
 
 
 # =============================================================================================
@@ -229,11 +279,12 @@ def test_literature_edges_thicken_with_publications_only_when_weighted(scores, t
 
     _, edges = cn.build(scores, PASSING, biogrid_path=biogrid)
     lit = edges[edges['interaction'] == 'literature']
-    assert set(lit['width']) == {cn.LITERATURE_WIDTH[0]}
+    band = cn.STYLE_PRESETS['abundance_weighted']['literature_width']
+    assert set(lit['width']) == {band[0]}
 
     _, edges = cn.build(scores, PASSING, biogrid_path=biogrid, literature_weighted=True)
     by_pair = edges[edges['interaction'] == 'literature'].set_index(['source', 'target'])['width']
-    assert by_pair[('P2', 'P4')] < by_pair[('P1', 'P2')] <= cn.LITERATURE_WIDTH[1]
+    assert by_pair[('P2', 'P4')] < by_pair[('P1', 'P2')] <= band[1]
 
 
 def test_the_multivalidated_scope_hides_single_evidence_pairs(scores, tmp_path):
@@ -479,7 +530,8 @@ def controlled(scores, tmp_path, cytoscape):
     nodes, edges = cn.build(scores, PASSING, biogrid_path=biogrid)
     ctl.STATE.update(dataset='d', title='ProxiMate: d', net_suid=1, nodes=nodes, edges=edges,
                      thresholds=dict(PASSING),
-                     style={'width_source': 'abundance', 'literature_weighted': False, 'biogrid_scope': 'all'})
+                     style={'preset': 'abundance_weighted', 'width_source': 'abundance',
+                            'literature_weighted': False, 'biogrid_scope': 'all'})
     yield nodes, edges
     ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
                      thresholds=None, style=None)
@@ -490,20 +542,41 @@ def _last(calls, kind):
 
 
 def test_restyling_pushes_width_and_visibility_without_moving_anything(controlled, cytoscape):
-    changed = ctl.restyle_edges('uniform', False, 'multivalidated')
+    changed = ctl.restyle('abundance_weighted', 'uniform', False, 'multivalidated')
 
     frame = _last(cytoscape['calls'], 'edges')[0]
     assert changed == len(frame) > 0
-    assert set(frame.columns) == {'name', 'visible', 'width'}
+    assert set(frame.columns) == {'name', 'visible', 'color', 'alpha', 'width'}
     assert not frame.loc[frame['name'] == 'P1 (literature) P2', 'visible'].item()
     assert ctl.STATE['edges']['width'][ctl.STATE['edges']['interaction'] == 'proximity'].nunique() == 1
-    assert ctl.snapshot()['style'] == {'width_source': 'uniform', 'literature_weighted': False,
-                                       'biogrid_scope': 'multivalidated'}
+    nodes = _last(cytoscape['calls'], 'nodes')[0]
+    assert set(nodes.columns) == {'name', *cn.NODE_LOOK} and len(nodes) == len(ctl.STATE['nodes'])
+    assert ctl.snapshot()['style'] == {'preset': 'abundance_weighted', 'width_source': 'uniform',
+                                       'literature_weighted': False, 'biogrid_scope': 'multivalidated'}
+    assert not any(name == 'positions' for name, *_ in cytoscape['calls'])
+
+
+def test_restyle_switches_the_preset_in_place_and_keeps_community_fills(controlled, cytoscape):
+    nodes = ctl.STATE['nodes']
+    nodes['community'] = np.nan
+    nodes.loc[nodes['id'] == 'P1', ['community', 'fill']] = [0, cn.COMMUNITY_FILL[0]]
+
+    ctl.restyle('highlight_knowns', 'uniform', False, 'all')
+
+    by_id = ctl.STATE['nodes'].set_index('id')
+    assert by_id.loc['P2', 'shape'] == 'ROUND_RECTANGLE' and by_id.loc['P2', 'fill'] == '#A6A6A6'
+    assert by_id.loc['P1', 'fill'] == cn.COMMUNITY_FILL[0]
+    assert by_id.loc['P1', 'border'] == 4.0           # P1 is multivalidated with BaitA
+    pushed = _last(cytoscape['calls'], 'nodes')[0].set_index('name')
+    assert pushed.loc['P1', 'fill'] == cn.COMMUNITY_FILL[0] and pushed.loc['BaitA', 'shape'] == 'ELLIPSE'
+    assert set(ctl.STATE['edges']['color']) == {'#888888', '#CCCCCC'}
+    assert ctl.snapshot()['style']['preset'] == 'highlight_knowns'
+    assert ctl.snapshot()['log'][-1]['op'] == 'restyle'
     assert not any(name == 'positions' for name, *_ in cytoscape['calls'])
 
 
 def test_rethresholding_keeps_the_drawn_biogrid_scope(controlled, cytoscape):
-    ctl.restyle_edges('abundance', False, 'multivalidated')
+    ctl.restyle('abundance_weighted', 'abundance', False, 'multivalidated')
 
     ctl.apply_thresholds(PASSING)
 

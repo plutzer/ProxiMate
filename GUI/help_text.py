@@ -90,7 +90,8 @@ TOOLTIPS = {
     "cy_corum": "Draw black edges between drawn proteins that are subunits of one CORUM complex the screen recovered. Human datasets only; the two criteria below decide which complexes count.",  # tooltip
     "cy_corum_min_members": "A complex draws only when at least this many of its subunits are in the network.",  # tooltip
     "cy_corum_min_fraction": "A complex draws only when one bait, counted with its preys, covers at least this share of the complex's full membership. 0.5 means half the subunits.",  # tooltip
-    "cy_restyle": "Apply the edge width, BioGRID scope and publication weighting to the drawn network as a style update. Nothing moves; complex criteria need a new send.",  # tooltip
+    "cy_style_preset": "A base look for the network. Picking one also sets the send options it is designed for (edges, width, layout); Send draws with both, Apply Style recolors the drawn network in place.",  # tooltip
+    "cy_restyle": "Apply the style preset, edge width, BioGRID scope and publication weighting to the drawn network as a style update. Nothing moves and clustered nodes keep their colors; adding prey-prey or complex edges needs a new send.",  # tooltip
     "cy_select_loners": "With exactly one bait selected in Cytoscape, select it with the preys whose only visible neighbor of any kind it is, so the group drags as one.",  # tooltip
     "cy_select_satellites": "With exactly one bait selected, select it with its own preys and the two-bait preys that currently sit nearer to it than to their other bait.",  # tooltip
     "cy_rel_seed": "The bait or protein the relation starts from, by name or UniProt accession, as drawn in Cytoscape.",  # tooltip

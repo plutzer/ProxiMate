@@ -34,6 +34,7 @@ import backend
 import dataset_store
 import mcp_registry
 import cytoscape_ctl
+from cytoscape_net import STYLE_PRESETS
 import log_config
 import provenance
 from log_config import get_logger
@@ -485,6 +486,8 @@ app_ui = ui.page_navbar(
                                TOOLTIPS["preset_relaxed"]),
                     class_="d-flex gap-2 mb-3",
                 ),
+                ui.input_select("cy_style_preset", tip("Style preset", "cy_style_preset"),
+                                choices={key: preset["label"] for key, preset in STYLE_PRESETS.items()}),
                 ui.input_select("cy_labels", tip("Labels", "cy_labels"),
                                 choices={"all": "All nodes", "baits": "Baits only", "none": "None"}),
                 ui.input_select("cy_layout", tip("Layout", "cy_layout"),
@@ -499,7 +502,7 @@ app_ui = ui.page_navbar(
                 ui.input_select("cy_biogrid_scope", tip("BioGRID edges", "cy_biogrid_scope"),
                                 choices={"all": "All pairs", "multivalidated": "Multivalidated only"}),
                 ui.input_checkbox("cy_lit_weighted", tip("Weight BioGRID edges by publications", "cy_lit_weighted"),
-                                  value=False),
+                                  value=True),
                 ui.p("Complexes", style="font-weight: 500; margin-bottom: 5px;"),
                 ui.input_checkbox("cy_corum", tip("CORUM complex edges", "cy_corum"), value=False),
                 ui.layout_columns(
@@ -514,7 +517,7 @@ app_ui = ui.page_navbar(
                                TOOLTIPS["cy_send"]),
                     ui.tooltip(ui.input_action_button("cy_rethreshold", "Re-apply Thresholds", class_="btn-outline-secondary"),
                                TOOLTIPS["cy_rethreshold"]),
-                    ui.tooltip(ui.input_action_button("cy_restyle", "Apply Edge Style", class_="btn-outline-secondary"),
+                    ui.tooltip(ui.input_action_button("cy_restyle", "Apply Style", class_="btn-outline-secondary"),
                                TOOLTIPS["cy_restyle"]),
                     class_="d-flex flex-wrap gap-2 mt-2",
                 ),
@@ -2418,6 +2421,18 @@ def server(input: Inputs, output: Outputs, session: Session):
         _make_preset(_values, _key)
 
     @reactive.effect
+    @reactive.event(input.cy_style_preset, ignore_init=True)
+    def apply_style_preset_options():
+        """A preset brings the send options it is designed for; the user can still change them."""
+        opts = STYLE_PRESETS[input.cy_style_preset.get()]["send_options"]
+        ui.update_select("cy_edge_width", selected=opts["width_source"])
+        ui.update_checkbox("cy_prey_prey", value=opts["prey_prey"])
+        ui.update_select("cy_biogrid_scope", selected=opts["biogrid_scope"])
+        ui.update_checkbox("cy_lit_weighted", value=opts["literature_weighted"])
+        ui.update_checkbox("cy_corum", value=opts["corum"])
+        ui.update_select("cy_layout", selected=opts["layout"])
+
+    @reactive.effect
     @reactive.event(input.cy_probe)
     def cy_probe():
         cy_health.set(cytoscape_ctl.health())
@@ -2474,7 +2489,8 @@ def server(input: Inputs, output: Outputs, session: Session):
                        literature_weighted=input.cy_lit_weighted.get(),
                        biogrid_scope=input.cy_biogrid_scope.get(), corum_path=corum_path,
                        corum_min_members=int(input.cy_corum_min_members.get() or 3),
-                       corum_min_fraction=float(input.cy_corum_min_fraction.get() or 0.0))
+                       corum_min_fraction=float(input.cy_corum_min_fraction.get() or 0.0),
+                       preset=input.cy_style_preset.get())
         if snap:
             notify(f"Drew {snap['n_nodes']} nodes and {snap['n_edges']} edges in Cytoscape.")
 
@@ -2488,11 +2504,11 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.cy_restyle)
     def cy_restyle():
-        changed = cy_call("apply the edge style", cytoscape_ctl.restyle_edges,
+        changed = cy_call("apply the style", cytoscape_ctl.restyle, input.cy_style_preset.get(),
                           input.cy_edge_width.get(), input.cy_lit_weighted.get(),
                           input.cy_biogrid_scope.get())
         if changed is not None:
-            notify(f"Edge style applied: {changed} edge(s) changed.")
+            notify(f"Style applied: {changed} edge(s) changed.")
 
     def cy_show_chosen(ids):
         """Put a fresh selection in the table so the tab shows what Cytoscape now has."""

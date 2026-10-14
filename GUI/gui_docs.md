@@ -66,13 +66,19 @@ only B, or both, and the gene lists behind each region are shown as text to copy
 ## Cytoscape
 
 Sends the interactions passing a threshold set into a Cytoscape desktop on the same
-machine and keeps a link to it. The send options choose which baits to draw, whether to
-add grey prey-prey edges from BioGRID (optionally only multivalidated pairs, thickened by
-publication count), black CORUM complex edges for human data, node label policy, the
-layout algorithm and what edge width encodes. Each send replaces the previous ProxiMate
-network. With a network drawn: *Apply Thresholds* hides edges that fail tighter
-thresholds without redrawing, so a hand layout survives (loosening needs a new send);
-*Apply Edge Style* restyles in place; *Read Selection* lists the selected nodes with the
+machine and keeps a link to it. The *Style preset* select picks the look: *Abundance/
+literature weighted* draws orange diamond baits and blue-grey preys with bait-prey width
+following abundance and BioGRID edges thickened by publications; *Highlight knowns* draws
+black ellipse baits and grey rounded preys, puts a red border on preys whose interaction
+with a drawn bait is BioGRID-multivalidated, and uses grey edges of one width with black
+complex edges. Picking a preset also sets the send options it is designed for, which the
+user can still change: which prey-prey BioGRID edges to add (optionally only multivalidated
+pairs, thickened by publication count), CORUM complex edges for human data, what edge width
+encodes and the layout algorithm. The other send options choose which baits to draw and the
+node label policy. Each send replaces the previous ProxiMate network. With a network drawn:
+*Apply Thresholds* hides edges that fail tighter thresholds without redrawing, so a hand
+layout survives (loosening needs a new send); *Apply Style* applies the preset and edge
+options in place; *Read Selection* lists the selected nodes with the
 scores of their edges; the hide/show buttons act on edges around the selection; the
 selection tools pick a bait's loners or satellites or the nodes a relation names for a
 seed; *Cluster and Repack* runs Leiden over the selected preys and re-packs them by
