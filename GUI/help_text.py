@@ -79,7 +79,9 @@ TOOLTIPS = {
     "cy_show_selected": "Show every edge touching a node selected in Cytoscape.",  # tooltip
     "cy_hide_unselected": "Hide every edge that does not touch a selected node, leaving the selection's neighborhood.",  # tooltip
     "cy_show_all": "Show every edge again.",  # tooltip
-    "cy_sync": "Record where you dragged the nodes, so the positions are kept with the network.",  # tooltip
+    "cy_layout_name": "A layout saved for the drawn dataset to load, or a new name to save under. Letters, digits and underscores.",  # tooltip
+    "cy_save_layout": "Write where every drawn node sits to the named layout in the dataset's cytoscape/layouts folder. Saving again updates the drawn nodes and keeps rows for nodes not drawn, so one layout can cover several bait subsets.",  # tooltip
+    "cy_load_layout": "Move the drawn nodes the layout names back to their saved positions and fit the view. Nodes the layout does not name stay where they are.",  # tooltip
     "cy_export": "Save the drawn network as a PNG in the dataset's cytoscape folder under the output directory.",  # tooltip
     "cy_unlock": "Release a view that no longer pans or zooms with the mouse.",  # tooltip
     "cy_edge_width": "What a bait-prey edge's width encodes. Abundance, WD and fold change are banded on a log scale; SAINT is linear from 0 to 1; Uniform draws every edge alike.",  # tooltip

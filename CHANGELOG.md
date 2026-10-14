@@ -11,6 +11,13 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+### Changed
+- The Cytoscape tab's *Sync Positions* button is replaced by *Save Layout* and *Load
+  Layout*: a layout is a named `id,x,y` CSV under `<dataset>/cytoscape/layouts/`, saved by
+  merging over an earlier save of that name and loaded onto whichever of its nodes are
+  drawn, leaving the rest in place. The MCP server gains `cytoscape_save_layout`,
+  `cytoscape_load_layout` and `cytoscape_list_layouts`.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added

@@ -465,6 +465,7 @@ def cytoscape(monkeypatch):
     monkeypatch.setattr(ctl.cy, 'set_positions', lambda net, pos: calls.append(('positions', dict(pos))))
     monkeypatch.setattr(ctl.cy, 'update_edge_columns', lambda net, frame: calls.append(('edges', frame)))
     monkeypatch.setattr(ctl.cy, 'update_node_columns', lambda net, frame: calls.append(('nodes', frame)))
+    monkeypatch.setattr(ctl.p4c, 'fit_content', lambda **k: calls.append(('fit',)))
     stub['calls'] = calls
     return stub
 
@@ -742,3 +743,93 @@ def test_move_nodes_writes_positions_and_keeps_them_in_the_state(controlled, cyt
     assert nodes.set_index('id').loc['P1', ['x', 'y']].tolist() == [10.0, 20.0]
     with pytest.raises(ValueError):
         ctl.move_nodes({'P1': [1]})
+
+
+# =============================================================================================
+# layouts: the per-dataset position files
+# =============================================================================================
+
+def test_a_layout_round_trips_and_a_numeric_id_stays_a_string(tmp_path):
+    path = ctl.layout_path(str(tmp_path), 'hand')
+    assert path == str(tmp_path / 'cytoscape' / 'layouts' / 'hand.csv')
+    (tmp_path / 'cytoscape' / 'layouts').mkdir(parents=True)
+
+    ctl.write_layout(path, {'P1': (1.5, -2.0), '123': (0.0, 4.0), 'NA': (3.0, 3.0)})
+
+    assert open(path).readline().strip() == 'id,x,y'
+    assert ctl.read_layout(path) == {'123': (0.0, 4.0), 'NA': (3.0, 3.0), 'P1': (1.5, -2.0)}
+
+
+@pytest.mark.parametrize('text', [
+    'id,x,y\nP1,1,2\nP1,3,4\n',      # repeated id
+    'id,x,y\n,1,2\n',                # blank id
+    'id,y\nP1,2\n',                  # missing column
+    'id,x,y\nP1,abc,2\n',            # non-numeric coordinate
+    'id,x,y\nP1,,2\n',               # blank coordinate
+])
+def test_a_malformed_layout_file_raises(tmp_path, text):
+    path = tmp_path / 'bad.csv'
+    path.write_text(text)
+    with pytest.raises(ValueError):
+        ctl.read_layout(str(path))
+
+
+@pytest.mark.parametrize('name', ['', 'a b', '../x', 'x.csv'])
+def test_a_layout_name_is_letters_digits_and_underscores(tmp_path, name):
+    with pytest.raises(ValueError, match='layout name'):
+        ctl.layout_path(str(tmp_path), name)
+
+
+def test_saved_layouts_lists_the_folder_sorted_or_nothing(tmp_path):
+    assert ctl.saved_layouts(str(tmp_path)) == []
+    folder = tmp_path / 'cytoscape' / 'layouts'
+    folder.mkdir(parents=True)
+    for name in ('zeta.csv', 'alpha.csv', 'notes.txt'):
+        (folder / name).write_text('id,x,y\n')
+    assert ctl.saved_layouts(str(tmp_path)) == ['alpha', 'zeta']
+
+
+def test_save_layout_writes_what_cytoscape_reports_and_accumulates(controlled, cytoscape, tmp_path):
+    nodes, _ = controlled
+    cytoscape['positions'] = {i: (10.0 * k, 1.0) for k, i in enumerate(nodes['id'])}
+
+    result = ctl.save_layout(str(tmp_path), 'hand')
+
+    assert result == {'path': ctl.layout_path(str(tmp_path), 'hand'), 'written': len(nodes), 'n_rows': len(nodes)}
+    assert ctl.read_layout(result['path']) == cytoscape['positions']
+    assert ctl.saved_layouts(str(tmp_path)) == ['hand']
+
+    cytoscape['positions'] = {'P1': (-5.0, -5.0), 'P2': (-6.0, -6.0)}   # a smaller later network
+    result = ctl.save_layout(str(tmp_path), 'hand', actor='mcp')
+
+    saved = ctl.read_layout(result['path'])
+    assert result['written'] == 2 and result['n_rows'] == len(saved) == len(nodes)
+    assert saved['P1'] == (-5.0, -5.0) and saved['BaitA'] == (0.0, 1.0)
+    assert ctl.snapshot()['log'][-1]['op'] == 'save_layout' and ctl.snapshot()['log'][-1]['actor'] == 'mcp'
+
+
+def test_load_layout_places_only_the_drawn_nodes_it_names(controlled, cytoscape, tmp_path):
+    nodes, _ = controlled
+    path = ctl.layout_path(str(tmp_path), 'hand')
+    (tmp_path / 'cytoscape' / 'layouts').mkdir(parents=True)
+    ctl.write_layout(path, {'P1': (1.0, 2.0), 'P2': (3.0, 4.0), 'ZZ': (9.0, 9.0)})
+
+    result = ctl.load_layout(str(tmp_path), 'hand')
+
+    assert result == {'moved': 2, 'unplaced': len(nodes) - 2, 'not_drawn': 1}
+    assert cytoscape['calls'][-2:] == [('positions', {'P1': (1.0, 2.0), 'P2': (3.0, 4.0)}), ('fit',)]
+    assert not any(name == 'nodes' for name, *_ in cytoscape['calls'])
+    assert ctl.snapshot()['log'][-1]['op'] == 'load_layout'
+
+
+def test_load_layout_refuses_absent_files_and_unmatched_layouts(controlled, cytoscape, tmp_path):
+    (tmp_path / 'cytoscape' / 'layouts').mkdir(parents=True)
+    ctl.write_layout(ctl.layout_path(str(tmp_path), 'other'), {'ZZ': (9.0, 9.0)})
+
+    with pytest.raises(FileNotFoundError, match="no layout 'hand'; saved: other"):
+        ctl.load_layout(str(tmp_path), 'hand')
+    with pytest.raises(ValueError, match='none of'):
+        ctl.load_layout(str(tmp_path), 'other')
+    with pytest.raises(ValueError, match='layout name'):
+        ctl.save_layout(str(tmp_path), 'a b')
+    assert not any(name in ('positions', 'fit') for name, *_ in cytoscape['calls'])

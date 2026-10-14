@@ -141,6 +141,15 @@ and Repack* runs Leiden over the selected nodes, colors them by community and re
 each community on its own circle inside the box the selection occupies; only the
 selected nodes move, and the community number lands in the node table.
 
+**Layouts.** *Save Layout* writes where every drawn node sits to
+`<output_dir>/<dataset>/cytoscape/layouts/<name>.csv`, a three-column `id,x,y` file keyed
+on the node name Cytoscape shows (UniProt accession for preys, bait name for baits).
+Saving over a name updates the drawn nodes, adds new ones and keeps rows for nodes not
+drawn, so one layout can accumulate across bait subsets. *Load Layout* moves the drawn
+nodes a saved layout names back to those positions and leaves the others where they are,
+so a layout made for one network carries over to a re-send with other thresholds or
+baits. Layouts travel with the session archive like every other dataset file.
+
 **Building with a version stamp.** The image contains no git repository, so the
 version recorded in `run.json` comes from a build argument:
 
@@ -193,12 +202,12 @@ none reads what the GUI's sliders show. Operations are classed by what they touc
 
 | Mode | Operations | Effect on a person at the GUI |
 | --- | --- | --- |
-| read | `list_datasets`, `get_dataset_info`, `get_run_info`, `tail_log`, `server_status`, `cytoscape_read_selection`, `cytoscape_list_nodes`, `cytoscape_get_positions` | none |
+| read | `list_datasets`, `get_dataset_info`, `get_run_info`, `tail_log`, `server_status`, `cytoscape_read_selection`, `cytoscape_list_nodes`, `cytoscape_get_positions`, `cytoscape_list_layouts` | none |
 | sandbox | `get_scores`, `threshold_metrics`, `feature_analysis`, `get_prey_annotations`, `compare_networks` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
 | dataset | `parse_dataset`, `score_dataset`, `load_session` | the dataset table and dropdowns update within a second; a dataset being scored by either side refuses a second job; `parse_dataset` reads input files by their paths inside the container, so mount the folder that holds them; `load_session` is destructive and needs `confirm` |
-| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_nodes`, `cytoscape_select_related`, `cytoscape_clear_selection`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_export_image` | the drawn network changes under the mouse; the Cytoscape tab's status shows the thresholds it was drawn at and the activity panel lists each operation as `[mcp]` |
+| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_nodes`, `cytoscape_select_related`, `cytoscape_clear_selection`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_save_layout`, `cytoscape_load_layout`, `cytoscape_export_image` | the drawn network changes under the mouse; the Cytoscape tab's status shows the thresholds it was drawn at and the activity panel lists each operation as `[mcp]` |
 
-Sends and exports from MCP are recorded in the dataset's `run.json` with their full
+Sends, exports and layout saves from MCP are recorded in the dataset's `run.json` with their full
 argument set. `curl localhost:3839/api/health` reports the datasets, running jobs and
 drawn network without touching Cytoscape. `PROXIMATE_MCP_PORT`, `PROXIMATE_MCP_HOST`,
 `PROXIMATE_GUI_PORT` and `PROXIMATE_GUI_HOST` move the ports.

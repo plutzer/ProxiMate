@@ -397,17 +397,55 @@ def cytoscape_cluster_selection(resolution: float = 1.0, seed: int = 17,
     return _json(ctl.cluster_selection(resolution, seed, literature_weight, actor=ACTOR))
 
 
+def _drawn_dataset_path():
+    """The snapshot and the dataset directory of the drawn network; refuses when none is."""
+    snap = ctl.snapshot()
+    if snap['dataset'] is None:
+        raise RuntimeError("no ProxiMate network is in Cytoscape; send one first")
+    return snap, backend.dataset_dir(snap['dataset'])
+
+
 @register('cytoscape', "Export the drawn network as a PNG under the dataset's cytoscape folder.",
           tags=('cytoscape', 'export', 'png', 'image'))
 def cytoscape_export_image(height: int = 2000) -> dict:
     """Returns the image path; recorded in the dataset's run.json with the drawn thresholds."""
-    snap = ctl.snapshot()
-    if snap['dataset'] is None:
-        raise RuntimeError("no ProxiMate network is in Cytoscape; send one first")
-    dataset_path = backend.dataset_dir(snap['dataset'])
+    snap, dataset_path = _drawn_dataset_path()
     with provenance.stage(dataset_path, 'cytoscape', entrypoint='mcp.cytoscape_export_image',
                           params={'height': height, 'actor': ACTOR}) as record:
         path = ctl.export_image(dataset_path, height=int(height), actor=ACTOR)
         record.add_output(path, role='image')
         record.extra(thresholds=snap['thresholds'])
     return {'path': path}
+
+
+@register('read', "The layouts saved for a dataset: named node-position files under its cytoscape/layouts folder.",
+          tags=('cytoscape', 'layout', 'layouts', 'positions', 'saved', 'list'))
+def cytoscape_list_layouts(dataset: str = None) -> dict:
+    """``dataset`` defaults to the drawn one.  Each name is what cytoscape_save_layout and
+    cytoscape_load_layout take."""
+    dataset = dataset or _drawn_dataset_path()[0]['dataset']
+    return {'dataset': dataset, 'layouts': ctl.saved_layouts(backend.dataset_dir(dataset))}
+
+
+@register('cytoscape', "Save the drawn nodes' positions as a named layout under the dataset, merged over an earlier save of that name.",
+          tags=('cytoscape', 'layout', 'save', 'positions'))
+def cytoscape_save_layout(name: str) -> dict:
+    """``name`` is letters, digits and underscores; the file is
+    <dataset>/cytoscape/layouts/<name>.csv with columns id, x, y.  Saving over a name
+    updates the drawn nodes, adds new ones and keeps rows for nodes not drawn, so one
+    layout accumulates across bait subsets.  Recorded in the dataset's run.json."""
+    snap, dataset_path = _drawn_dataset_path()
+    with provenance.stage(dataset_path, 'cytoscape', entrypoint='mcp.cytoscape_save_layout',
+                          params={'name': name, 'actor': ACTOR}) as record:
+        result = ctl.save_layout(dataset_path, name, actor=ACTOR)
+        record.add_output(result['path'], role='layout', rows=result['n_rows'])
+        record.extra(thresholds=snap['thresholds'])
+    return result
+
+
+@register('cytoscape', "Move the drawn nodes a saved layout names to their saved positions; the others stay put.",
+          tags=('cytoscape', 'layout', 'load', 'positions', 'restore'))
+def cytoscape_load_layout(name: str) -> dict:
+    """Fails when the layout names none of the drawn nodes; the view is fitted afterwards.
+    A hand layout in progress is overwritten: say so before calling."""
+    return ctl.load_layout(_drawn_dataset_path()[1], name, actor=ACTOR)

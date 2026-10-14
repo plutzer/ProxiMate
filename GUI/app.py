@@ -578,10 +578,18 @@ app_ui = ui.page_navbar(
                                TOOLTIPS["cy_cluster"]),
                     class_="d-flex flex-wrap gap-2 mb-3",
                 ),
+                ui.p("Layout", style="font-weight: 500; margin-bottom: 5px;"),
+                ui.input_selectize("cy_layout_name", tip("Saved layout", "cy_layout_name"), choices=[],
+                                   options={"create": True, "placeholder": "pick a saved layout or type a new name"}),
+                ui.div(
+                    ui.tooltip(ui.input_action_button("cy_save_layout", "Save Layout", class_="btn-sm btn-outline-primary"),
+                               TOOLTIPS["cy_save_layout"]),
+                    ui.tooltip(ui.input_action_button("cy_load_layout", "Load Layout", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_load_layout"]),
+                    class_="d-flex flex-wrap gap-2 mb-3",
+                ),
                 ui.p("Network", style="font-weight: 500; margin-bottom: 5px;"),
                 ui.div(
-                    ui.tooltip(ui.input_action_button("cy_sync", "Sync Positions", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_sync"]),
                     ui.tooltip(ui.input_action_button("cy_export", "Export PNG", class_="btn-sm btn-outline-secondary"),
                                TOOLTIPS["cy_export"]),
                     ui.tooltip(ui.input_action_button("cy_unlock", "Unlock View", class_="btn-sm btn-outline-secondary"),
@@ -2568,12 +2576,70 @@ def server(input: Inputs, output: Outputs, session: Session):
                     notify(f"{changed} edge(s) changed.")
         _make_visibility(_button, _action)
 
+    def cy_layout_listing():
+        """The drawn dataset and its saved layouts; save and load act on the drawn network."""
+        dataset = cytoscape_ctl.STATE['dataset']
+        names = cytoscape_ctl.saved_layouts(os.path.join(out_dir, dataset)) if dataset else []
+        return dataset, tuple(names)
+
+    # Polled, so the list follows draws and saves from the GUI or MCP, and only a change
+    # in the listing re-renders the control: a name being typed is never wiped.
+    @reactive.poll(cy_layout_listing, 2.0)
+    def cy_saved_layouts():
+        return list(cy_layout_listing()[1])
+
     @reactive.effect
-    @reactive.event(input.cy_sync)
-    def cy_sync():
-        n = cy_call("read node positions", cytoscape_ctl.sync_positions)
-        if n is not None:
-            notify(f"Recorded positions of {n} node(s).")
+    def update_cy_layout_names():
+        names = cy_saved_layouts()
+        with reactive.isolate():
+            current = input.cy_layout_name.get()
+        # The empty choice is the placeholder, so no layout is picked until the user picks one.
+        ui.update_selectize("cy_layout_name", choices=[''] + names,
+                            selected=current if current in names else '')
+
+    def cy_layout_target():
+        """``(snapshot, dataset_path, name)`` for the drawn network, or None after a notification."""
+        snap = cytoscape_ctl.snapshot()
+        name = (input.cy_layout_name.get() or "").strip()
+        if snap['dataset'] is None:
+            notify("Send a network to Cytoscape first.", type="error")
+            return None
+        if not name:
+            notify("Pick or type a layout name first.", type="error")
+            return None
+        return snap, os.path.join(out_dir, snap['dataset']), name
+
+    @reactive.effect
+    @reactive.event(input.cy_save_layout)
+    def cy_save_layout():
+        target = cy_layout_target()
+        if not target:
+            return
+        snap, dataset_path, name = target
+
+        def save_with_record():
+            with provenance.stage(dataset_path, "cytoscape", entrypoint="cytoscape_ctl.save_layout",
+                                  params={'name': name}) as record:
+                result = cytoscape_ctl.save_layout(dataset_path, name)
+                record.add_output(result['path'], role="layout", rows=result['n_rows'])
+                record.extra(thresholds=snap['thresholds'])
+                return result
+
+        result = cy_call("save the layout", save_with_record)
+        if result:
+            notify(f"Layout {name!r} saved: {result['written']} drawn node(s), {result['n_rows']} in the file.")
+
+    @reactive.effect
+    @reactive.event(input.cy_load_layout)
+    def cy_load_layout():
+        target = cy_layout_target()
+        if not target:
+            return
+        _, dataset_path, name = target
+        result = cy_call("load the layout", cytoscape_ctl.load_layout, dataset_path, name)
+        if result:
+            notify(f"Layout {name!r}: {result['moved']} node(s) placed, "
+                   f"{result['unplaced']} left where they were.")
 
     @reactive.effect
     @reactive.event(input.cy_export)

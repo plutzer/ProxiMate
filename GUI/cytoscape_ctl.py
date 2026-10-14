@@ -16,6 +16,7 @@ import collections
 import contextlib
 import datetime
 import os
+import re
 import threading
 
 import numpy as np
@@ -257,16 +258,87 @@ def _push_visibility(suid, want, changed, extra_columns=()):
                                                    'node_alpha': alpha.astype(int).to_numpy()}))
 
 
-def sync_positions(actor='gui'):
-    """Record the positions the user dragged nodes to."""
+# --- layouts -------------------------------------------------------------------------------
+
+LAYOUT_NAME = re.compile(r'[A-Za-z0-9_]+')
+LAYOUT_COLUMNS = ['id', 'x', 'y']
+
+
+def layout_path(out_dir, name):
+    """``<out_dir>/cytoscape/layouts/<name>.csv``; a name is letters, digits and underscores."""
+    if not LAYOUT_NAME.fullmatch(str(name)):
+        raise ValueError(f"not a layout name: {name!r}; use letters, digits and underscores")
+    return os.path.join(out_dir, 'cytoscape', 'layouts', f'{name}.csv')
+
+
+def saved_layouts(out_dir):
+    """Names of the layouts saved under a dataset directory, sorted."""
+    folder = os.path.join(out_dir, 'cytoscape', 'layouts')
+    if not os.path.isdir(folder):
+        return []
+    return sorted(f[:-4] for f in os.listdir(folder) if f.endswith('.csv'))
+
+
+def read_layout(path):
+    """``{id: (x, y)}`` from a layout CSV.  A missing column, a blank or repeated id or a
+    coordinate that is not a number raises."""
+    # keep_default_na: a bait named NA stays a string, and a blank coordinate fails the
+    # float cast instead of passing through as NaN.
+    frame = pd.read_csv(path, dtype={'id': str}, keep_default_na=False)
+    if list(frame.columns) != LAYOUT_COLUMNS:
+        raise ValueError(f"{path} is not a layout file: columns must be {','.join(LAYOUT_COLUMNS)}")
+    if (frame['id'] == '').any() or frame['id'].duplicated().any():
+        raise ValueError(f"{path} has a blank or repeated node id")
+    xy = frame[['x', 'y']].astype(float)
+    return {i: (x, y) for i, x, y in zip(frame['id'], xy['x'], xy['y'])}
+
+
+def write_layout(path, positions):
+    """Write ``{id: (x, y)}`` as a layout CSV sorted by id."""
+    pd.DataFrame([(i, x, y) for i, (x, y) in sorted(positions.items())],
+                 columns=LAYOUT_COLUMNS).to_csv(path, index=False)
+
+
+def save_layout(out_dir, name, actor='gui'):
+    """Write the drawn nodes' positions into the named layout under ``out_dir``, merged
+    over what the file already holds: drawn nodes take their current positions and
+    rows for nodes not drawn stay, so one layout can cover several bait subsets."""
     suid = _net()
+    path = layout_path(out_dir, name)
     with STATE['cy_lock']:
         positions = cy.current_positions(suid)
-    with _mutate('sync_positions', f'{len(positions)} node(s)', actor=actor):
-        nodes = STATE['nodes']
-        nodes['x'] = nodes['id'].map(lambda i: positions.get(i, (None, None))[0])
-        nodes['y'] = nodes['id'].map(lambda i: positions.get(i, (None, None))[1])
-    return len(positions)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Read, merge and write under the state lock so two saves of one name cannot interleave.
+    with STATE['lock']:
+        merged = {**(read_layout(path) if os.path.isfile(path) else {}), **positions}
+        write_layout(path, merged)
+    with _mutate('save_layout', f'{name}: {len(positions)} drawn node(s), {len(merged)} in file',
+                 actor=actor):
+        pass
+    return {'path': path, 'written': len(positions), 'n_rows': len(merged)}
+
+
+def load_layout(out_dir, name, actor='gui'):
+    """Move the drawn nodes the named layout places to their saved positions and fit
+    the view; drawn nodes the layout does not name stay where they are."""
+    suid = _net()
+    path = layout_path(out_dir, name)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"no layout {name!r}; saved: "
+                                f"{', '.join(saved_layouts(out_dir)) or 'none'}")
+    saved = read_layout(path)
+    drawn = set(STATE['nodes']['id'])
+    targets = {i: xy for i, xy in saved.items() if i in drawn}
+    if not targets:
+        raise ValueError(f"layout {name!r} names none of the {len(drawn)} drawn nodes")
+    with STATE['cy_lock']:
+        cy.set_positions(suid, targets)
+        p4c.fit_content(network=suid)
+    with _mutate('load_layout', f'{name}: {len(targets)} of {len(drawn)} drawn node(s) placed',
+                 actor=actor):
+        pass
+    return {'moved': len(targets), 'unplaced': len(drawn) - len(targets),
+            'not_drawn': len(saved) - len(targets)}
 
 
 # --- selection tools ---------------------------------------------------------------------

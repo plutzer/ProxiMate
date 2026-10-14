@@ -250,6 +250,7 @@ def drawn(monkeypatch):
     monkeypatch.setattr(ctl.cy, 'set_positions', lambda net, pos: calls.append(('positions', dict(pos))))
     monkeypatch.setattr(ctl.cy, 'update_edge_columns', lambda net, frame: calls.append(('edges', frame)))
     monkeypatch.setattr(ctl.cy, 'update_node_columns', lambda net, frame: calls.append(('nodes', frame)))
+    monkeypatch.setattr(ctl.p4c, 'fit_content', lambda **k: calls.append('fit'))
     nodes = pd.DataFrame({'id': ['BA', 'P1', 'P2'], 'symbol': ['GA', 'G1', 'G2'], 'accession': ['QA', 'P1', 'P2'],
                           'role': ['bait', 'prey', 'prey'], 'x': [0.0] * 3, 'y': [0.0] * 3})
     edges = pd.DataFrame({'name': ['e1', 'e2'], 'source': ['BA', 'BA'], 'target': ['P1', 'P2'],
@@ -322,6 +323,27 @@ def test_cytoscape_send_records_its_settings_in_the_manifest(scored, drawn, monk
     with pytest.raises(ValueError, match='width_source'):
         registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'width_source': 'nope',
                                          'replace': True})
+
+
+def test_layout_ops_save_list_and_load_through_the_registry(scored, drawn):
+    result = registry.call('cytoscape_save_layout', {'name': 'hand'})
+    path = scored / 'cytoscape' / 'layouts' / 'hand.csv'
+    assert result == {'path': str(path), 'written': 3, 'n_rows': 3} and path.is_file()
+    stage = [s for run in json.load(open(scored / 'run.json'))['runs'].values() for s in run['stages']][-1]
+    assert stage['entrypoint'] == 'mcp.cytoscape_save_layout' and stage['params']['name'] == 'hand'
+    assert stage['outputs'][0]['role'] == 'layout' and stage['extra']['thresholds'] == THRESHOLDS
+    assert registry.call('cytoscape_list_layouts', {}) == {'dataset': 'ds', 'layouts': ['hand']}
+    assert registry.call('cytoscape_list_layouts', {'dataset': 'ds'})['layouts'] == ['hand']
+
+    drawn['positions'] = {'P1': (7.0, 7.0), 'P2': (8.0, 8.0), 'BA': (9.0, 9.0)}
+    assert registry.call('cytoscape_load_layout', {'name': 'hand'}) == {'moved': 3, 'unplaced': 0, 'not_drawn': 0}
+    assert drawn['calls'][-2:] == [('positions', {'P1': (0.0, 0.0), 'P2': (1.0, 1.0), 'BA': (2.0, 2.0)}), 'fit']
+    assert registry.activity(1)[0]['detail'] == 'name=hand -> 3 moved'
+    assert ctl.snapshot()['log'][-1]['actor'] == 'mcp'
+
+    ctl.STATE.update(dataset=None, net_suid=None)
+    with pytest.raises(RuntimeError, match='send one first'):
+        registry.call('cytoscape_save_layout', {'name': 'hand'})
 
 
 def test_status_names_the_network_in_cytoscapes_window(drawn, monkeypatch):
