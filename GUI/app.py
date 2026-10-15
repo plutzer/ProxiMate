@@ -944,6 +944,9 @@ def server(input: Inputs, output: Outputs, session: Session):
                                   run_id=run_id,
                                   progress=lambda message, value: progress.set(value, message=message))
             notify(f"Successfully parsed dataset '{dataset_name}'", type="message", duration=5)
+            # Point the Score panel at the dataset just parsed. The choices are passed
+            # here too because the polled refresh of the dropdown has not run yet.
+            ui.update_select("score_dataset", choices=dataset_store.names(), selected=dataset_name)
         except ProxiMateError as e:
             notify(format_error_notification(e), type="error", duration=None)
         except (ValueError, backend.BusyError) as e:
