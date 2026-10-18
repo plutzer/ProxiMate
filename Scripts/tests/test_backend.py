@@ -130,7 +130,7 @@ def test_score_runs_both_stages_with_the_given_settings_and_marks_the_row(out_di
     assert score_cmd[score_cmd.index('--seed') + 1] == '7'
     assert ann_cmd[1].endswith('annotator.py') and '--excludeHCM' in ann_cmd
     assert store.row('ds1')['Scored'] == 'Yes'
-    assert store.row('ds1')['Imputation'] == 'Refactored AFT'
+    assert store.row('ds1')['Imputation'] == 'Two-component AFT'
     assert result['run_id']
 
 

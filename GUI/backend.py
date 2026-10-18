@@ -59,7 +59,7 @@ INPUT_FORMATS = {
     'SAINT': (('bait', 'prey', 'interaction'), None),
 }
 QUANT_TYPES = ('Intensity', 'LFQ', 'Spectral Counts')
-IMPUTATION_LABELS = {0: 'Default', 1: 'Prey-specific', 2: 'Refactored AFT', 3: 'One-component AFT'}
+IMPUTATION_LABELS = {0: 'Default', 1: 'Prey-specific', 2: 'Two-component AFT', 3: 'One-component AFT'}
 PI_METHODS = ('weighted_average', 'single_bait')
 FEATURE_TYPES = ('GO_CC', 'GO_BP', 'GO_MF', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains')
 RESULT_FILES = ('ED.csv', 'interaction.txt', 'merged.csv', 'annotated_scores.csv',

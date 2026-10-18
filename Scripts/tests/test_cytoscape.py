@@ -34,16 +34,17 @@ def no_bypass(monkeypatch):
 
 
 def _row(bait, bait_acc, prey, gene, saint=0.9, bfdr=0.01, wd=2.0, wdfdr=0.01,
-         intensity=1e6, known=False):
+         intensity=1e6, known=False, mv=False):
     return {'Experiment.ID': bait, 'Bait_Accession': bait_acc, 'First_ID': prey,
             'First_Prey_Gene': gene, 'SaintScore': saint, 'BFDR': bfdr, 'WD': wd,
-            'WDFDR': wdfdr, 'FoldChange': 3.0, 'AvgIntensity': intensity, 'In.BioGRID': known}
+            'WDFDR': wdfdr, 'FoldChange': 3.0, 'AvgIntensity': intensity, 'In.BioGRID': known,
+            'Multivalidated': mv}
 
 
 @pytest.fixture
 def scores():
     return pd.DataFrame([
-        _row('BaitA', 'PA', 'P1', 'G1', intensity=1e5, known=True),
+        _row('BaitA', 'PA', 'P1', 'G1', intensity=1e5, known=True, mv=True),
         _row('BaitA', 'PA', 'P2', 'G2', intensity=1e7),
         _row('BaitA', 'PA', 'P3', 'G3', saint=0.2),          # fails SaintScore
         _row('BaitB', 'PB', 'P2', 'G2', intensity=1e6),
@@ -130,10 +131,59 @@ def test_label_policies(scores, policy, expected):
 
 
 @pytest.mark.parametrize('kwargs', [
-    {'label_policy': 'some'}, {'width_source': 'Entropy'}])
+    {'label_policy': 'some'}, {'width_source': 'Entropy'}, {'preset': 'neon'}])
 def test_an_unknown_option_raises(scores, kwargs):
     with pytest.raises(ValueError):
         cn.build(scores, PASSING, prey_prey=False, **kwargs)
+
+
+# --- style presets ------------------------------------------------------------------------
+
+def test_the_default_preset_keeps_role_encodings(scores):
+    nodes, edges = cn.build(scores, PASSING, prey_prey=False)
+
+    by_id = nodes.set_index('id')
+    assert by_id.loc['BaitA', 'shape'] == 'DIAMOND' and by_id.loc['P1', 'shape'] == 'ELLIPSE'
+    assert by_id.loc['BaitA', 'fill'] == '#E69F00' and by_id.loc['P1', 'fill'] == '#B8C4D6'
+    assert by_id.loc['P1', 'node_width'] == by_id.loc['P1', 'node_height'] == 35.0
+    assert by_id.loc['P1', 'border'] == 1.0            # no known marker in this preset
+    assert set(edges['color']) == {'#0072B2'}
+
+
+def test_highlight_knowns_reproduces_the_manuscript_look(scores, tmp_path):
+    biogrid = _biogrid(tmp_path, [('P1', 'P2', 2, True)])
+
+    nodes, edges = cn.build(scores, PASSING, biogrid_path=biogrid, preset='highlight_knowns',
+                            width_source='uniform')
+
+    by_id = nodes.set_index('id')
+    assert by_id.loc['P1', 'shape'] == 'ROUND_RECTANGLE'
+    assert (by_id.loc['P1', 'node_width'], by_id.loc['P1', 'node_height']) == (60.0, 20.0)
+    assert by_id.loc['BaitA', 'shape'] == 'ELLIPSE'
+    assert (by_id.loc['BaitA', 'node_width'], by_id.loc['BaitA', 'node_height']) == (100.0, 60.0)
+    assert by_id.loc['BaitA', 'label_color'] == '#FFFFFF' and by_id.loc['P1', 'label_color'] == '#000000'
+    # P1 is multivalidated with BaitA, P2 is not known with either bait
+    assert by_id.loc['P1', 'border'] == 4.0 and by_id.loc['P1', 'border_color'] == '#B30000'
+    assert by_id.loc['P2', 'border'] == 0.0 and by_id.loc['BaitA', 'border'] == 0.0
+    by_kind = edges.groupby('interaction')['color'].agg(set)
+    assert by_kind['proximity'] == {'#888888'} and by_kind['literature'] == {'#CCCCCC'}
+    assert set(edges['width']) == {2.5}
+
+
+def test_highlight_knowns_needs_the_multivalidated_column(scores):
+    with pytest.raises(KeyError, match='Multivalidated'):
+        cn.build(scores.drop(columns=['Multivalidated']), PASSING, prey_prey=False,
+                 preset='highlight_knowns')
+
+
+def test_style_tables_restyles_drawn_tables_in_place(scores):
+    nodes, edges = cn.build(scores, PASSING, prey_prey=False)
+
+    cn.style_tables(nodes, edges, 'highlight_knowns', width_source='uniform')
+
+    assert set(nodes['shape']) == {'ELLIPSE', 'ROUND_RECTANGLE'}
+    assert set(edges['color']) == {'#888888'} and set(edges['width']) == {2.5}
+    assert set(cn.NODE_LOOK) <= set(nodes.columns) and set(cn.EDGE_LOOK) <= set(edges.columns)
 
 
 # =============================================================================================
@@ -229,11 +279,12 @@ def test_literature_edges_thicken_with_publications_only_when_weighted(scores, t
 
     _, edges = cn.build(scores, PASSING, biogrid_path=biogrid)
     lit = edges[edges['interaction'] == 'literature']
-    assert set(lit['width']) == {cn.LITERATURE_WIDTH[0]}
+    band = cn.STYLE_PRESETS['abundance_weighted']['literature_width']
+    assert set(lit['width']) == {band[0]}
 
     _, edges = cn.build(scores, PASSING, biogrid_path=biogrid, literature_weighted=True)
     by_pair = edges[edges['interaction'] == 'literature'].set_index(['source', 'target'])['width']
-    assert by_pair[('P2', 'P4')] < by_pair[('P1', 'P2')] <= cn.LITERATURE_WIDTH[1]
+    assert by_pair[('P2', 'P4')] < by_pair[('P1', 'P2')] <= band[1]
 
 
 def test_the_multivalidated_scope_hides_single_evidence_pairs(scores, tmp_path):
@@ -450,6 +501,25 @@ def test_packing_keeps_communities_apart_and_members_on_one_circle():
         assert np.linalg.norm(ca - cb) >= ra + rb
 
 
+@pytest.mark.parametrize('method', ['force-directed', 'kamada-kawai'])
+def test_force_layouts_keep_communities_apart_and_members_spaced(method):
+    edges = _two_cliques()
+    ids = [f'{g}{k}' for g in 'AB' for k in range(4)]
+    membership = pd.Series([0] * 4 + [1] * 4, index=ids)
+    positions = {i: (10.0 * k + 100, 200.0) for k, i in enumerate(ids)}
+
+    placed = cn.layout_communities(membership, edges, positions, method, seed=3)
+
+    assert set(placed) == set(ids)
+    assert min(x for x, _ in placed.values()) == pytest.approx(100)
+    assert min(y for _, y in placed.values()) == pytest.approx(200)
+    for a, b in itertools.combinations(ids, 2):
+        gap = np.linalg.norm(np.subtract(placed[a], placed[b]))
+        assert gap >= cn.NODE_SPACING * 0.99, (a, b, gap)
+    with pytest.raises(ValueError, match='circles'):
+        cn.layout_communities(membership, edges, positions, 'spiral')
+
+
 # =============================================================================================
 # cytoscape_ctl: the controller over a stubbed CyREST
 # =============================================================================================
@@ -465,6 +535,7 @@ def cytoscape(monkeypatch):
     monkeypatch.setattr(ctl.cy, 'set_positions', lambda net, pos: calls.append(('positions', dict(pos))))
     monkeypatch.setattr(ctl.cy, 'update_edge_columns', lambda net, frame: calls.append(('edges', frame)))
     monkeypatch.setattr(ctl.cy, 'update_node_columns', lambda net, frame: calls.append(('nodes', frame)))
+    monkeypatch.setattr(ctl.p4c, 'fit_content', lambda **k: calls.append(('fit',)))
     stub['calls'] = calls
     return stub
 
@@ -478,7 +549,8 @@ def controlled(scores, tmp_path, cytoscape):
     nodes, edges = cn.build(scores, PASSING, biogrid_path=biogrid)
     ctl.STATE.update(dataset='d', title='ProxiMate: d', net_suid=1, nodes=nodes, edges=edges,
                      thresholds=dict(PASSING),
-                     style={'width_source': 'abundance', 'literature_weighted': False, 'biogrid_scope': 'all'})
+                     style={'preset': 'abundance_weighted', 'width_source': 'abundance',
+                            'literature_weighted': False, 'biogrid_scope': 'all'})
     yield nodes, edges
     ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
                      thresholds=None, style=None)
@@ -489,20 +561,42 @@ def _last(calls, kind):
 
 
 def test_restyling_pushes_width_and_visibility_without_moving_anything(controlled, cytoscape):
-    changed = ctl.restyle_edges('uniform', False, 'multivalidated')
+    changed = ctl.restyle('abundance_weighted', 'uniform', False, 'multivalidated')
 
     frame = _last(cytoscape['calls'], 'edges')[0]
     assert changed == len(frame) > 0
-    assert set(frame.columns) == {'name', 'visible', 'width'}
+    assert set(frame.columns) == {'name', 'visible', 'color', 'alpha', 'width'}
     assert not frame.loc[frame['name'] == 'P1 (literature) P2', 'visible'].item()
     assert ctl.STATE['edges']['width'][ctl.STATE['edges']['interaction'] == 'proximity'].nunique() == 1
-    assert ctl.snapshot()['style'] == {'width_source': 'uniform', 'literature_weighted': False,
-                                       'biogrid_scope': 'multivalidated'}
+    nodes = _last(cytoscape['calls'], 'nodes')[0]
+    assert set(nodes.columns) == {'name', *cn.NODE_LOOK} and len(nodes) == len(ctl.STATE['nodes'])
+    assert ctl.snapshot()['style'] == {'preset': 'abundance_weighted', 'width_source': 'uniform',
+                                       'literature_weighted': False, 'biogrid_scope': 'multivalidated'}
+    assert not any(name == 'positions' for name, *_ in cytoscape['calls'])
+
+
+def test_restyle_switches_the_preset_in_place_and_keeps_community_fills(controlled, cytoscape):
+    nodes = ctl.STATE['nodes']
+    nodes['community'] = np.nan
+    nodes.loc[nodes['id'] == 'P1', ['community', 'fill']] = [0, cn.COMMUNITY_FILL[0]]
+    nodes.loc[nodes['id'] == 'P2', 'community'] = 1                # a singleton keeps the preset fill
+
+    ctl.restyle('highlight_knowns', 'uniform', False, 'all')
+
+    by_id = ctl.STATE['nodes'].set_index('id')
+    assert by_id.loc['P2', 'shape'] == 'ROUND_RECTANGLE' and by_id.loc['P2', 'fill'] == '#A6A6A6'
+    assert by_id.loc['P1', 'fill'] == cn.COMMUNITY_FILL[0]
+    assert by_id.loc['P1', 'border'] == 4.0           # P1 is multivalidated with BaitA
+    pushed = _last(cytoscape['calls'], 'nodes')[0].set_index('name')
+    assert pushed.loc['P1', 'fill'] == cn.COMMUNITY_FILL[0] and pushed.loc['BaitA', 'shape'] == 'ELLIPSE'
+    assert set(ctl.STATE['edges']['color']) == {'#888888', '#CCCCCC'}
+    assert ctl.snapshot()['style']['preset'] == 'highlight_knowns'
+    assert ctl.snapshot()['log'][-1]['op'] == 'restyle'
     assert not any(name == 'positions' for name, *_ in cytoscape['calls'])
 
 
 def test_rethresholding_keeps_the_drawn_biogrid_scope(controlled, cytoscape):
-    ctl.restyle_edges('abundance', False, 'multivalidated')
+    ctl.restyle('abundance_weighted', 'abundance', False, 'multivalidated')
 
     ctl.apply_thresholds(PASSING)
 
@@ -590,6 +684,36 @@ def test_a_second_clustering_numbers_above_the_first(clusterable, cytoscape):
 
     second = ctl.STATE['nodes'].set_index('id').loc[['P2', 'P4'], 'community'].min()
     assert second > first
+
+
+def test_a_singleton_community_keeps_its_fill(clusterable, cytoscape):
+    cytoscape['selected'] = ['P1', 'P2', 'P4', 'P5']       # only P1-P2 share an edge
+
+    result = ctl.cluster_selection()
+
+    nodes = ctl.STATE['nodes'].set_index('id')
+    prey_fill = cn.STYLE_PRESETS['abundance_weighted']['node_fill']['prey']
+    assert result['recolored'] == 2 and result['layout'] == 'circles'
+    assert nodes.loc['P1', 'fill'] in cn.COMMUNITY_FILL and nodes.loc['P4', 'fill'] == prey_fill
+    assert nodes.loc[['P1', 'P2', 'P4', 'P5'], 'community'].notna().all()
+    pushed = _last(cytoscape['calls'], 'nodes')[0].set_index('name')
+    assert pushed.loc['P4', 'fill'] == prey_fill and set(pushed.columns) == {'community', 'fill'}
+
+
+def test_recolor_off_and_a_force_layout(clusterable, cytoscape):
+    cytoscape['selected'] = ['P1', 'P2', 'P4', 'P5']
+    with pytest.raises(ValueError, match='circles'):
+        ctl.cluster_selection(layout='spiral')
+    assert not cytoscape['calls']
+
+    result = ctl.cluster_selection(layout='force-directed', recolor=False)
+
+    prey_fill = cn.STYLE_PRESETS['abundance_weighted']['node_fill']['prey']
+    assert result['recolored'] == 0
+    assert (ctl.STATE['nodes']['fill'] == prey_fill).sum() == 4
+    assert set(_last(cytoscape['calls'], 'positions')[0]) == {'P1', 'P2', 'P4', 'P5'}
+    detail = ctl.snapshot()['log'][-1]['detail']
+    assert 'force-directed' in detail and 'not recolored' in detail
 
 
 # =============================================================================================
@@ -742,3 +866,93 @@ def test_move_nodes_writes_positions_and_keeps_them_in_the_state(controlled, cyt
     assert nodes.set_index('id').loc['P1', ['x', 'y']].tolist() == [10.0, 20.0]
     with pytest.raises(ValueError):
         ctl.move_nodes({'P1': [1]})
+
+
+# =============================================================================================
+# layouts: the per-dataset position files
+# =============================================================================================
+
+def test_a_layout_round_trips_and_a_numeric_id_stays_a_string(tmp_path):
+    path = ctl.layout_path(str(tmp_path), 'hand')
+    assert path == str(tmp_path / 'cytoscape' / 'layouts' / 'hand.csv')
+    (tmp_path / 'cytoscape' / 'layouts').mkdir(parents=True)
+
+    ctl.write_layout(path, {'P1': (1.5, -2.0), '123': (0.0, 4.0), 'NA': (3.0, 3.0)})
+
+    assert open(path).readline().strip() == 'id,x,y'
+    assert ctl.read_layout(path) == {'123': (0.0, 4.0), 'NA': (3.0, 3.0), 'P1': (1.5, -2.0)}
+
+
+@pytest.mark.parametrize('text', [
+    'id,x,y\nP1,1,2\nP1,3,4\n',      # repeated id
+    'id,x,y\n,1,2\n',                # blank id
+    'id,y\nP1,2\n',                  # missing column
+    'id,x,y\nP1,abc,2\n',            # non-numeric coordinate
+    'id,x,y\nP1,,2\n',               # blank coordinate
+])
+def test_a_malformed_layout_file_raises(tmp_path, text):
+    path = tmp_path / 'bad.csv'
+    path.write_text(text)
+    with pytest.raises(ValueError):
+        ctl.read_layout(str(path))
+
+
+@pytest.mark.parametrize('name', ['', 'a b', '../x', 'x.csv'])
+def test_a_layout_name_is_letters_digits_and_underscores(tmp_path, name):
+    with pytest.raises(ValueError, match='layout name'):
+        ctl.layout_path(str(tmp_path), name)
+
+
+def test_saved_layouts_lists_the_folder_sorted_or_nothing(tmp_path):
+    assert ctl.saved_layouts(str(tmp_path)) == []
+    folder = tmp_path / 'cytoscape' / 'layouts'
+    folder.mkdir(parents=True)
+    for name in ('zeta.csv', 'alpha.csv', 'notes.txt'):
+        (folder / name).write_text('id,x,y\n')
+    assert ctl.saved_layouts(str(tmp_path)) == ['alpha', 'zeta']
+
+
+def test_save_layout_writes_what_cytoscape_reports_and_accumulates(controlled, cytoscape, tmp_path):
+    nodes, _ = controlled
+    cytoscape['positions'] = {i: (10.0 * k, 1.0) for k, i in enumerate(nodes['id'])}
+
+    result = ctl.save_layout(str(tmp_path), 'hand')
+
+    assert result == {'path': ctl.layout_path(str(tmp_path), 'hand'), 'written': len(nodes), 'n_rows': len(nodes)}
+    assert ctl.read_layout(result['path']) == cytoscape['positions']
+    assert ctl.saved_layouts(str(tmp_path)) == ['hand']
+
+    cytoscape['positions'] = {'P1': (-5.0, -5.0), 'P2': (-6.0, -6.0)}   # a smaller later network
+    result = ctl.save_layout(str(tmp_path), 'hand', actor='mcp')
+
+    saved = ctl.read_layout(result['path'])
+    assert result['written'] == 2 and result['n_rows'] == len(saved) == len(nodes)
+    assert saved['P1'] == (-5.0, -5.0) and saved['BaitA'] == (0.0, 1.0)
+    assert ctl.snapshot()['log'][-1]['op'] == 'save_layout' and ctl.snapshot()['log'][-1]['actor'] == 'mcp'
+
+
+def test_load_layout_places_only_the_drawn_nodes_it_names(controlled, cytoscape, tmp_path):
+    nodes, _ = controlled
+    path = ctl.layout_path(str(tmp_path), 'hand')
+    (tmp_path / 'cytoscape' / 'layouts').mkdir(parents=True)
+    ctl.write_layout(path, {'P1': (1.0, 2.0), 'P2': (3.0, 4.0), 'ZZ': (9.0, 9.0)})
+
+    result = ctl.load_layout(str(tmp_path), 'hand')
+
+    assert result == {'moved': 2, 'unplaced': len(nodes) - 2, 'not_drawn': 1}
+    assert cytoscape['calls'][-2:] == [('positions', {'P1': (1.0, 2.0), 'P2': (3.0, 4.0)}), ('fit',)]
+    assert not any(name == 'nodes' for name, *_ in cytoscape['calls'])
+    assert ctl.snapshot()['log'][-1]['op'] == 'load_layout'
+
+
+def test_load_layout_refuses_absent_files_and_unmatched_layouts(controlled, cytoscape, tmp_path):
+    (tmp_path / 'cytoscape' / 'layouts').mkdir(parents=True)
+    ctl.write_layout(ctl.layout_path(str(tmp_path), 'other'), {'ZZ': (9.0, 9.0)})
+
+    with pytest.raises(FileNotFoundError, match="no layout 'hand'; saved: other"):
+        ctl.load_layout(str(tmp_path), 'hand')
+    with pytest.raises(ValueError, match='none of'):
+        ctl.load_layout(str(tmp_path), 'other')
+    with pytest.raises(ValueError, match='layout name'):
+        ctl.save_layout(str(tmp_path), 'a b')
+    assert not any(name in ('positions', 'fit') for name, *_ in cytoscape['calls'])

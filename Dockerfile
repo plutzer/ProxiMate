@@ -26,6 +26,9 @@ RUN find /saint/upstream \( -name "*.sh" -o -name "configure" -o -name "bootstra
 # A Windows checkout can leave CRLF endings, which break the shell scripts that
 # configure Boost and nlopt.  dos2unix skips binary files.
 RUN find /saint/upstream -type f -exec dos2unix -q {} +
+# nlopt's configure script contains a literal BEL byte (awk FS = "\a"), which makes
+# dos2unix classify it as binary and skip it, so it is converted explicitly.
+RUN dos2unix -q -f /saint/upstream/nloptsrc/configure
 RUN mkdir -p /saint/upstream/bin
 
 RUN make -C /saint/upstream

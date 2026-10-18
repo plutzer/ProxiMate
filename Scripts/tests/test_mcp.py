@@ -250,15 +250,19 @@ def drawn(monkeypatch):
     monkeypatch.setattr(ctl.cy, 'set_positions', lambda net, pos: calls.append(('positions', dict(pos))))
     monkeypatch.setattr(ctl.cy, 'update_edge_columns', lambda net, frame: calls.append(('edges', frame)))
     monkeypatch.setattr(ctl.cy, 'update_node_columns', lambda net, frame: calls.append(('nodes', frame)))
+    monkeypatch.setattr(ctl.p4c, 'fit_content', lambda **k: calls.append('fit'))
     nodes = pd.DataFrame({'id': ['BA', 'P1', 'P2'], 'symbol': ['GA', 'G1', 'G2'], 'accession': ['QA', 'P1', 'P2'],
-                          'role': ['bait', 'prey', 'prey'], 'x': [0.0] * 3, 'y': [0.0] * 3})
+                          'role': ['bait', 'prey', 'prey'], 'fill': ['#E69F00', '#B8C4D6', '#B8C4D6'],
+                          'x': [0.0] * 3, 'y': [0.0] * 3})
     edges = pd.DataFrame({'name': ['e1', 'e2'], 'source': ['BA', 'BA'], 'target': ['P1', 'P2'],
                           'interaction': ['proximity'] * 2, 'visible': [True, True],
                           'SaintScore': [0.9, 0.8], 'BFDR': [0.01, 0.02], 'WD': [2.0, 1.0],
-                          'WDFDR': [0.01, 0.01], 'width': [2.0, 2.0], 'kind': ['proximity'] * 2})
+                          'WDFDR': [0.01, 0.01], 'width': [2.0, 2.0], 'color': ['#0072B2'] * 2,
+                          'alpha': [220, 220], 'kind': ['proximity'] * 2})
     ctl.STATE.update(dataset='ds', title='ProxiMate: ds', net_suid=1, nodes=nodes, edges=edges,
                      thresholds=dict(THRESHOLDS),
-                     style={'width_source': 'abundance', 'literature_weighted': False, 'biogrid_scope': 'all'})
+                     style={'preset': 'abundance_weighted', 'width_source': 'abundance',
+                            'literature_weighted': False, 'biogrid_scope': 'all'})
     stub['calls'] = calls
     yield stub
     ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
@@ -312,16 +316,66 @@ def test_cytoscape_send_records_its_settings_in_the_manifest(scored, drawn, monk
         registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS})
     assert not seen
     result = registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'baits': ['BaitA'],
-                                              'layout': 'grid', 'width_source': 'SaintScore', 'replace': True})
+                                              'layout': 'grid', 'width_source': 'SaintScore',
+                                              'preset': 'highlight_knowns', 'replace': True})
     assert seen['actor'] == 'mcp' and seen['baits'] == ['BaitA'] and seen['layout'] == 'grid'
+    assert seen['preset'] == 'highlight_knowns'
     assert result['network']['dataset'] == 'ds'
     manifest = json.load(open(scored / 'run.json'))
     stage = [s for run in manifest['runs'].values() for s in run['stages']][-1]
     assert stage['stage'] == 'cytoscape' and stage['entrypoint'] == 'mcp.cytoscape_send'
     assert stage['params']['thresholds'] == THRESHOLDS and stage['params']['width_source'] == 'SaintScore'
+    assert stage['params']['preset'] == 'highlight_knowns'
     with pytest.raises(ValueError, match='width_source'):
         registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'width_source': 'nope',
                                          'replace': True})
+    with pytest.raises(ValueError, match='preset'):
+        registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'preset': 'neon',
+                                         'replace': True})
+
+
+def test_style_preset_ops_through_the_registry(drawn):
+    listed = registry.call('cytoscape_list_style_presets', {})['presets']
+    assert [p['name'] for p in listed] == ['abundance_weighted', 'highlight_knowns']
+    assert listed[1]['label'] == 'Highlight knowns'
+    assert listed[1]['send_options']['biogrid_scope'] == 'multivalidated' and listed[1]['send_options']['corum']
+    drawn['calls'].clear()
+    result = registry.call('cytoscape_restyle', {'width_source': 'uniform'})
+    kinds = [c[0] for c in drawn['calls']]
+    assert 'edges' in kinds and 'nodes' in kinds and 'positions' not in kinds
+    assert result['changed'] == 2 and result['network']['style']['preset'] == 'abundance_weighted'
+    assert ctl.snapshot()['log'][-1]['actor'] == 'mcp' and ctl.snapshot()['log'][-1]['op'] == 'restyle'
+    with pytest.raises(ValueError, match='preset'):
+        registry.call('cytoscape_restyle', {'preset': 'neon'})
+
+
+def test_cluster_selection_takes_a_layout_and_a_recolor_flag(drawn):
+    props = registry.details('cytoscape_cluster_selection')['schema']['properties']
+    assert props['layout']['default'] == 'circles' and props['recolor']['default'] is True
+    with pytest.raises(ValueError, match='circles'):
+        registry.call('cytoscape_cluster_selection', {'layout': 'spiral'})
+    assert not drawn['calls']
+
+
+def test_layout_ops_save_list_and_load_through_the_registry(scored, drawn):
+    result = registry.call('cytoscape_save_layout', {'name': 'hand'})
+    path = scored / 'cytoscape' / 'layouts' / 'hand.csv'
+    assert result == {'path': str(path), 'written': 3, 'n_rows': 3} and path.is_file()
+    stage = [s for run in json.load(open(scored / 'run.json'))['runs'].values() for s in run['stages']][-1]
+    assert stage['entrypoint'] == 'mcp.cytoscape_save_layout' and stage['params']['name'] == 'hand'
+    assert stage['outputs'][0]['role'] == 'layout' and stage['extra']['thresholds'] == THRESHOLDS
+    assert registry.call('cytoscape_list_layouts', {}) == {'dataset': 'ds', 'layouts': ['hand']}
+    assert registry.call('cytoscape_list_layouts', {'dataset': 'ds'})['layouts'] == ['hand']
+
+    drawn['positions'] = {'P1': (7.0, 7.0), 'P2': (8.0, 8.0), 'BA': (9.0, 9.0)}
+    assert registry.call('cytoscape_load_layout', {'name': 'hand'}) == {'moved': 3, 'unplaced': 0, 'not_drawn': 0}
+    assert drawn['calls'][-2:] == [('positions', {'P1': (0.0, 0.0), 'P2': (1.0, 1.0), 'BA': (2.0, 2.0)}), 'fit']
+    assert registry.activity(1)[0]['detail'] == 'name=hand -> 3 moved'
+    assert ctl.snapshot()['log'][-1]['actor'] == 'mcp'
+
+    ctl.STATE.update(dataset=None, net_suid=None)
+    with pytest.raises(RuntimeError, match='send one first'):
+        registry.call('cytoscape_save_layout', {'name': 'hand'})
 
 
 def test_status_names_the_network_in_cytoscapes_window(drawn, monkeypatch):

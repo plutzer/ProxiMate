@@ -34,6 +34,7 @@ import backend
 import dataset_store
 import mcp_registry
 import cytoscape_ctl
+from cytoscape_net import STYLE_PRESETS
 import log_config
 import provenance
 from log_config import get_logger
@@ -485,6 +486,8 @@ app_ui = ui.page_navbar(
                                TOOLTIPS["preset_relaxed"]),
                     class_="d-flex gap-2 mb-3",
                 ),
+                ui.input_select("cy_style_preset", tip("Style preset", "cy_style_preset"),
+                                choices={key: preset["label"] for key, preset in STYLE_PRESETS.items()}),
                 ui.input_select("cy_labels", tip("Labels", "cy_labels"),
                                 choices={"all": "All nodes", "baits": "Baits only", "none": "None"}),
                 ui.input_select("cy_layout", tip("Layout", "cy_layout"),
@@ -499,7 +502,7 @@ app_ui = ui.page_navbar(
                 ui.input_select("cy_biogrid_scope", tip("BioGRID edges", "cy_biogrid_scope"),
                                 choices={"all": "All pairs", "multivalidated": "Multivalidated only"}),
                 ui.input_checkbox("cy_lit_weighted", tip("Weight BioGRID edges by publications", "cy_lit_weighted"),
-                                  value=False),
+                                  value=True),
                 ui.p("Complexes", style="font-weight: 500; margin-bottom: 5px;"),
                 ui.input_checkbox("cy_corum", tip("CORUM complex edges", "cy_corum"), value=False),
                 ui.layout_columns(
@@ -514,7 +517,7 @@ app_ui = ui.page_navbar(
                                TOOLTIPS["cy_send"]),
                     ui.tooltip(ui.input_action_button("cy_rethreshold", "Re-apply Thresholds", class_="btn-outline-secondary"),
                                TOOLTIPS["cy_rethreshold"]),
-                    ui.tooltip(ui.input_action_button("cy_restyle", "Apply Edge Style", class_="btn-outline-secondary"),
+                    ui.tooltip(ui.input_action_button("cy_restyle", "Apply Style", class_="btn-outline-secondary"),
                                TOOLTIPS["cy_restyle"]),
                     class_="d-flex flex-wrap gap-2 mt-2",
                 ),
@@ -573,15 +576,30 @@ app_ui = ui.page_navbar(
                     ui.input_numeric("cy_cl_lit_weight", tip("Reference weight", "cy_cl_lit_weight"), value=1.0, min=0, step=0.25),
                     col_widths=(4, 4, 4),
                 ),
+                ui.layout_columns(
+                    ui.input_select("cy_cl_layout", tip("Cluster layout", "cy_cl_layout"),
+                                    choices={"circles": "Circles", "force-directed": "Force-directed",
+                                             "kamada-kawai": "Kamada-Kawai"}),
+                    ui.input_checkbox("cy_cl_recolor", tip("Recolor communities", "cy_cl_recolor"), value=True),
+                    col_widths=(6, 6),
+                ),
                 ui.div(
                     ui.tooltip(ui.input_action_button("cy_cluster", "Cluster and Repack", class_="btn-sm btn-outline-primary"),
                                TOOLTIPS["cy_cluster"]),
                     class_="d-flex flex-wrap gap-2 mb-3",
                 ),
+                ui.p("Layout", style="font-weight: 500; margin-bottom: 5px;"),
+                ui.input_selectize("cy_layout_name", tip("Saved layout", "cy_layout_name"), choices=[],
+                                   options={"create": True, "placeholder": "pick a saved layout or type a new name"}),
+                ui.div(
+                    ui.tooltip(ui.input_action_button("cy_save_layout", "Save Layout", class_="btn-sm btn-outline-primary"),
+                               TOOLTIPS["cy_save_layout"]),
+                    ui.tooltip(ui.input_action_button("cy_load_layout", "Load Layout", class_="btn-sm btn-outline-secondary"),
+                               TOOLTIPS["cy_load_layout"]),
+                    class_="d-flex flex-wrap gap-2 mb-3",
+                ),
                 ui.p("Network", style="font-weight: 500; margin-bottom: 5px;"),
                 ui.div(
-                    ui.tooltip(ui.input_action_button("cy_sync", "Sync Positions", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_sync"]),
                     ui.tooltip(ui.input_action_button("cy_export", "Export PNG", class_="btn-sm btn-outline-secondary"),
                                TOOLTIPS["cy_export"]),
                     ui.tooltip(ui.input_action_button("cy_unlock", "Unlock View", class_="btn-sm btn-outline-secondary"),
@@ -926,6 +944,9 @@ def server(input: Inputs, output: Outputs, session: Session):
                                   run_id=run_id,
                                   progress=lambda message, value: progress.set(value, message=message))
             notify(f"Successfully parsed dataset '{dataset_name}'", type="message", duration=5)
+            # Point the Score panel at the dataset just parsed. The choices are passed
+            # here too because the polled refresh of the dropdown has not run yet.
+            ui.update_select("score_dataset", choices=dataset_store.names(), selected=dataset_name)
         except ProxiMateError as e:
             notify(format_error_notification(e), type="error", duration=None)
         except (ValueError, backend.BusyError) as e:
@@ -2410,6 +2431,18 @@ def server(input: Inputs, output: Outputs, session: Session):
         _make_preset(_values, _key)
 
     @reactive.effect
+    @reactive.event(input.cy_style_preset, ignore_init=True)
+    def apply_style_preset_options():
+        """A preset brings the send options it is designed for; the user can still change them."""
+        opts = STYLE_PRESETS[input.cy_style_preset.get()]["send_options"]
+        ui.update_select("cy_edge_width", selected=opts["width_source"])
+        ui.update_checkbox("cy_prey_prey", value=opts["prey_prey"])
+        ui.update_select("cy_biogrid_scope", selected=opts["biogrid_scope"])
+        ui.update_checkbox("cy_lit_weighted", value=opts["literature_weighted"])
+        ui.update_checkbox("cy_corum", value=opts["corum"])
+        ui.update_select("cy_layout", selected=opts["layout"])
+
+    @reactive.effect
     @reactive.event(input.cy_probe)
     def cy_probe():
         cy_health.set(cytoscape_ctl.health())
@@ -2466,7 +2499,8 @@ def server(input: Inputs, output: Outputs, session: Session):
                        literature_weighted=input.cy_lit_weighted.get(),
                        biogrid_scope=input.cy_biogrid_scope.get(), corum_path=corum_path,
                        corum_min_members=int(input.cy_corum_min_members.get() or 3),
-                       corum_min_fraction=float(input.cy_corum_min_fraction.get() or 0.0))
+                       corum_min_fraction=float(input.cy_corum_min_fraction.get() or 0.0),
+                       preset=input.cy_style_preset.get())
         if snap:
             notify(f"Drew {snap['n_nodes']} nodes and {snap['n_edges']} edges in Cytoscape.")
 
@@ -2480,11 +2514,11 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.cy_restyle)
     def cy_restyle():
-        changed = cy_call("apply the edge style", cytoscape_ctl.restyle_edges,
+        changed = cy_call("apply the style", cytoscape_ctl.restyle, input.cy_style_preset.get(),
                           input.cy_edge_width.get(), input.cy_lit_weighted.get(),
                           input.cy_biogrid_scope.get())
         if changed is not None:
-            notify(f"Edge style applied: {changed} edge(s) changed.")
+            notify(f"Style applied: {changed} edge(s) changed.")
 
     def cy_show_chosen(ids):
         """Put a fresh selection in the table so the tab shows what Cytoscape now has."""
@@ -2540,10 +2574,12 @@ def server(input: Inputs, output: Outputs, session: Session):
             notify("Fill in resolution, seed and reference weight first.", type="error")
             return
         result = cy_call("cluster the selection", cytoscape_ctl.cluster_selection,
-                         resolution=float(resolution), seed=int(seed), literature_weight=float(weight))
+                         resolution=float(resolution), seed=int(seed), literature_weight=float(weight),
+                         layout=input.cy_cl_layout.get(), recolor=input.cy_cl_recolor.get())
         if result:
             notify(f"{result['n']} preys clustered into {result['n_communities']} communities "
-                   f"(sizes {result['sizes']}); {len(result['baits_left'])} bait(s) left in place.")
+                   f"(sizes {result['sizes']}), {result['recolored']} recolored; "
+                   f"{len(result['baits_left'])} bait(s) left in place.")
 
     @reactive.effect
     @reactive.event(input.cy_read_selection)
@@ -2568,12 +2604,70 @@ def server(input: Inputs, output: Outputs, session: Session):
                     notify(f"{changed} edge(s) changed.")
         _make_visibility(_button, _action)
 
+    def cy_layout_listing():
+        """The drawn dataset and its saved layouts; save and load act on the drawn network."""
+        dataset = cytoscape_ctl.STATE['dataset']
+        names = cytoscape_ctl.saved_layouts(os.path.join(out_dir, dataset)) if dataset else []
+        return dataset, tuple(names)
+
+    # Polled, so the list follows draws and saves from the GUI or MCP, and only a change
+    # in the listing re-renders the control: a name being typed is never wiped.
+    @reactive.poll(cy_layout_listing, 2.0)
+    def cy_saved_layouts():
+        return list(cy_layout_listing()[1])
+
     @reactive.effect
-    @reactive.event(input.cy_sync)
-    def cy_sync():
-        n = cy_call("read node positions", cytoscape_ctl.sync_positions)
-        if n is not None:
-            notify(f"Recorded positions of {n} node(s).")
+    def update_cy_layout_names():
+        names = cy_saved_layouts()
+        with reactive.isolate():
+            current = input.cy_layout_name.get()
+        # The empty choice is the placeholder, so no layout is picked until the user picks one.
+        ui.update_selectize("cy_layout_name", choices=[''] + names,
+                            selected=current if current in names else '')
+
+    def cy_layout_target():
+        """``(snapshot, dataset_path, name)`` for the drawn network, or None after a notification."""
+        snap = cytoscape_ctl.snapshot()
+        name = (input.cy_layout_name.get() or "").strip()
+        if snap['dataset'] is None:
+            notify("Send a network to Cytoscape first.", type="error")
+            return None
+        if not name:
+            notify("Pick or type a layout name first.", type="error")
+            return None
+        return snap, os.path.join(out_dir, snap['dataset']), name
+
+    @reactive.effect
+    @reactive.event(input.cy_save_layout)
+    def cy_save_layout():
+        target = cy_layout_target()
+        if not target:
+            return
+        snap, dataset_path, name = target
+
+        def save_with_record():
+            with provenance.stage(dataset_path, "cytoscape", entrypoint="cytoscape_ctl.save_layout",
+                                  params={'name': name}) as record:
+                result = cytoscape_ctl.save_layout(dataset_path, name)
+                record.add_output(result['path'], role="layout", rows=result['n_rows'])
+                record.extra(thresholds=snap['thresholds'])
+                return result
+
+        result = cy_call("save the layout", save_with_record)
+        if result:
+            notify(f"Layout {name!r} saved: {result['written']} drawn node(s), {result['n_rows']} in the file.")
+
+    @reactive.effect
+    @reactive.event(input.cy_load_layout)
+    def cy_load_layout():
+        target = cy_layout_target()
+        if not target:
+            return
+        _, dataset_path, name = target
+        result = cy_call("load the layout", cytoscape_ctl.load_layout, dataset_path, name)
+        if result:
+            notify(f"Layout {name!r}: {result['moved']} node(s) placed, "
+                   f"{result['unplaced']} left where they were.")
 
     @reactive.effect
     @reactive.event(input.cy_export)

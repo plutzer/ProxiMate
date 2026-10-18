@@ -24,25 +24,62 @@ EDGE_WIDTH_SOURCES = ('abundance', 'SaintScore', 'WD', 'FoldChange', 'uniform')
 BIOGRID_SCOPES = ('all', 'multivalidated')
 RELATIONS = ('interactors', 'singletons', 'partners', 'cocomplex')
 
-# Node encodings by role.
-NODE_SHAPE = {'bait': 'DIAMOND', 'prey': 'ELLIPSE'}
-NODE_SIZE = {'bait': 60.0, 'prey': 35.0}
-NODE_FILL = {'bait': '#E69F00', 'prey': '#B8C4D6'}
-NODE_BORDER = {'bait': 3.0, 'prey': 1.0}
-NODE_BORDER_COLOR = '#2F3B4A'
-LABEL_SIZE = {'bait': 16, 'prey': 11}
+# A style preset is every look the tables encode: node encodings by role (sizes are
+# (width, height)), edge encodings by kind, and the send options that go with it in the
+# GUI.  ``known_border`` is the border width of a prey whose interaction with a drawn
+# bait is BioGRID-multivalidated; None leaves known preys unmarked.  Edge widths are
+# z-scores of a log quantity clipped to ±Z_CLIP and mapped onto the preset's band, so
+# orders of magnitude read as a gradation, not a spike.
+STYLE_PRESETS = {
+    'abundance_weighted': {
+        'label': 'Abundance/literature weighted',
+        'description': 'Orange diamond baits and blue-grey preys; bait-prey width follows '
+                       'abundance and BioGRID edges thicken with publications.',
+        'node_shape': {'bait': 'DIAMOND', 'prey': 'ELLIPSE'},
+        'node_size': {'bait': (60.0, 60.0), 'prey': (35.0, 35.0)},
+        'node_fill': {'bait': '#E69F00', 'prey': '#B8C4D6'},
+        'node_border': {'bait': 3.0, 'prey': 1.0},
+        'node_border_color': '#2F3B4A',
+        'label_size': {'bait': 16, 'prey': 11},
+        'label_color': {'bait': '#1F2933', 'prey': '#1F2933'},
+        'known_border': None,
+        'edge_color': {'proximity': '#0072B2', 'literature': '#7D838C', 'complex': '#000000'},
+        'edge_alpha': {'proximity': 220, 'literature': 120, 'complex': 200},
+        'proximity_width': (1.0, 8.0), 'literature_width': (1.0, 4.0), 'complex_width': 2.0,
+        'send_options': {'width_source': 'abundance', 'prey_prey': True, 'biogrid_scope': 'all',
+                         'literature_weighted': True, 'corum': False, 'layout': 'force-directed'},
+    },
+    'highlight_knowns': {
+        'label': 'Highlight knowns',
+        'description': 'Black ellipse baits and grey rounded preys with a red border on preys '
+                       'whose bait interaction BioGRID marks multivalidated; grey edges, black '
+                       'complex edges, one edge width.',
+        'node_shape': {'bait': 'ELLIPSE', 'prey': 'ROUND_RECTANGLE'},
+        'node_size': {'bait': (100.0, 60.0), 'prey': (60.0, 20.0)},
+        'node_fill': {'bait': '#000000', 'prey': '#A6A6A6'},
+        'node_border': {'bait': 0.0, 'prey': 0.0},
+        'node_border_color': '#B30000',
+        'label_size': {'bait': 12, 'prey': 8},
+        'label_color': {'bait': '#FFFFFF', 'prey': '#000000'},
+        'known_border': 4.0,
+        'edge_color': {'proximity': '#888888', 'literature': '#CCCCCC', 'complex': '#000000'},
+        'edge_alpha': {'proximity': 255, 'literature': 255, 'complex': 255},
+        # Under the preset's own send options (uniform width, unweighted literature) every
+        # edge is 2.5: the band midpoint, the literature floor and the complex width.
+        'proximity_width': (1.0, 4.0), 'literature_width': (2.5, 4.0), 'complex_width': 2.5,
+        'send_options': {'width_source': 'uniform', 'prey_prey': True, 'biogrid_scope': 'multivalidated',
+                         'literature_weighted': False, 'corum': True, 'layout': 'kamada-kawai'},
+    },
+}
+# The table columns a preset writes; each is mapped by a passthrough in Cytoscape.
+NODE_LOOK = ['shape', 'node_width', 'node_height', 'fill', 'border', 'border_color',
+             'label_size', 'label_color']
+EDGE_LOOK = ['color', 'alpha', 'width']
+
 NODE_ALPHA = {'visible': 255, 'faded': 60}
 # Fills for clustered nodes, one per community, cycling past twelve.
 COMMUNITY_FILL = ('#4E79A7', '#F28E2B', '#E15759', '#76B7B2', '#59A14F', '#EDC948',
                   '#B07AA1', '#FF9DA7', '#9C755F', '#BAB0AC', '#86BCB6', '#D37295')
-
-# Edge encodings by kind.  Widths are z-scores of a log quantity clipped to ±Z_CLIP
-# and mapped onto a band, so orders of magnitude read as a gradation, not a spike.
-EDGE_COLOR = {'proximity': '#0072B2', 'literature': '#7D838C', 'complex': '#000000'}
-EDGE_ALPHA = {'proximity': 220, 'literature': 120, 'complex': 200}
-PROXIMITY_WIDTH = (1.0, 8.0)
-LITERATURE_WIDTH = (1.0, 4.0)
-COMPLEX_WIDTH = 2.0
 Z_CLIP = 2.5
 
 # Clustering: proximity edges pull by banded abundance; a selection smaller than
@@ -51,6 +88,10 @@ CLUSTER_WEIGHT = (0.5, 1.5)
 MIN_CLUSTER_NODES = 4
 # Centre-to-centre spacing of packed nodes, above the largest node size.
 NODE_SPACING = 70.0
+# How clustered communities are arranged: packed circles, or an igraph layout of each
+# community inside its own disc with the discs placed by the edges between communities.
+CLUSTER_LAYOUTS = {'circles': None, 'force-directed': 'layout_fruchterman_reingold',
+                   'kamada-kawai': 'layout_kamada_kawai'}
 
 ISOFORM = re.compile(r'-\d+$')
 
@@ -95,8 +136,8 @@ def prey_symbol_column(df):
 
 # --- edge widths ------------------------------------------------------------------------
 
-def proximity_widths(edges, source='abundance'):
-    """Width per bait-prey edge from the quantity ``source`` names.
+def proximity_widths(edges, source, band):
+    """Width per bait-prey edge from the quantity ``source`` names, over ``band``.
 
     ``abundance`` bands log10 AvgIntensity/AvgSpec (one width when neither column
     exists); ``WD`` and ``FoldChange`` band their own log10; ``SaintScore`` is linear
@@ -105,37 +146,67 @@ def proximity_widths(edges, source='abundance'):
     if source not in EDGE_WIDTH_SOURCES:
         raise ValueError(f"unknown edge width source {source!r}; "
                          f"expected one of {', '.join(EDGE_WIDTH_SOURCES)}")
-    lo, hi = PROXIMITY_WIDTH
+    lo, hi = band
     if source == 'abundance':
         column = _abundance_column(edges)
         if column is None:
             source = 'uniform'
     if source == 'uniform':
-        return pd.Series(np.mean(PROXIMITY_WIDTH), index=edges.index)
+        return pd.Series(np.mean(band), index=edges.index)
     if source != 'abundance':
         column = source
         _require(edges, (column,))
     if source == 'SaintScore':
         return lo + edges[column].astype(float).fillna(0).clip(0, 1) * (hi - lo)
-    return zwidth(edges[column], PROXIMITY_WIDTH)
+    return zwidth(edges[column], band)
 
 
-def literature_widths(edges, weighted=False):
+def literature_widths(edges, weighted, band):
     """Width per BioGRID edge: the band floor, or banded log1p publication count."""
     if not weighted:
-        return pd.Series(LITERATURE_WIDTH[0], index=edges.index, dtype=float)
-    return zwidth(edges['n_publications'], LITERATURE_WIDTH, log_fn=np.log1p)
+        return pd.Series(band[0], index=edges.index, dtype=float)
+    return zwidth(edges['n_publications'], band, log_fn=np.log1p)
 
 
-def edge_widths(edges, width_source='abundance', literature_weighted=False):
-    """The ``width`` column for a mixed edge table; complex edges are one width."""
-    width = pd.Series(COMPLEX_WIDTH, index=edges.index, dtype=float)
+def edge_widths(edges, preset, width_source='abundance', literature_weighted=False):
+    """The ``width`` column for a mixed edge table under a preset's bands; complex
+    edges are one width."""
+    width = pd.Series(preset['complex_width'], index=edges.index, dtype=float)
     proximity = edges['interaction'] == 'proximity'
-    width[proximity] = proximity_widths(edges[proximity], width_source)
+    width[proximity] = proximity_widths(edges[proximity], width_source, preset['proximity_width'])
     literature = edges['interaction'] == 'literature'
     if literature.any():
-        width[literature] = literature_widths(edges[literature], literature_weighted)
+        width[literature] = literature_widths(edges[literature], literature_weighted,
+                                              preset['literature_width'])
     return width
+
+
+def style_tables(nodes, edges, preset, width_source='abundance', literature_weighted=False):
+    """Write the ``NODE_LOOK`` and ``EDGE_LOOK`` columns of ``preset`` onto drawn tables,
+    in place.  A preset with ``known_border`` needs the ``Multivalidated`` edge column and
+    gives that border to every prey with a multivalidated proximity edge."""
+    if preset not in STYLE_PRESETS:
+        raise ValueError(f"unknown style preset {preset!r}; expected one of {', '.join(STYLE_PRESETS)}")
+    look = STYLE_PRESETS[preset]
+    role = nodes['role']
+    nodes['shape'] = role.map(look['node_shape'])
+    nodes['node_width'] = role.map(lambda r: look['node_size'][r][0])
+    nodes['node_height'] = role.map(lambda r: look['node_size'][r][1])
+    nodes['fill'] = role.map(look['node_fill'])
+    nodes['border'] = role.map(look['node_border'])
+    nodes['border_color'] = look['node_border_color']
+    nodes['label_size'] = role.map(look['label_size'])
+    nodes['label_color'] = role.map(look['label_color'])
+    if look['known_border'] is not None:
+        _require(edges, ('Multivalidated',))
+        proximity = edges[edges['interaction'] == 'proximity']
+        known = set(proximity.loc[proximity['Multivalidated'].eq(True), 'target'])
+        nodes.loc[(role == 'prey') & nodes['id'].isin(known), 'border'] = look['known_border']
+    kind = edges['interaction']
+    edges['color'] = kind.map(look['edge_color'])
+    edges['alpha'] = kind.map(look['edge_alpha'])
+    edges['width'] = edge_widths(edges, look, width_source, literature_weighted)
+    return nodes, edges
 
 
 # --- reference layers --------------------------------------------------------------------
@@ -235,8 +306,8 @@ def display_labels(nodes, policy):
 
 def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_policy='all',
           width_source='abundance', literature_weighted=False, corum_path=None,
-          corum_min_members=3, corum_min_fraction=0.5):
-    """(nodes, edges) for the interactions passing ``thresholds``.
+          corum_min_members=3, corum_min_fraction=0.5, preset='abundance_weighted'):
+    """(nodes, edges) for the interactions passing ``thresholds``, styled by ``preset``.
 
     Prey nodes are keyed on UniProt accession and bait nodes on bait name (``id``), so
     two constructs of one protein stay separate baits; ``accession`` holds the protein
@@ -279,12 +350,6 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
 
     nodes = pd.concat([baits_tbl, preys_tbl], ignore_index=True)
     nodes['symbol'] = nodes['symbol'].fillna(nodes['id']).astype(str)
-    nodes['shape'] = nodes['role'].map(NODE_SHAPE)
-    nodes['size'] = nodes['role'].map(NODE_SIZE)
-    nodes['fill'] = nodes['role'].map(NODE_FILL)
-    nodes['border'] = nodes['role'].map(NODE_BORDER)
-    nodes['border_color'] = NODE_BORDER_COLOR
-    nodes['label_size'] = nodes['role'].map(LABEL_SIZE)
     nodes['display_label'] = display_labels(nodes, label_policy)
     nodes['node_alpha'] = NODE_ALPHA['visible']
     if 'In.BioGRID' in nodes.columns:
@@ -296,11 +361,9 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
                           'target': passing['First_ID'].astype(str).to_numpy(),
                           'accession': passing[bait_col].astype(str).to_numpy()})
     edges['interaction'] = 'proximity'
-    for col in (*CYTOSCAPE_ATTRS, 'AvgSpec'):
+    for col in (*CYTOSCAPE_ATTRS, 'AvgSpec', 'Multivalidated'):
         if col in passing.columns:
             edges[col] = passing[col].to_numpy()
-    edges['color'] = EDGE_COLOR['proximity']
-    edges['alpha'] = EDGE_ALPHA['proximity']
     edges = edges[edges['target'] != edges['accession']].drop(columns='accession')
     edges['target'] = edges['target'].map(lambda t: bait_nodes.get(t, [t]))
     edges = edges.explode('target', ignore_index=True)
@@ -309,8 +372,6 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
         pairs = prey_prey_pairs(set(preys_tbl['id']), bait_accessions, biogrid_path)
         if len(pairs):
             pairs['interaction'] = 'literature'
-            pairs['color'] = EDGE_COLOR['literature']
-            pairs['alpha'] = EDGE_ALPHA['literature']
             edges = pd.concat([edges, pairs], ignore_index=True)
 
     if corum_path:
@@ -327,15 +388,12 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
         nodes['complexes'] = nodes['accession'].map(membership).fillna('')
         if len(pairs):
             pairs['interaction'] = 'complex'
-            pairs['color'] = EDGE_COLOR['complex']
-            pairs['alpha'] = EDGE_ALPHA['complex']
             edges = pd.concat([edges, pairs], ignore_index=True)
 
-    edges['width'] = edge_widths(edges, width_source, literature_weighted)
     edges['visible'] = True
     edges['name'] = [edge_name(s, k, t) for s, k, t in
                      zip(edges['source'], edges['interaction'], edges['target'])]
-    return nodes.reset_index(drop=True), edges
+    return style_tables(nodes.reset_index(drop=True), edges, preset, width_source, literature_weighted)
 
 
 def is_tighter_or_equal(new, drawn):
@@ -490,19 +548,13 @@ def related(nodes, edges, seed, relation, min_saint=None, max_bfdr=None,
                   if i != sid and c and set(c.split(';')) & mine)
 
 
-def cluster(edges, ids, resolution=1.0, seed=17, literature_weight=1.0):
-    """Leiden communities (modularity) over the visible edges among ``ids``.
-
-    Proximity edges weigh their banded log abundance; literature edges
-    ``literature_weight`` times log1p publications; complex edges ``literature_weight``.
-    A weight of zero drops the reference layers.  Returns a Series of community
-    numbers indexed by id, numbered by size, largest first.
-    """
+def _weighted_graph(edges, ids, literature_weight):
+    """An igraph over the visible edges among ``ids`` with edge attribute ``weight``:
+    proximity edges weigh their banded log abundance, literature edges
+    ``literature_weight`` times log1p publications, complex edges ``literature_weight``.
+    A weight of zero drops the edge."""
     import igraph
 
-    ids = list(dict.fromkeys(str(i) for i in ids))
-    if len(ids) < MIN_CLUSTER_NODES:
-        raise ValueError(f"a selection needs at least {MIN_CLUSTER_NODES} nodes to cluster; got {len(ids)}")
     row = {i: k for k, i in enumerate(ids)}
     live = _visible(edges)
     among = live[live['source'].isin(row) & live['target'].isin(row)]
@@ -514,11 +566,24 @@ def cluster(edges, ids, resolution=1.0, seed=17, literature_weight=1.0):
     literature = among['interaction'] == 'literature'
     weight[literature] = literature_weight * np.log1p(among.loc[literature, 'n_publications'].astype(float))
     among, weight = among[weight > 0], weight[weight > 0]
-
-    igraph.set_random_number_generator(random.Random(seed))
     graph = igraph.Graph(n=len(ids), edges=[(row[s], row[t]) for s, t in zip(among['source'], among['target'])])
+    graph.es['weight'] = weight.tolist()
+    return graph
+
+
+def cluster(edges, ids, resolution=1.0, seed=17, literature_weight=1.0):
+    """Leiden communities (modularity) over the visible edges among ``ids``, weighted
+    as in ``_weighted_graph``.  Returns a Series of community numbers indexed by id,
+    numbered by size, largest first."""
+    import igraph
+
+    ids = list(dict.fromkeys(str(i) for i in ids))
+    if len(ids) < MIN_CLUSTER_NODES:
+        raise ValueError(f"a selection needs at least {MIN_CLUSTER_NODES} nodes to cluster; got {len(ids)}")
+    graph = _weighted_graph(edges, ids, literature_weight)
+    igraph.set_random_number_generator(random.Random(seed))
     parts = graph.community_leiden(objective_function='modularity', resolution=resolution,
-                                   weights=weight.tolist() if len(weight) else None, n_iterations=-1)
+                                   weights='weight' if graph.ecount() else None, n_iterations=-1)
     membership = pd.Series(parts.membership, index=ids)
     by_size = sorted(membership.unique(), key=lambda c: (-int((membership == c).sum()), c))
     return membership.map({c: k for k, c in enumerate(by_size)})
@@ -558,6 +623,71 @@ def pack_communities(membership, positions):
         x += 2 * radius + gap
         row_height = max(row_height, 2 * radius)
     return placed
+
+
+def _spread(points, radii, gap, rounds=500):
+    """Push points apart until each pair sits at least ``radii[a] + radii[b] + gap``
+    apart.  Each round a point moves by the mean of its half-overlaps, so a point
+    overlapping many others does not overshoot."""
+    points = np.array(points, float)
+    need = radii[:, None] + radii[None, :] + gap
+    np.fill_diagonal(need, 0.0)
+    for _ in range(rounds):
+        v = points[:, None, :] - points[None, :, :]
+        d = np.maximum(np.linalg.norm(v, axis=2), 1e-6)
+        over = np.clip(need - d, 0.0, None)
+        if not over.any():
+            break
+        hits = np.maximum((over > 0).sum(axis=1), 1)
+        points += ((over / d)[:, :, None] * v).sum(axis=1) / (2 * hits[:, None])
+    return points
+
+
+def _shape(graph, method, seed, spacing=NODE_SPACING):
+    """Centered coordinates of ``graph`` by the igraph layout ``CLUSTER_LAYOUTS[method]``,
+    scaled so the median nearest-neighbor distance is ``spacing`` and spread so no two
+    nodes sit closer than ``NODE_SPACING``.  Kamada-Kawai reads weights as lengths, so
+    it takes their inverse."""
+    import igraph
+    from scipy.spatial import cKDTree
+
+    if graph.vcount() == 1:
+        return np.zeros((1, 2))
+    weights = np.array(graph.es['weight'], float) if graph.ecount() else None
+    if weights is not None and method == 'kamada-kawai':
+        weights = 1 / weights
+    igraph.set_random_number_generator(random.Random(seed))
+    xy = np.array(getattr(graph, CLUSTER_LAYOUTS[method])(weights=weights).coords, float)
+    xy -= xy.mean(axis=0)
+    nearest = cKDTree(xy).query(xy, k=2)[0][:, 1]
+    xy *= spacing / max(np.median(nearest), 1e-6)
+    return _spread(xy, np.full(len(xy), NODE_SPACING / 2), 0.0)
+
+
+def layout_communities(membership, edges, positions, method, seed=17, literature_weight=1.0):
+    """Positions that lay each community out by ``method`` over its own edges inside a
+    disc, the discs placed by the same layout over the summed weight between communities
+    and pushed apart until none overlap.  The result keeps the top-left corner of the
+    box the nodes occupy now.  Returns ``{id: (x, y)}``."""
+    if method not in CLUSTER_LAYOUTS or CLUSTER_LAYOUTS[method] is None:
+        raise ValueError(f"cluster layout must be one of {tuple(CLUSTER_LAYOUTS)}; got {method!r}")
+    ids = list(membership.index)
+    graph = _weighted_graph(edges, ids, literature_weight)
+    communities = sorted(membership.unique())
+    members = [[k for k, i in enumerate(ids) if membership[i] == c] for c in communities]
+    shapes = [_shape(graph.induced_subgraph(m), method, seed) for m in members]
+    radii = np.array([np.linalg.norm(shape, axis=1).max() + NODE_SPACING / 2 for shape in shapes])
+
+    quotient = graph.copy()
+    quotient.contract_vertices([communities.index(membership[i]) for i in ids])
+    quotient.simplify(combine_edges='sum')
+    centres = _spread(_shape(quotient, method, seed, 2 * np.median(radii)), radii, NODE_SPACING / 2)
+
+    xy = np.zeros((len(ids), 2))
+    for m, centre, shape in zip(members, centres, shapes):
+        xy[m] = centre + shape
+    xy += np.array([min(positions[i][0] for i in ids), min(positions[i][1] for i in ids)]) - xy.min(axis=0)
+    return {i: (float(x), float(y)) for i, (x, y) in zip(ids, xy)}
 
 
 def community_fill(membership):

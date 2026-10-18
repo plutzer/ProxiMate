@@ -79,7 +79,9 @@ TOOLTIPS = {
     "cy_show_selected": "Show every edge touching a node selected in Cytoscape.",  # tooltip
     "cy_hide_unselected": "Hide every edge that does not touch a selected node, leaving the selection's neighborhood.",  # tooltip
     "cy_show_all": "Show every edge again.",  # tooltip
-    "cy_sync": "Record where you dragged the nodes, so the positions are kept with the network.",  # tooltip
+    "cy_layout_name": "A layout saved for the drawn dataset to load, or a new name to save under. Letters, digits and underscores.",  # tooltip
+    "cy_save_layout": "Write where every drawn node sits to the named layout in the dataset's cytoscape/layouts folder. Saving again updates the drawn nodes and keeps rows for nodes not drawn, so one layout can cover several bait subsets.",  # tooltip
+    "cy_load_layout": "Move the drawn nodes the layout names back to their saved positions and fit the view. Nodes the layout does not name stay where they are.",  # tooltip
     "cy_export": "Save the drawn network as a PNG in the dataset's cytoscape folder under the output directory.",  # tooltip
     "cy_unlock": "Release a view that no longer pans or zooms with the mouse.",  # tooltip
     "cy_edge_width": "What a bait-prey edge's width encodes. Abundance, WD and fold change are banded on a log scale; SAINT is linear from 0 to 1; Uniform draws every edge alike.",  # tooltip
@@ -88,7 +90,8 @@ TOOLTIPS = {
     "cy_corum": "Draw black edges between drawn proteins that are subunits of one CORUM complex the screen recovered. Human datasets only; the two criteria below decide which complexes count.",  # tooltip
     "cy_corum_min_members": "A complex draws only when at least this many of its subunits are in the network.",  # tooltip
     "cy_corum_min_fraction": "A complex draws only when one bait, counted with its preys, covers at least this share of the complex's full membership. 0.5 means half the subunits.",  # tooltip
-    "cy_restyle": "Apply the edge width, BioGRID scope and publication weighting to the drawn network as a style update. Nothing moves; complex criteria need a new send.",  # tooltip
+    "cy_style_preset": "A base look for the network. Picking one also sets the send options it is designed for (edges, width, layout); Send draws with both, Apply Style recolors the drawn network in place.",  # tooltip
+    "cy_restyle": "Apply the style preset, edge width, BioGRID scope and publication weighting to the drawn network as a style update. Nothing moves and clustered nodes keep their colors; adding prey-prey or complex edges needs a new send.",  # tooltip
     "cy_select_loners": "With exactly one bait selected in Cytoscape, select it with the preys whose only visible neighbor of any kind it is, so the group drags as one.",  # tooltip
     "cy_select_satellites": "With exactly one bait selected, select it with its own preys and the two-bait preys that currently sit nearer to it than to their other bait.",  # tooltip
     "cy_rel_seed": "The bait or protein the relation starts from, by name or UniProt accession, as drawn in Cytoscape.",  # tooltip
@@ -99,7 +102,9 @@ TOOLTIPS = {
     "cy_cl_resolution": "Leiden resolution. Above 1 splits the selection into more, smaller communities; below 1 merges them.",  # tooltip
     "cy_cl_seed": "Random seed for the Leiden run, so the same selection clusters the same way again.",  # tooltip
     "cy_cl_lit_weight": "How much a BioGRID or complex edge pulls relative to a bait-prey edge. 0 clusters on bait-prey edges alone.",  # tooltip
-    "cy_cluster": "Run Leiden over the selected preys, color them by community, and re-pack each community on its own circle inside the box the selection occupies. Only selected preys move; selected baits stay put.",  # tooltip
+    "cy_cl_layout": "How each community is arranged after clustering. Circles puts each on its own ring, tiled in rows. Force-directed and Kamada-Kawai lay each community out by its own edges inside a disc sized by its membership and place the discs by the edges between communities; better for large selections.",  # tooltip
+    "cy_cl_recolor": "Color each community of two or more nodes with its own fill. A community of one node always keeps its color.",  # tooltip
+    "cy_cluster": "Run Leiden over the selected preys, color communities of two or more nodes, and arrange each community by the cluster layout inside the box the selection occupies. Only selected preys move; selected baits stay put.",  # tooltip
     # ---- Downloads tab ----
     "dl_filter_card": "These cutoffs filter the rows of score-based exports only. Experimental Design, SAINT Inputs, and Enriched Features always download unfiltered.",  # tooltip
     "dl_preset": "Ready-made export formats for common next steps. A preset appears only when the dataset has the files it needs.",  # tooltip

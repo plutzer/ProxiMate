@@ -16,6 +16,7 @@ import collections
 import contextlib
 import datetime
 import os
+import re
 import threading
 
 import numpy as np
@@ -42,24 +43,22 @@ STATE = {
     'nodes': None,        # DataFrame as drawn
     'edges': None,        # DataFrame as drawn, 'visible' kept current
     'thresholds': None,   # the thresholds the edges were drawn at
-    'style': None,        # {'width_source', 'literature_weighted', 'biogrid_scope'} as drawn
+    'style': None,        # {'preset', 'width_source', 'literature_weighted', 'biogrid_scope'} as drawn
     'busy': '',
 }
 
 PASSTHROUGH = [
-    ('NODE_LABEL', 'display_label'), ('NODE_SHAPE', 'shape'), ('NODE_SIZE', 'size'),
+    ('NODE_LABEL', 'display_label'), ('NODE_SHAPE', 'shape'),
+    ('NODE_WIDTH', 'node_width'), ('NODE_HEIGHT', 'node_height'),
     ('NODE_FILL_COLOR', 'fill'), ('NODE_BORDER_WIDTH', 'border'),
     ('NODE_BORDER_PAINT', 'border_color'), ('NODE_LABEL_FONT_SIZE', 'label_size'),
-    ('NODE_TRANSPARENCY', 'node_alpha'),
+    ('NODE_LABEL_COLOR', 'label_color'), ('NODE_TRANSPARENCY', 'node_alpha'),
     ('EDGE_WIDTH', 'width'), ('EDGE_STROKE_UNSELECTED_PAINT', 'color'),
     ('EDGE_TRANSPARENCY', 'alpha'), ('EDGE_VISIBLE', 'visible'),
 ]
-STYLE_DEFAULTS = {
-    'NODE_SHAPE': 'ELLIPSE', 'NODE_SIZE': net.NODE_SIZE['prey'],
-    'NODE_FILL_COLOR': net.NODE_FILL['prey'], 'NODE_BORDER_WIDTH': net.NODE_BORDER['prey'],
-    'NODE_BORDER_PAINT': net.NODE_BORDER_COLOR, 'NODE_LABEL_FONT_SIZE': net.LABEL_SIZE['prey'],
-    'NODE_LABEL_COLOR': '#1F2933', 'EDGE_WIDTH': 2.0, 'NETWORK_BACKGROUND_PAINT': '#FFFFFF',
-}
+# Every node and edge carries every look column, so the style's own defaults only cover
+# what no column maps.
+STYLE_DEFAULTS = {'EDGE_TARGET_ARROW_SHAPE': 'NONE', 'NETWORK_BACKGROUND_PAINT': '#FFFFFF'}
 
 VISIBILITY_ACTIONS = ('hide_selected', 'show_selected', 'hide_unselected', 'show_all')
 
@@ -128,7 +127,7 @@ def current_network():
 def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_path=None,
          label_policy='all', layout='force-directed', width_source='abundance',
          literature_weighted=False, biogrid_scope='all', corum_path=None,
-         corum_min_members=3, corum_min_fraction=0.5, actor='gui'):
+         corum_min_members=3, corum_min_fraction=0.5, preset='abundance_weighted', actor='gui'):
     """Build the thresholded network and draw it, replacing every ProxiMate network
     in Cytoscape.  Recreating the style leaves any earlier ProxiMate network on
     Cytoscape's default style, so none may survive a draw."""
@@ -137,11 +136,11 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
                              biogrid_path=biogrid_path, label_policy=label_policy,
                              width_source=width_source, literature_weighted=literature_weighted,
                              corum_path=corum_path, corum_min_members=corum_min_members,
-                             corum_min_fraction=corum_min_fraction)
+                             corum_min_fraction=corum_min_fraction, preset=preset)
     edges['visible'] = net.edge_visibility(edges, thresholds, biogrid_scope).to_numpy()
     nodes['node_alpha'] = net.node_alpha(nodes, edges).to_numpy()
-    style = {'width_source': width_source, 'literature_weighted': bool(literature_weighted),
-             'biogrid_scope': biogrid_scope}
+    style = {'preset': preset, 'width_source': width_source,
+             'literature_weighted': bool(literature_weighted), 'biogrid_scope': biogrid_scope}
     title = cy.TITLE_PREFIX + dataset
     with _busy(f'drawing {title}'), STATE['cy_lock']:
         for old in cy.proximate_networks():
@@ -159,21 +158,30 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
     return snapshot()
 
 
-def restyle_edges(width_source, literature_weighted, biogrid_scope, actor='gui'):
-    """Recompute edge widths and the BioGRID scope on the drawn network, in place."""
+def restyle(preset, width_source, literature_weighted, biogrid_scope, actor='gui'):
+    """Apply a style preset, the edge widths and the BioGRID scope to the drawn network
+    in place: a column update, so nothing moves.  Nodes carrying a community color keep
+    it.  Returns the number of edges whose look or visibility changed."""
     suid = _net()
-    edges = STATE['edges']
-    width = net.edge_widths(edges, width_source, literature_weighted)
+    nodes, edges = STATE['nodes'], STATE['edges']
+    styled_nodes, styled_edges = net.style_tables(nodes.copy(), edges.copy(), preset,
+                                                  width_source, literature_weighted)
     want = net.edge_visibility(edges, STATE['thresholds'], biogrid_scope)
-    changed = edges.index[(want != edges['visible'].astype(bool)) | (width != edges['width'])]
+    changed = edges.index[(want != edges['visible'].astype(bool))
+                          | (styled_edges[net.EDGE_LOOK] != edges[net.EDGE_LOOK]).any(axis=1)]
     with STATE['lock']:
-        edges['width'] = width.to_numpy()
-    _push_visibility(suid, want, changed, extra_columns=['width'])
-    with _mutate('restyle_edges', f'width by {width_source}, literature '
-                 f'{"weighted" if literature_weighted else "unweighted"}, BioGRID {biogrid_scope}: '
-                 f'{len(changed)} edge(s) changed', actor=actor):
-        STATE['style'] = {'width_source': width_source, 'literature_weighted': bool(literature_weighted),
-                          'biogrid_scope': biogrid_scope}
+        edges[net.EDGE_LOOK] = styled_edges[net.EDGE_LOOK]
+        colored = nodes['fill'].isin(net.COMMUNITY_FILL)
+        styled_nodes.loc[colored, 'fill'] = nodes.loc[colored, 'fill']
+        nodes[net.NODE_LOOK] = styled_nodes[net.NODE_LOOK]
+    _push_visibility(suid, want, changed, extra_columns=net.EDGE_LOOK)
+    with STATE['cy_lock']:
+        cy.update_node_columns(suid, nodes[['id', *net.NODE_LOOK]].rename(columns={'id': 'name'}))
+    with _mutate('restyle', f'{net.STYLE_PRESETS[preset]["label"]}, width by {width_source}, '
+                 f'literature {"weighted" if literature_weighted else "unweighted"}, '
+                 f'BioGRID {biogrid_scope}: {len(changed)} edge(s) changed', actor=actor):
+        STATE['style'] = {'preset': preset, 'width_source': width_source,
+                          'literature_weighted': bool(literature_weighted), 'biogrid_scope': biogrid_scope}
     return len(changed)
 
 
@@ -257,16 +265,87 @@ def _push_visibility(suid, want, changed, extra_columns=()):
                                                    'node_alpha': alpha.astype(int).to_numpy()}))
 
 
-def sync_positions(actor='gui'):
-    """Record the positions the user dragged nodes to."""
+# --- layouts -------------------------------------------------------------------------------
+
+LAYOUT_NAME = re.compile(r'[A-Za-z0-9_]+')
+LAYOUT_COLUMNS = ['id', 'x', 'y']
+
+
+def layout_path(out_dir, name):
+    """``<out_dir>/cytoscape/layouts/<name>.csv``; a name is letters, digits and underscores."""
+    if not LAYOUT_NAME.fullmatch(str(name)):
+        raise ValueError(f"not a layout name: {name!r}; use letters, digits and underscores")
+    return os.path.join(out_dir, 'cytoscape', 'layouts', f'{name}.csv')
+
+
+def saved_layouts(out_dir):
+    """Names of the layouts saved under a dataset directory, sorted."""
+    folder = os.path.join(out_dir, 'cytoscape', 'layouts')
+    if not os.path.isdir(folder):
+        return []
+    return sorted(f[:-4] for f in os.listdir(folder) if f.endswith('.csv'))
+
+
+def read_layout(path):
+    """``{id: (x, y)}`` from a layout CSV.  A missing column, a blank or repeated id or a
+    coordinate that is not a number raises."""
+    # keep_default_na: a bait named NA stays a string, and a blank coordinate fails the
+    # float cast instead of passing through as NaN.
+    frame = pd.read_csv(path, dtype={'id': str}, keep_default_na=False)
+    if list(frame.columns) != LAYOUT_COLUMNS:
+        raise ValueError(f"{path} is not a layout file: columns must be {','.join(LAYOUT_COLUMNS)}")
+    if (frame['id'] == '').any() or frame['id'].duplicated().any():
+        raise ValueError(f"{path} has a blank or repeated node id")
+    xy = frame[['x', 'y']].astype(float)
+    return {i: (x, y) for i, x, y in zip(frame['id'], xy['x'], xy['y'])}
+
+
+def write_layout(path, positions):
+    """Write ``{id: (x, y)}`` as a layout CSV sorted by id."""
+    pd.DataFrame([(i, x, y) for i, (x, y) in sorted(positions.items())],
+                 columns=LAYOUT_COLUMNS).to_csv(path, index=False)
+
+
+def save_layout(out_dir, name, actor='gui'):
+    """Write the drawn nodes' positions into the named layout under ``out_dir``, merged
+    over what the file already holds: drawn nodes take their current positions and
+    rows for nodes not drawn stay, so one layout can cover several bait subsets."""
     suid = _net()
+    path = layout_path(out_dir, name)
     with STATE['cy_lock']:
         positions = cy.current_positions(suid)
-    with _mutate('sync_positions', f'{len(positions)} node(s)', actor=actor):
-        nodes = STATE['nodes']
-        nodes['x'] = nodes['id'].map(lambda i: positions.get(i, (None, None))[0])
-        nodes['y'] = nodes['id'].map(lambda i: positions.get(i, (None, None))[1])
-    return len(positions)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Read, merge and write under the state lock so two saves of one name cannot interleave.
+    with STATE['lock']:
+        merged = {**(read_layout(path) if os.path.isfile(path) else {}), **positions}
+        write_layout(path, merged)
+    with _mutate('save_layout', f'{name}: {len(positions)} drawn node(s), {len(merged)} in file',
+                 actor=actor):
+        pass
+    return {'path': path, 'written': len(positions), 'n_rows': len(merged)}
+
+
+def load_layout(out_dir, name, actor='gui'):
+    """Move the drawn nodes the named layout places to their saved positions and fit
+    the view; drawn nodes the layout does not name stay where they are."""
+    suid = _net()
+    path = layout_path(out_dir, name)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"no layout {name!r}; saved: "
+                                f"{', '.join(saved_layouts(out_dir)) or 'none'}")
+    saved = read_layout(path)
+    drawn = set(STATE['nodes']['id'])
+    targets = {i: xy for i, xy in saved.items() if i in drawn}
+    if not targets:
+        raise ValueError(f"layout {name!r} names none of the {len(drawn)} drawn nodes")
+    with STATE['cy_lock']:
+        cy.set_positions(suid, targets)
+        p4c.fit_content(network=suid)
+    with _mutate('load_layout', f'{name}: {len(targets)} of {len(drawn)} drawn node(s) placed',
+                 actor=actor):
+        pass
+    return {'moved': len(targets), 'unplaced': len(drawn) - len(targets),
+            'not_drawn': len(saved) - len(targets)}
 
 
 # --- selection tools ---------------------------------------------------------------------
@@ -418,11 +497,16 @@ def _symbols():
     return dict(zip(STATE['nodes']['id'], STATE['nodes']['symbol']))
 
 
-def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0, actor='gui'):
-    """Leiden over the selected preys, then re-pack them by community inside the box
-    they occupy.  Only those move; they recolour by community and carry it in the node
-    table.  Selected baits stay where they are: a bait links every prey around it, so
-    it would pull them into one community and then land on the circle among them."""
+def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0, layout='circles',
+                      recolor=True, actor='gui'):
+    """Leiden over the selected preys, then re-arrange them by community inside the box
+    they occupy: ``layout`` names a ``net.CLUSTER_LAYOUTS`` entry.  Only those move; they
+    carry their community in the node table and, when ``recolor`` is set, communities of
+    two or more nodes take a community fill.  Selected baits stay where they are: a bait
+    links every prey around it, so it would pull them into one community and then land
+    among them."""
+    if layout not in net.CLUSTER_LAYOUTS:
+        raise ValueError(f"cluster layout must be one of {tuple(net.CLUSTER_LAYOUTS)}; got {layout!r}")
     suid = _net()
     with STATE['cy_lock']:
         selected = cy.selected_nodes(suid)
@@ -437,31 +521,34 @@ def cluster_selection(resolution=1.0, seed=17, literature_weight=1.0, actor='gui
         raise ValueError("only baits are selected; select the preys to cluster")
     with _busy(f'clustering {len(selected)} selected nodes'):
         membership = net.cluster(STATE['edges'], selected, resolution, seed, literature_weight)
-        placed = net.pack_communities(membership, positions)
+        placed = (net.pack_communities(membership, positions) if layout == 'circles' else
+                  net.layout_communities(membership, STATE['edges'], positions, layout, seed, literature_weight))
     # Numbers continue above any community already assigned, so two clustered regions
     # never share one.
     if 'community' in nodes.columns:
         membership = membership + int(nodes['community'].fillna(-1).max()) + 1
-    fill = net.community_fill(membership)
+    sizes = membership.value_counts()
+    fill = net.community_fill(membership[membership.map(sizes) > 1] if recolor else membership.iloc[:0])
     with STATE['lock']:
         if 'community' not in nodes.columns:
             nodes['community'] = np.nan
         chosen = nodes['id'].isin(membership.index)
         nodes.loc[chosen, 'community'] = nodes.loc[chosen, 'id'].map(membership).to_numpy()
-        nodes.loc[chosen, 'fill'] = nodes.loc[chosen, 'id'].map(fill).to_numpy()
+        nodes.loc[chosen, 'fill'] = nodes.loc[chosen, 'id'].map(fill).fillna(nodes.loc[chosen, 'fill']).to_numpy()
         nodes.loc[chosen, 'x'] = nodes.loc[chosen, 'id'].map(lambda i: placed[i][0]).to_numpy()
         nodes.loc[chosen, 'y'] = nodes.loc[chosen, 'id'].map(lambda i: placed[i][1]).to_numpy()
+        pushed = nodes.loc[chosen, ['id', 'community', 'fill']].rename(columns={'id': 'name'})
     with STATE['cy_lock']:
-        cy.update_node_columns(suid, pd.DataFrame({'name': membership.index,
-                                                   'community': membership.astype(int).to_numpy(),
-                                                   'fill': fill.to_numpy()}))
+        cy.update_node_columns(suid, pushed.astype({'community': int}))
         cy.set_positions(suid, placed)
-    sizes = membership.value_counts().sort_index().tolist()
+    sizes = sizes.sort_index().tolist()
     with _mutate('cluster_selection', f'{len(membership)} nodes -> {len(sizes)} communities '
-                 f'{sizes} (resolution {resolution}, seed {seed}); {len(baits)} bait(s) left in place',
+                 f'{sizes} (resolution {resolution}, seed {seed}, {layout}'
+                 f'{"" if recolor else ", not recolored"}); {len(baits)} bait(s) left in place',
                  actor=actor):
         pass
-    return {'n': len(membership), 'n_communities': len(sizes), 'sizes': sizes, 'baits_left': baits}
+    return {'n': len(membership), 'n_communities': len(sizes), 'sizes': sizes, 'layout': layout,
+            'recolored': len(fill), 'baits_left': baits}
 
 
 def export_image(out_dir, height=2000, actor='gui'):

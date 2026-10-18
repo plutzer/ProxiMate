@@ -11,6 +11,29 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+### Added
+- A *Style preset* select on the Cytoscape tab. *Abundance/literature weighted* is the
+  existing look; *Highlight knowns* draws black ellipse baits, grey rounded preys with a
+  red border on preys whose bait interaction is BioGRID-multivalidated, and grey edges of
+  one width with black complex edges. Picking a preset sets the send options it is
+  designed for, and *Apply Style* (formerly *Apply Edge Style*) switches the drawn network
+  between presets in place. The MCP `cytoscape_send` and `cytoscape_restyle` operations
+  take `preset`, and `cytoscape_list_style_presets` lists the presets with their send
+  options.
+- *Cluster and Repack* gains a *Cluster layout* select (*Circles*, the ring packing;
+  *Force-directed* and *Kamada-Kawai*, which lay each community out by its own edges inside
+  a disc and place the discs by the edges between communities) and a *Recolor communities*
+  checkbox. A community of one node keeps its color. The MCP `cytoscape_cluster_selection`
+  operation takes `layout` and `recolor`.
+
+### Changed
+- BioGRID prey-prey edges are weighted by publication count by default.
+- The Cytoscape tab's *Sync Positions* button is replaced by *Save Layout* and *Load
+  Layout*: a layout is a named `id,x,y` CSV under `<dataset>/cytoscape/layouts/`, saved by
+  merging over an earlier save of that name and loaded onto whichever of its nodes are
+  drawn, leaving the rest in place. The MCP server gains `cytoscape_save_layout`,
+  `cytoscape_load_layout` and `cytoscape_list_layouts`.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added
