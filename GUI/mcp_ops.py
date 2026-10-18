@@ -103,8 +103,9 @@ def server_status(probe: bool = False) -> dict:
 def get_scores(dataset: str, thresholds: dict, baits: list = None, top_n: int = 500) -> dict:
     """The rows of annotated_scores.csv passing ``thresholds``, restricted to ``baits``
     when given: Experiment.ID (bait), Prey.ID, First_ID, First_Prey_Gene, SaintScore,
-    BFDR, WD, WDFDR, FoldChange, AvgIntensity, In.BioGRID.  Ordered by bait then SAINT
-    score, at most ``top_n`` rows; ``n_per_bait`` counts every passing row."""
+    BFDR, WD, WDFDR, FoldChange, AvgIntensity or AvgSpec, In.BioGRID, Multivalidated.
+    Ordered by bait then SAINT score, at most ``top_n`` rows; ``n_per_bait`` counts
+    every passing row."""
     rows = backend.passing_scores(dataset, thresholds, baits)
     out = _records(rows, top_n)
     out.update(dataset=dataset, thresholds=backend.validate_thresholds(thresholds),

@@ -19,7 +19,7 @@ import shutil
 import threading
 import time
 from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, prey_gene_names, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
-from Ann_Enrichment import plot_results
+from Ann_Enrichment import plot_results, go_term_ids, GO_SOURCE_COLUMNS
 from network_comparison import (
     load_and_filter_bait_data,
     calculate_volcano_data,
@@ -80,6 +80,8 @@ for (const event of ['mouseleave', 'focusout']) {
 }
 """
 
+# More test baits than this and the experiment PCA hides its legend until asked.
+PCA_LEGEND_MAX_BAITS = 20
 EMPTY_BAITS = pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"])
 EMPTY_ED = pd.DataFrame(columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID", "Group"])
 
@@ -296,7 +298,9 @@ app_ui = ui.page_navbar(
                     # Row 1: experiment-level and prey-level PCA side by side
                     ui.layout_columns(
                         ui.card(
-                            ui.card_header(tip("Experiment PCA", "experiment_pca")),
+                            ui.card_header(tip("Experiment PCA", "experiment_pca"),
+                                           ui.output_ui("pca_legend_toggle"),
+                                           class_="d-flex justify-content-between align-items-center"),
                             output_widget("raw_pca_plot"),
                             ui.download_button("download_pca_plot", "Export PNG", class_="btn-sm"),
                         ),
@@ -327,7 +331,7 @@ app_ui = ui.page_navbar(
                     ui.layout_columns(
                         ui.card(
                             ui.card_header("SAINT Score vs Fold Change"),
-                            output_widget("saint_scatter_plot"),
+                            ui.output_ui("scatter_body"),
                             ui.download_button("download_scatter_plot", "Export PNG", class_="btn-sm"),
                         ),
                         ui.div(
@@ -337,6 +341,13 @@ app_ui = ui.page_navbar(
                             ui.output_ui("metric_degree"),
                         ),
                         col_widths=(8, 4),
+                    ),
+                    ui.card(
+                        ui.card_header(tip("Passing interactions", "qc_results")),
+                        ui.div(ui.output_text("qc_results_count", inline=True),
+                               ui.download_button("download_qc_results", "Download CSV", class_="btn-sm"),
+                               class_="d-flex justify-content-between align-items-center"),
+                        ui.output_data_frame("qc_results"),
                     ),
 
                     # Keep these plots in code but hide them (for potential future use)
@@ -372,8 +383,7 @@ app_ui = ui.page_navbar(
                         ui.card_header("Feature Enrichment Analysis"),
                         ui.input_select("feature_type", tip("Select Feature Type", "feature_type"), choices=["GO_CC", "GO_BP", "GO_MF", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
                         ui.input_numeric("num_features", tip("Number of Features to Display", "num_features"), value=30, min=1, max=100),
-                        # Thirty feature rows need the height to stay readable.
-                        ui.output_plot("feature_enrichment_plot", height="650px"),
+                        ui.output_ui("feature_heatmap_body"),
                         ui.download_button("download_heatmap", "Export Heatmap PNG", class_="btn-sm"),
                         ui.hr(),
                         ui.h5("Download Enrichment Results"),
@@ -431,7 +441,7 @@ app_ui = ui.page_navbar(
         # Middle section: Volcano plot
         ui.card(
             ui.card_header(tip("Differential Abundance Volcano Plot", "volcano_plot")),
-            output_widget("volcano_plot"),
+            ui.output_ui("volcano_body"),
             ui.download_button("download_volcano_plot", "Export PNG", class_="btn-sm"),
             ui.p("Flanking strips hold preys detected under only one bait "
                  "(y = -log10 BFDR); the central panel holds shared preys "
@@ -443,7 +453,7 @@ app_ui = ui.page_navbar(
         ui.layout_columns(
             ui.card(
                 ui.card_header(tip("Network Overlap", "venn")),
-                ui.output_plot("venn_diagram"),
+                ui.output_ui("venn_body"),
                 ui.download_button("download_venn_diagram", "Export PNG", class_="btn-sm"),
             ),
             ui.card(
@@ -937,6 +947,10 @@ def server(input: Inputs, output: Outputs, session: Session):
     def empty_state_downloads():
         return empty_state("download its results", needs_scores=False)
 
+    def plot_placeholder(text):
+        """What a plot card shows until it has something to draw."""
+        return ui.p(text, class_="plot-placeholder")
+
     def dataset_baits(name):
         """The baits of a scored dataset, in file order."""
         scores = pd.read_csv(backend.results_path(name), usecols=['Experiment.ID'])
@@ -1411,9 +1425,20 @@ def server(input: Inputs, output: Outputs, session: Session):
             matrix = pca_matrix_cached()
             if matrix is None:
                 return None
-            fig = pca_plot(interaction_path, ed_path, matrix=matrix)
+            show_legend = input.pca_show_legend() if many_pca_baits() else True
+            return pca_plot(interaction_path, ed_path, matrix=matrix, show_legend=show_legend)
 
-            return fig
+    @reactive.calc
+    def many_pca_baits():
+        """Whether the active dataset has more test baits than the PCA legend shows by default."""
+        ed = pd.read_csv(os.path.join(out_dir, active(), "ED.csv"))
+        return ed.loc[ed['Type'] != 'C', 'Bait'].nunique() > PCA_LEGEND_MAX_BAITS
+
+    @render.ui
+    def pca_legend_toggle():
+        if not active() or not many_pca_baits():
+            return None
+        return ui.input_checkbox("pca_show_legend", "Show legend", value=False)
 
     @render_plotly
     def prey_pca_plot():
@@ -1502,6 +1527,33 @@ def server(input: Inputs, output: Outputs, session: Session):
         return ui.value_box("Mean Prey-Prey Degree", f"{metrics['mean_degree']:.1f}",
                             showcase=None, theme="info")
 
+    @reactive.calc
+    def qc_results_frame():
+        """The QC tab's passing interactions for the QC bait selection, as displayed."""
+        rows = backend.passing_scores(active_scored(), thresholds(), qc_experiments())
+        return backend.results_table(rows)
+
+    @render.text
+    def qc_results_count():
+        if not active_scored():
+            return ""
+        return f"{len(qc_results_frame())} interactions pass the sidebar thresholds"
+
+    @render.data_frame
+    def qc_results():
+        if not active_scored():
+            return None
+        return render.DataGrid(qc_results_frame(), filters=True, width="100%", height="400px")
+
+    @render.download_button(filename=lambda: f"{active_scored()}_passing_interactions.csv")
+    def download_qc_results():
+        if not active_scored():
+            notify("Score a dataset first.", type="error")
+            return None
+        path = os.path.join(out_dir, "passing_interactions.csv")
+        qc_results_frame().to_csv(path, index=False)
+        return path
+
     # Plot export download handlers (using matplotlib for PNG export)
     @render.download_button(filename="pca_plot.png")
     def download_pca_plot():
@@ -1554,25 +1606,15 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.download_button(filename="heatmap.png")
     def download_heatmap():
-        dataset = active_scored()
-        if not dataset:
-            notify("No dataset selected.", type="error")
+        if isinstance(feature_heatmap(), str):
+            notify(feature_heatmap(), type="error")
             return None
-        feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
-        if not os.path.exists(feature_file):
-            notify("Run feature analysis first.", type="error")
-            return None
-        feature_data = pd.read_csv(feature_file)
-        feature_type = input.feature_type.get() or 'GO_CC'
-        num_features = input.num_features.get() or 30
-        try:
-            fig = plot_results(feature_data, feature_type, num_features)
-            filepath = os.path.join(out_dir, "heatmap.png")
-            fig.savefig(filepath, dpi=150, bbox_inches='tight')
-            return filepath
-        except ValueError as e:
-            notify(f"Insufficient data to generate heatmap: {e}", type="error")
-            return None
+        # A fresh figure: the on-screen one has been resized to its card.
+        feature_data = pd.read_csv(os.path.join(out_dir, active_scored(), "Feature_enrichment.csv"))
+        heatmap = plot_results(feature_data, input.feature_type(), input.num_features() or 30)
+        filepath = os.path.join(out_dir, "heatmap.png")
+        heatmap.savefig(filepath, dpi=150, bbox_inches='tight')
+        return filepath
 
     @render.download_button(filename="volcano_plot.png")
     def download_volcano_plot():
@@ -1613,29 +1655,19 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
+    @render.ui
+    def scatter_body():
+        if input.qc_bait() == "All":
+            return plot_placeholder("Select one bait above to see its SAINT score against fold change.")
+        return ui.div(output_widget("saint_scatter_plot"),
+                      ui.p("Dashed line: SAINT threshold from the sidebar.", class_="text-muted small"))
+
     @render_widget
     def saint_scatter_plot():
         dataset_name = active_scored()
-        if not dataset_name:
+        bait_selection = input.qc_bait()
+        if not dataset_name or bait_selection == "All":
             return None
-
-        # Only show for individual baits, not "All"
-        bait_selection = input.qc_bait.get()
-        if bait_selection == "All":
-            # Return a message figure
-            fig = go.Figure()
-            fig.add_annotation(
-                text="Please select a specific bait to view this plot",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=16)
-            )
-            fig.update_layout(
-                xaxis=dict(visible=False),
-                yaxis=dict(visible=False)
-            )
-            return fig
-
         return plot_saint_scatter(backend.results_path(dataset_name), bait_selection,
                                   thresholds()['SaintScore'])
 
@@ -1660,46 +1692,35 @@ def server(input: Inputs, output: Outputs, session: Session):
         start_job(f"Feature enrichment for {dataset_name}", dataset_name, backend.FEATURE_STAGES,
                   work, done)
 
+    @reactive.calc
+    def feature_heatmap():
+        """The feature heatmap for the active dataset, or the message shown in its place."""
+        _ = feature_enrichment.get()
+        dataset = active_scored()
+        if not dataset or not os.path.exists(os.path.join(out_dir, dataset, "Feature_enrichment.csv")):
+            return "Run Feature Analysis to see the top features."
+        feature_data = pd.read_csv(os.path.join(out_dir, dataset, "Feature_enrichment.csv"))
+        feature_type = input.feature_type()
+        try:
+            return plot_results(feature_data, feature_type, input.num_features() or 30)
+        except ValueError as e:
+            # Raised when too few features pass to draw a map
+            logger.warning("Cannot plot %s enrichment for '%s': %s", feature_type, dataset, e)
+            return (f"No {feature_type} features pass adjusted p ≤ 0.05 and enrichment ≥ 2. "
+                    "Try another feature type or looser thresholds.")
+
+    @render.ui
+    def feature_heatmap_body():
+        heatmap = feature_heatmap()
+        if isinstance(heatmap, str):
+            return plot_placeholder(heatmap)
+        # 96 px per inch, so the card is as tall as the figure was laid out for.
+        return ui.output_plot("feature_enrichment_plot", height=f"{heatmap.figure.get_figheight() * 96:.0f}px")
+
     @render.plot
     def feature_enrichment_plot():
-        # Returning None shows pyplot's current figure if any is open, so nothing
-        # else in the app may leave one (exports build Figure objects directly).
-        _ = feature_enrichment.get()
-
-        dataset = active_scored()
-        if not dataset:
-            return None
-
-        feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
-        if not os.path.exists(feature_file):
-            return None
-
-        # Load the feature enrichment data from file
-        feature_data = pd.read_csv(feature_file)
-
-        feature_type = input.feature_type.get()
-        if not feature_type:
-            feature_type = 'GO_CC'  # Default feature type if none is selected
-        # Plot the results for a specific feature type, e.g., 'Domains'
-
-        num_features = input.num_features.get() if input.num_features.get() else 30  # Default to 30 if not set
-        if num_features < 1:
-            num_features = 30
-
-        # Call the plot_results function to generate the heatmap
-        try:
-            heatmap = plot_results(feature_data, feature_type, num_features)
-            return heatmap
-        except ValueError as e:
-            # Handle case where there aren't enough features to cluster
-            logger.warning("Cannot plot %s enrichment for '%s': %s",
-                           feature_type, dataset, e)
-            import matplotlib.pyplot as plt
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.text(0.5, 0.5, f'Insufficient data to generate plot for {feature_type}\n\nTry selecting a different feature type or lowering the SAINT threshold.',
-                    ha='center', va='center', fontsize=14, wrap=True)
-            ax.axis('off')
-            return fig
+        heatmap = feature_heatmap()
+        return None if isinstance(heatmap, str) else heatmap
 
     @reactive.effect
     @reactive.event(input.active_dataset, datasets, feature_enrichment)
@@ -1765,7 +1786,11 @@ def server(input: Inputs, output: Outputs, session: Session):
             notify("No results match the current filters. Try adjusting the thresholds.", type="warning")
             return None
 
-        # Save to temp file and return
+        # The feature names are UniProt's GO terms with their ids trimmed; put the ids back.
+        go_ids = go_term_ids(pd.read_csv(backend.results_path(dataset), usecols=list(GO_SOURCE_COLUMNS.values())))
+        filtered_data.insert(2, 'GO_id', [go_ids.get(key) for key in
+                                          zip(filtered_data['Feature_type'], filtered_data['Feature'])])
+
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"enrichment_{dataset}_{timestamp}.csv"
         savepath = os.path.join(out_dir, filename)
@@ -1853,6 +1878,18 @@ def server(input: Inputs, output: Outputs, session: Session):
             def _apply():
                 set_thresholds(f"comp_{side}", thresholds())
         _make_use_shared(_side)
+
+    @render.ui
+    def volcano_body():
+        if not input.compare_networks():
+            return plot_placeholder("Choose two baits and click Compare Networks.")
+        return output_widget("volcano_plot")
+
+    @render.ui
+    def venn_body():
+        if not input.compare_networks():
+            return plot_placeholder("Choose two baits and click Compare Networks.")
+        return ui.output_plot("venn_diagram")
 
     @render_widget
     @reactive.event(input.compare_networks)

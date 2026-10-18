@@ -303,7 +303,8 @@ def test_write_feature_enrichment_writes_the_file_under_the_job_lock(scored):
 def _score(bait, prey, **overrides):
     row = {"Experiment.ID": bait, "Prey.ID": prey, "First_ID": prey, "Bait.ID": bait,
            "First_Prey_Gene": prey.lower(), "SaintScore": 0.9, "BFDR": 0.01, "WD": 5.0, "WDFDR": 0.01, "In.BioGRID": False,
-           "SCL": "Nucleus" if prey != "P3" else "Vesicle"}
+           "FoldChange": 4.0,
+           "Multivalidated": False, "AvgIntensity": 10.0, "SCL": "Nucleus" if prey != "P3" else "Vesicle"}
     row.update(overrides)
     return row
 
@@ -379,6 +380,24 @@ def test_passing_scores_filters_orders_and_restricts_to_baits(scored):
     assert list(backend.passing_scores('ds', THRESHOLDS, baits=['BaitB'])['Prey.ID']) == ['P1']
     with pytest.raises(ValueError, match='BaitZ'):
         backend.passing_scores('ds', THRESHOLDS, baits=['BaitZ'])
+
+
+def test_results_table_names_orders_and_rounds_the_columns():
+    rows = pd.DataFrame([{'Experiment.ID': 'BaitA', 'Prey.ID': 'P1', 'First_ID': 'Q1', 'First_Prey_Gene': 'g1',
+                          'SaintScore': 0.98765, 'BFDR': 0.00123, 'WD': 12.34567, 'WDFDR': 0.0004,
+                          'FoldChange': 3.14159, 'AvgSpec': 7.25, 'In.BioGRID': True, 'Multivalidated': False}])
+    table = backend.results_table(rows)
+    assert list(table.columns) == ['Bait', 'Prey gene', 'Prey ID', 'SAINT', 'BFDR', 'WD', 'WDFDR',
+                                   'Fold change', 'Abundance', 'In BioGRID', 'Multivalidated']
+    assert table.iloc[0].tolist() == ['BaitA', 'g1', 'Q1', 0.988, 0.001, 12.346, 0.0, 3.142, 7.25, True, False]
+    with pytest.raises(ValueError, match='AvgSpec'):
+        backend.results_table(rows.drop(columns='AvgSpec'))
+
+
+def test_passing_scores_carries_the_results_table_columns(scored):
+    table = backend.results_table(backend.passing_scores('ds', THRESHOLDS))
+    assert table['Abundance'].tolist() == [10.0, 10.0, 10.0, 10.0]
+    assert table['Multivalidated'].tolist() == [False] * 4
 
 
 def test_dataset_info_summarizes_the_row_files_and_baits(scored):

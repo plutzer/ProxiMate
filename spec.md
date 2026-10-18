@@ -289,6 +289,8 @@ Cytoscape status copes if it was drawn.
 
 ## Chunk 4 — Quality Control tab: results table and plots
 
+**Status: completed.**
+
 ### Results table
 
 Below the metrics row, a card "Passing interactions" with a `render.DataGrid`

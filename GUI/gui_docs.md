@@ -81,7 +81,15 @@ thresholds drive three metrics: the median number of preys per bait that pass, h
 more often passing interactions are already known in BioGRID than before filtering, and
 the mean number of known BioGRID partners each passing prey has among the other passing
 preys. A bait selector restricts the metrics to one bait, and a per-bait scatter shows
-each prey's scores against the SAINT cutoff. Plots can be exported as PNG.
+each prey's SAINT score against fold change (log scale) with the sidebar's SAINT cutoff
+as a dashed line. In the experiment PCA, controls form one grey series and each test
+bait has one color and one legend entry; with more than 20 baits the legend is hidden
+until *Show legend* is ticked. Below the metrics, *Passing interactions* lists every
+interaction passing the sidebar thresholds for the selected bait (or all baits): bait,
+prey gene and UniProt ID, SAINT, BFDR, WD, WDFDR, fold change, abundance (AvgSpec or
+AvgIntensity), and the BioGRID and multivalidated flags, rounded to 3 decimals. The
+table filters and sorts, and *Download CSV* saves the same rows. Plots can be exported
+as PNG.
 
 ## Protein Feature Analysis
 
@@ -90,8 +98,10 @@ over-representation of protein features against every prey detected in the run: 
 Ontology terms (cellular component, biological process, molecular function) and UniProt
 sequence features (motifs, regions, repeats, compositions, domains). *Run Analysis*
 computes the table and writes `Feature_enrichment.csv` into the dataset directory; the
-heatmap shows the top features of one feature type, and the table can be downloaded
-with p-value and enrichment cutoffs.
+heatmap shows the top features of one feature type (labels are cut at 60 characters;
+the figure grows with the number of rows), and the table can be downloaded with p-value
+and enrichment cutoffs. The download carries each feature's full name and, for Gene
+Ontology terms, its GO id.
 
 ## Network Comparison
 

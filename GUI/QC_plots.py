@@ -177,7 +177,8 @@ def experiment_pca(interaction, experimentalDesign, matrix=None):
     """Experiment-level PCA coordinates, one row per experiment.
 
     Returns ``(frame, explained_variance_ratio)``; the frame carries PC1, PC2,
-    Experiment, BaitName and Type.  ``matrix``, if given, is a prepare_pca_matrix
+    Experiment, BaitName, Type and Group (the bait name, or "Control" for every
+    control experiment).  ``matrix``, if given, is a prepare_pca_matrix
     result; otherwise it is computed with default settings.
     """
     if matrix is None:
@@ -188,6 +189,7 @@ def experiment_pca(interaction, experimentalDesign, matrix=None):
     pca_df = pd.DataFrame(data=pca.fit_transform(matrix.T), columns=['PC1', 'PC2'])
     pca_df['Experiment'] = matrix.columns
     pca_df = pca_df.merge(metadata, on='Experiment', how='left')
+    pca_df['Group'] = pca_df['BaitName'].where(pca_df['Type'] != 'C', 'Control')
     return pca_df, pca.explained_variance_ratio_
 
 
@@ -203,16 +205,19 @@ def prey_pca(matrix):
     return prey_df, pca.explained_variance_ratio_
 
 
-def pca_plot(interaction, experimentalDesign, matrix=None):
-    """Experiment-level PCA (one point per experiment); see ``experiment_pca``."""
+def pca_plot(interaction, experimentalDesign, matrix=None, show_legend=True):
+    """Experiment-level PCA (one point per experiment); see ``experiment_pca``.
+    Controls share one grey "Control" series; each test bait has its own color and
+    one legend entry."""
     pca_df, explained_variance = experiment_pca(interaction, experimentalDesign, matrix)
 
     fig = px.scatter(
         pca_df,
         x='PC1',
         y='PC2',
-        color='BaitName',
+        color='Group',
         symbol='Type',
+        color_discrete_map={'Control': 'grey'},
         hover_name='Experiment',
         hover_data=['Experiment', 'BaitName'],
         title="PCA of Interaction Data",
@@ -221,8 +226,12 @@ def pca_plot(interaction, experimentalDesign, matrix=None):
             'PC2': f'PC2 ({explained_variance[1]*100:.2f}% variance)'
         }
     )
+    # Each group has one Type, so each trace is one group; plotly names it "group, type".
+    fig.for_each_trace(lambda trace: trace.update(name=trace.name.split(', ')[0]))
 
     fig.update_layout(
+        showlegend=show_legend,
+        legend_title_text="Bait",
         legend=dict(
             orientation="h",   # horizontal legend
             yanchor="top",

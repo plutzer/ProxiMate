@@ -53,12 +53,13 @@ TOOLTIPS = {
     "pca_imputation": "How to handle proteins not detected in every experiment. Row minimum = fill with that protein's smallest observed value; Zero = fill with 0; Drop = keep only fully observed preys.",  # tooltip
     "pca_normalization": "Scaling applied before PCA. Z-score centers each protein; log2 + Z-score first compresses large intensity ranges (good for raw intensities); None uses values as-is.",  # tooltip
     "pca_min_detection": "Keep only proteins detected in at least this fraction of experiments. Raising it removes sparsely observed proteins that can distort the PCA.",  # tooltip
-    "experiment_pca": "Each point is one experiment, positioned by its overall protein profile. Replicates of the same bait should cluster; a stray point may be a failed run.",  # tooltip
+    "experiment_pca": "Each point is one experiment, positioned by its overall protein profile. Replicates of the same bait should cluster; a stray point may be a failed run. Controls are one grey series.",  # tooltip
     "prey_pca": "Each point is one prey protein, positioned by its pattern across experiments. Preys that behave alike sit close together.",  # tooltip
     "prey_pca_color": "Color the prey points, e.g. by how many experiments each prey was detected in.",  # tooltip
     "qc_bait": "Restrict the plots and metrics to one bait, or choose All to pool every bait.",  # tooltip
     "metric_network_size": "Median number of preys per bait passing the current thresholds - the size of a typical network at these settings.",  # tooltip
     "metric_enrichment": "How much more often the kept interactions are already known in BioGRID, compared to before filtering. Higher suggests the thresholds favor real interactions.",  # tooltip
+    "qc_results": "Every interaction passing the sidebar thresholds, for the bait selected above or all baits. Filter and sort in the table; Download CSV saves the same rows.",  # tooltip
     "metric_degree": "Average number of known BioGRID partners each kept prey has among the other kept preys. Densely connected networks often reflect real complexes.",  # tooltip
     # ---- Protein Feature Analysis tab ----
     "feature_analysis": "Tests whether protein features are over-represented: preys passing all four thresholds (the foreground) are compared against all detected preys.",  # tooltip
@@ -161,7 +162,7 @@ SECTIONS = {
     "Data Thresholding": [
         "pca_imputation", "pca_normalization",
         "pca_min_detection", "experiment_pca", "prey_pca", "prey_pca_color", "qc_bait",
-        "metric_network_size", "metric_enrichment", "metric_degree",
+        "metric_network_size", "metric_enrichment", "metric_degree", "qc_results",
     ],
     "Protein Feature Analysis": [
         "feature_analysis", "feature_type", "num_features", "download_pvalue_threshold",

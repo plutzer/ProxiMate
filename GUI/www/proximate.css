@@ -125,3 +125,11 @@
     margin-bottom: 0.5rem;
     white-space: pre-wrap;
 }
+
+/* A plot card's message until it has something to draw. */
+.plot-placeholder {
+    color: #6c757d;
+    text-align: center;
+    padding: 2rem 1rem;
+    margin: 0;
+}

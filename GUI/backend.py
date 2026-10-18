@@ -559,7 +559,12 @@ def log_tail(name, n_lines=50):
 # --- sandbox -----------------------------------------------------------------------------
 
 SCORE_COLUMNS = ('Experiment.ID', 'Prey.ID', 'First_ID', 'First_Prey_Gene', 'SaintScore', 'BFDR',
-                 'WD', 'WDFDR', 'FoldChange', 'AvgIntensity', 'In.BioGRID')
+                 'WD', 'WDFDR', 'FoldChange', 'AvgIntensity', 'AvgSpec', 'In.BioGRID', 'Multivalidated')
+# The QC tab's results table: display name -> annotated_scores.csv column.
+RESULTS_TABLE_COLUMNS = {'Bait': 'Experiment.ID', 'Prey gene': 'First_Prey_Gene', 'Prey ID': 'First_ID',
+                         'SAINT': 'SaintScore', 'BFDR': 'BFDR', 'WD': 'WD', 'WDFDR': 'WDFDR',
+                         'Fold change': 'FoldChange', 'Abundance': None, 'In BioGRID': 'In.BioGRID',
+                         'Multivalidated': 'Multivalidated'}
 
 
 def passing_scores(name, thresholds, baits=None):
@@ -576,6 +581,17 @@ def passing_scores(name, thresholds, baits=None):
     return (passing[columns]
             .sort_values(['Experiment.ID', 'SaintScore', 'BFDR'], ascending=[True, False, True], kind='stable')
             .reset_index(drop=True))
+
+
+def results_table(rows):
+    """``passing_scores`` rows under the display names of ``RESULTS_TABLE_COLUMNS``,
+    numbers rounded to 3 decimals.  Abundance is AvgSpec or AvgIntensity, whichever
+    the scores carry."""
+    abundance = [c for c in ('AvgSpec', 'AvgIntensity') if c in rows.columns]
+    if not abundance:
+        raise ValueError("the scores carry neither AvgSpec nor AvgIntensity")
+    columns = {**RESULTS_TABLE_COLUMNS, 'Abundance': abundance[0]}
+    return pd.DataFrame({label: rows[column] for label, column in columns.items()}).round(3)
 
 
 def threshold_metrics(name, thresholds, bait=None, biogrid_path=None):

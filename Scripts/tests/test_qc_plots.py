@@ -582,6 +582,16 @@ def test_pca_plot_has_one_point_per_experiment(dataset):
                       matplotlib.figure.Figure)
 
 
+def test_pca_legend_has_one_entry_per_test_bait_plus_one_grey_control(dataset):
+    """b_2 is a control run under the BaitB name; it joins the Control series."""
+    interaction, ed = dataset
+    fig = pca_plot(interaction, ed)
+    assert sorted(trace.name for trace in fig.data) == ["BaitA", "BaitB", "Control"]
+    control = next(trace for trace in fig.data if trace.name == "Control")
+    assert control.marker.color == "grey" and len(control.x) == 1
+    assert pca_plot(interaction, ed, show_legend=False).layout.showlegend is False
+
+
 @pytest.mark.parametrize("mode", ["none", "continuous", "categorical"])
 def test_prey_pca_color_modes(dataset, mode):
     interaction, _ = dataset
