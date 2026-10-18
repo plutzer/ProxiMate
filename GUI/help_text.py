@@ -8,19 +8,20 @@ characters).
 
 from shiny import ui
 
+from thresholds import PRESETS, describe
+
 INFO_STYLE = "cursor: help; color: #6c757d; font-size: 0.85em;"
 
 TOOLTIPS = {
-    # ---- Score thresholds (shared by Data Thresholding, Feature Analysis, Network Comparison, Downloads) ----
+    # ---- Sidebar: the active dataset and the thresholds every tab reads ----
+    "active_dataset": "The dataset every tab works on. Pick one here or click its row in the session table; parsing a dataset makes it active.",  # tooltip
     "saintscore": "SAINT's confidence that a prey is a true interactor of the bait, from 0 to 1. Higher is better; 0.7-0.9 are common cutoffs.",  # tooltip
     "bfdr": "Bayesian False Discovery Rate: the estimated fraction of false interactions among those kept at this cutoff. Lower is stricter; 0.05 is a common cutoff.",  # tooltip
     "wd": "CompPASS WD score: high for preys that are abundant and seen with few baits (specific). Higher is better; 0 disables this filter.",  # tooltip
     "wdfdr": "False discovery rate for the WD score, estimated by shuffling the data. Lower is stricter; 1.0 disables this filter. Only meaningful when the dataset was scored with WDFDR iterations > 0.",  # tooltip
-    # ---- Threshold preset buttons (same values on every tab) ----
-    "preset_stringent": "Sets SAINT Score ≥ 0.9, BFDR ≤ 0.01, WD ≥ 2.0, WDFDR ≤ 0.05 - keeps only the highest-confidence interactions.",  # tooltip
-    "preset_moderate": "Sets SAINT Score ≥ 0.7, BFDR ≤ 0.05, WD ≥ 1.0, WDFDR ≤ 0.1 - a balanced starting point.",  # tooltip
-    "preset_relaxed": "Sets SAINT Score ≥ 0.5, BFDR ≤ 0.1, WD ≥ 0.0, WDFDR ≤ 1.0 - keeps more interactions, including weaker ones.",  # tooltip
-    "preset_none": "Resets all four thresholds so no interactions are filtered out.",  # tooltip
+    "preset_saint_only": f"Sets {describe(PRESETS['SAINT only'])}: keeps the interactions SAINT calls confident and ignores the CompPASS scores.",  # tooltip
+    "preset_wdfdr_only": f"Sets {describe(PRESETS['WDFDR only'])}: keeps the interactions the CompPASS WD score calls specific and ignores SAINT.",  # tooltip
+    "preset_both": f"Sets {describe(PRESETS['Both'])}: keeps only interactions that pass both the SAINT and the WDFDR cut.",  # tooltip
     # ---- Network Scoring tab ----
     "dataset_name": "A short name for this analysis. It labels the dataset everywhere in the app and in downloaded files.",  # tooltip
     "input_format": "The software that produced your quantification file. This sets which upload fields appear below.",  # tooltip
@@ -64,6 +65,7 @@ TOOLTIPS = {
     "download_enrichment_threshold": "Keep features at least this many times more frequent in the network than expected by chance.",  # tooltip
     # ---- Network Comparison tab ----
     "comp_bait": "The bait whose interaction network forms this side of the comparison.",  # tooltip
+    "comp_use_shared": "Copy the sidebar's four thresholds into this network's sliders.",  # tooltip
     "volcano_plot": "Compares prey abundance between the two baits: x = fold change, y = statistical confidence. Points far up and to either side differ most reliably.",  # tooltip
     "venn": "Counts of preys passing thresholds in only network A, only network B, or both.",  # tooltip
     "gene_lists": "The gene names behind each region of the Venn diagram, ready to copy into other tools.",  # tooltip
@@ -106,7 +108,7 @@ TOOLTIPS = {
     "cy_cl_recolor": "Color each community of two or more nodes with its own fill. A community of one node always keeps its color.",  # tooltip
     "cy_cluster": "Run Leiden over the selected preys, color communities of two or more nodes, and arrange each community by the cluster layout inside the box the selection occupies. Only selected preys move; selected baits stay put.",  # tooltip
     # ---- Downloads tab ----
-    "dl_filter_card": "These cutoffs filter the rows of score-based exports only. Experimental Design, SAINT Inputs, and Enriched Features always download unfiltered.",  # tooltip
+    "dl_apply_thresholds": "On, score-based exports (Annotated Scores, Cytoscape, Gene List, ProHits-viz, Custom) keep only rows passing the sidebar thresholds; off exports every row. Experimental Design, SAINT Inputs and Enriched Features are never filtered.",  # tooltip
     "dl_preset": "Ready-made export formats for common next steps. A preset appears only when the dataset has the files it needs.",  # tooltip
     "dl_groups": "Toggle whole families of related columns (or files, for SAINT Inputs) in and out of the export.",  # tooltip
     "custom_columns": "Pick exactly the columns you want. Type to search; click a selected column and press Delete to remove it.",  # tooltip
@@ -129,10 +131,10 @@ def tip(label, key):
     )
 
 
-# Which tab each tooltip belongs to, for documentation served outside the page.  The
-# shared threshold and preset entries sit with the Data Thresholding tab, where the
-# thresholds are explained first.
+# Which tab each tooltip belongs to, for documentation served outside the page.
 SECTIONS = {
+    "Sidebar": ["active_dataset", "saintscore", "bfdr", "wd", "wdfdr", "preset_saint_only",
+                "preset_wdfdr_only", "preset_both"],
     "Network Scoring": [
         "dataset_name", "input_format", "quant_type", "pg_file", "diann_matrix_file",
         "pioneer_matrix_file", "fragpipe_file", "msstats_file", "ed_file", "ed_file_msstats",
@@ -141,8 +143,7 @@ SECTIONS = {
         "download_session", "session_file",
     ],
     "Data Thresholding": [
-        "saintscore", "bfdr", "wd", "wdfdr", "preset_stringent", "preset_moderate",
-        "preset_relaxed", "preset_none", "pca_imputation", "pca_normalization",
+        "pca_imputation", "pca_normalization",
         "pca_min_detection", "experiment_pca", "prey_pca", "prey_pca_color", "qc_bait",
         "metric_network_size", "metric_enrichment", "metric_degree",
     ],
@@ -150,10 +151,10 @@ SECTIONS = {
         "feature_analysis", "feature_type", "num_features", "download_pvalue_threshold",
         "download_enrichment_threshold",
     ],
-    "Network Comparison": ["comp_bait", "volcano_plot", "venn", "gene_lists"],
+    "Network Comparison": ["comp_bait", "comp_use_shared", "volcano_plot", "venn", "gene_lists"],
     "Cytoscape": [key for key in TOOLTIPS if key.startswith("cy_")],
     "Downloads": [
-        "dl_filter_card", "dl_preset", "dl_groups", "custom_columns", "dl_genelist_mode",
+        "dl_apply_thresholds", "dl_preset", "dl_groups", "custom_columns", "dl_genelist_mode",
         "dl_prohits_abundance", "batch_export",
     ],
 }

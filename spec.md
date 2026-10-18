@@ -130,6 +130,8 @@ that the volcano builder emits at most one trace per category per panel.
 
 ## Chunk 2 — Sidebar: active dataset and shared thresholds
 
+**Status: completed.**
+
 ### Active dataset
 
 - The sidebar gains, at the top, `input_select("active_dataset")` listing every

@@ -27,6 +27,13 @@ section to the version and date and starts a fresh Unreleased section above it.
   operation takes `layout` and `recolor`.
 
 ### Changed
+- The sidebar now holds the active dataset, which every tab works on (pick it there or
+  click its row in the session table), and one set of four score thresholds that the
+  Data Thresholding metrics, Protein Feature Analysis, Cytoscape and the Downloads tab
+  (behind an *Apply thresholds* switch) all read. The per-tab dataset selects and slider
+  sets are gone, and the presets are now *SAINT only*, *WDFDR only* and *Both*. Network
+  Comparison compares two baits of the active dataset; cross-dataset comparison is
+  dropped.
 - BioGRID prey-prey edges are weighted by publication count by default.
 - The Cytoscape tab's *Sync Positions* button is replaced by *Save Layout* and *Load
   Layout*: a layout is a named `id,x,y` CSV under `<dataset>/cytoscape/layouts/`, saved by

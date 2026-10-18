@@ -6,3 +6,57 @@
     white-space: nowrap;
     overflow: visible;
 }
+
+/* Sidebar: the shared controls every tab reads. */
+.sidebar .form-group {
+    margin-bottom: 0.75rem;
+}
+.sidebar .irs {
+    white-space: nowrap;
+}
+.mcp-command {
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-size: 0.75em;
+}
+.wdfdr-warning {
+    color: #b35900;
+    font-size: 0.9em;
+}
+
+/* A short heading above a group of related controls. */
+.section-label {
+    font-weight: 500;
+    margin-bottom: 5px;
+}
+
+/* What a tab shows in place of its controls until a dataset that fits is active. */
+.empty-state {
+    text-align: center;
+    padding: 40px;
+    color: #666;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+/* The preset buttons share the sidebar's width without wrapping their labels. */
+.preset-row {
+    display: flex;
+    gap: 0.5rem;
+}
+.preset-row bslib-tooltip {
+    flex: 1 1 0;
+    display: flex;
+}
+.preset-row .btn {
+    flex: 1 1 0;
+    white-space: nowrap;
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+}
+
+/* An open tooltip never intercepts a click meant for the control beneath it. */
+.tooltip {
+    pointer-events: none;
+}
