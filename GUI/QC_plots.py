@@ -723,9 +723,11 @@ def saint_scatter_plot(results_path, bait_name, saintscore_threshold):
     # Update layout
     fig.update_layout(
         title=f"SAINT Score vs Fold Change - {bait_name}",
-        xaxis_title="Fold Change (log2)",
+        xaxis_title="Fold change",
         yaxis_title="SAINT Score",
-        xaxis=dict(zeroline=True, zerolinewidth=1, zerolinecolor='lightgray'),
+        # SAINT's FoldChange is a ratio that runs from below 1 to the hundreds; a log
+        # axis keeps the spread near 1 readable.
+        xaxis_type="log",
         yaxis=dict(range=[-0.05, 1.05]),
         hovermode='closest',
         height=500,

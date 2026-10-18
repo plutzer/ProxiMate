@@ -41,6 +41,12 @@ def _tree(root):
 
 # --- thresholds and paths ------------------------------------------------------
 
+def test_imputation_choices_offer_aft_for_intensities_only():
+    assert set(backend.imputation_choices("Spectral Counts")) == {0}
+    assert set(backend.imputation_choices("Intensity")) == {0, 2, 3}
+    assert set(backend.imputation_choices("LFQ")) == {0, 2, 3}
+
+
 def test_thresholds_must_carry_exactly_the_four_scores():
     assert backend.validate_thresholds({'SaintScore': '0.7', 'BFDR': 0.05, 'WD': 0, 'WDFDR': 1}) == \
         {'SaintScore': 0.7, 'BFDR': 0.05, 'WD': 0.0, 'WDFDR': 1.0}

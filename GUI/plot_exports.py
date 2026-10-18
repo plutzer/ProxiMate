@@ -184,10 +184,8 @@ def saint_scatter_matplotlib(results_path, bait_name, saintscore_threshold):
     ax.axhline(y=saintscore_threshold, color='red', linestyle='--', linewidth=2,
                label=f'Threshold: {saintscore_threshold}', zorder=4)
 
-    # Add zero line for fold change
-    ax.axvline(x=0, color='lightgray', linestyle='-', linewidth=1, zorder=0)
-
-    ax.set_xlabel("Fold Change (log2)", fontsize=12)
+    ax.set_xscale('log')
+    ax.set_xlabel("Fold change", fontsize=12)
     ax.set_ylabel("SAINT Score", fontsize=12)
     ax.set_ylim(-0.05, 1.05)
     ax.set_title(f"SAINT Score vs Fold Change - {bait_name}", fontsize=14, fontweight='bold')

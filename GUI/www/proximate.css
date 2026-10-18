@@ -1,0 +1,8 @@
+/* Shiny's file-input progress bar is too short for its "Upload complete" text. */
+.shiny-input-container .progress {
+    height: 1.5rem;
+}
+.shiny-input-container .progress-bar {
+    white-space: nowrap;
+    overflow: visible;
+}

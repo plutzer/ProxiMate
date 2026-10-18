@@ -391,7 +391,7 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
 
     categories_in_legend = set()
     for panel, category, points, x, y in volcano_panels(volcano_data, bait_a, bait_b):
-        fig.add_trace(go.Scatter(
+        fig.add_trace(go.Scattergl(
             x=x, y=y,
             mode='markers',
             marker=dict(

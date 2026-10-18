@@ -51,6 +51,35 @@ MCP_ADD_COMMANDS = {
     'Codex CLI': f"codex mcp add proximate --url {MCP_URL}",
 }
 
+STYLESHEET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "www", "proximate.css")
+
+# The sidebar layout's main pane is the scroll container, so a tab opened while scrolled
+# down would start mid-page.  A clicked button keeps focus, which keeps its bslib tooltip
+# open; the click hides the tooltip and mutes it until the pointer or focus leaves.
+PAGE_SCRIPT = """
+document.addEventListener('shown.bs.tab', () => {
+  document.querySelectorAll('.bslib-sidebar-layout > .main').forEach(el => el.scrollTop = 0);
+});
+document.addEventListener('click', e => {
+  const trigger = e.target.closest('bslib-tooltip > *');
+  if (!trigger) return;
+  trigger.dataset.tooltipMuted = '1';
+  const tip = bootstrap.Tooltip.getInstance(trigger);
+  if (tip) tip.hide();
+});
+document.addEventListener('show.bs.tooltip', e => {
+  if (e.target.dataset.tooltipMuted) e.preventDefault();
+});
+for (const event of ['mouseleave', 'focusout']) {
+  document.addEventListener(event, e => {
+    if (e.target.dataset) delete e.target.dataset.tooltipMuted;
+  }, true);
+}
+"""
+
+EMPTY_BAITS = pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"])
+EMPTY_ED = pd.DataFrame(columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID", "Group"])
+
 app_ui = ui.page_navbar(
     ui.nav_spacer(),
     ui.nav_panel("Network Scoring",
@@ -279,7 +308,7 @@ app_ui = ui.page_navbar(
                             # d-flex, not layout_columns: layout_columns collapses to
                             # stacked full-width rows inside a narrow card
                             ui.div(
-                                ui.tooltip(ui.input_action_button("qc_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
+                                ui.tooltip(ui.input_action_button("qc_preset_stringent", "Stringent", class_="btn-sm btn-outline-secondary"),
                                            TOOLTIPS["preset_stringent"]),
                                 ui.tooltip(ui.input_action_button("qc_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
                                            TOOLTIPS["preset_moderate"]),
@@ -342,7 +371,7 @@ app_ui = ui.page_navbar(
                         # full-width stacked rows at this card's width.
                         ui.div(
                             ui.tooltip(ui.input_action_button("fa_preset_stringent", "Stringent",
-                                                              class_="btn-sm btn-outline-primary flex-fill"),
+                                                              class_="btn-sm btn-outline-secondary flex-fill"),
                                        TOOLTIPS["preset_stringent"]),
                             ui.tooltip(ui.input_action_button("fa_preset_moderate", "Moderate",
                                                               class_="btn-sm btn-outline-secondary flex-fill"),
@@ -478,7 +507,7 @@ app_ui = ui.page_navbar(
                 ui.input_slider("cy_threshold_wdfdr", tip("WDFDR Threshold", "wdfdr"),
                                 min=0.0, max=1.0, value=1.0, step=0.01),
                 ui.div(
-                    ui.tooltip(ui.input_action_button("cy_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
+                    ui.tooltip(ui.input_action_button("cy_preset_stringent", "Stringent", class_="btn-sm btn-outline-secondary"),
                                TOOLTIPS["preset_stringent"]),
                     ui.tooltip(ui.input_action_button("cy_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
                                TOOLTIPS["preset_moderate"]),
@@ -632,7 +661,7 @@ app_ui = ui.page_navbar(
                             col_widths=(3, 3, 3, 3)
                         ),
                         ui.layout_columns(
-                            ui.tooltip(ui.input_action_button("dl_preset_stringent", "Stringent", class_="btn-sm btn-outline-primary"),
+                            ui.tooltip(ui.input_action_button("dl_preset_stringent", "Stringent", class_="btn-sm btn-outline-secondary"),
                                        TOOLTIPS["preset_stringent"]),
                             ui.tooltip(ui.input_action_button("dl_preset_moderate", "Moderate", class_="btn-sm btn-outline-secondary"),
                                        TOOLTIPS["preset_moderate"]),
@@ -652,7 +681,7 @@ app_ui = ui.page_navbar(
                             ui.card_header("Download Builder"),
                             ui.input_radio_buttons("dl_preset", tip("Preset", "dl_preset"),
                                 choices={key: preset.label for key, preset in dp.PRESETS.items()}),
-                            ui.input_checkbox_group("dl_groups", tip("Include", "dl_groups"), choices=[]),
+                            ui.output_ui("dl_groups_ui"),
                             ui.panel_conditional("input.dl_preset === 'custom'",
                                 ui.input_selectize("custom_columns", tip("Select Columns", "custom_columns"),
                                     choices=DEFAULT_CUSTOM_COLUMNS, multiple=True,
@@ -707,7 +736,8 @@ app_ui = ui.page_navbar(
         ui.hr(),
     ),
     title="ProxiMate",
-    header=ui.output_ui("agent_banner"),
+    header=ui.TagList(ui.include_css(STYLESHEET), ui.tags.script(PAGE_SCRIPT),
+                      ui.output_ui("agent_banner")),
 )
 
 
@@ -794,13 +824,8 @@ def server(input: Inputs, output: Outputs, session: Session):
     def render_datasets():
         return render.DataGrid(datasets())
     
-    saint_baits = reactive.Value(pd.DataFrame(
-        columns=["Experiment Name", "Bait", "Type", "Bait ID"]
-    ))
-
-    ed_dataframe = reactive.Value(pd.DataFrame(
-        columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID", "Group"]
-    ))
+    saint_baits = reactive.Value(EMPTY_BAITS)
+    ed_dataframe = reactive.Value(EMPTY_ED)
 
     @render.data_frame
     def bait_table():
@@ -906,12 +931,10 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.event(input.input_format)
     def clear_tables_on_format_change():
         # Clear tables when format changes to avoid showing stale data
-        if input.input_format.get() in ["MaxQuant", "DIA-NN", "Pioneer", "FragPipe", "MSstats"]:
-            # Clear SAINT bait table
-            saint_baits.set(pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"]))
-        elif input.input_format.get() == "SAINT":
-            # Clear ED table
-            ed_dataframe.set(pd.DataFrame(columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID"]))
+        if input.input_format.get() == "SAINT":
+            ed_dataframe.set(EMPTY_ED)
+        else:
+            saint_baits.set(EMPTY_BAITS)
 
     @reactive.effect
     @reactive.event(input.parse_data)
@@ -947,6 +970,10 @@ def server(input: Inputs, output: Outputs, session: Session):
             # Point the Score panel at the dataset just parsed. The choices are passed
             # here too because the polled refresh of the dropdown has not run yet.
             ui.update_select("score_dataset", choices=dataset_store.names(), selected=dataset_name)
+            # A file input cannot be reset from the server; the name and grids can.
+            ui.update_text("dataset_name", value="")
+            saint_baits.set(EMPTY_BAITS)
+            ed_dataframe.set(EMPTY_ED)
         except ProxiMateError as e:
             notify(format_error_notification(e), type="error", duration=None)
         except (ValueError, backend.BusyError) as e:
@@ -1011,18 +1038,13 @@ def server(input: Inputs, output: Outputs, session: Session):
 
 
     @reactive.effect
-    @reactive.event(input.score_dataset)
+    @reactive.event(input.score_dataset, datasets)
     def update_imputation_choices():
-        """AFT imputation models missing intensities, so a spectral-count dataset
-        offers Default only."""
         dataset = input.score_dataset.get()
-        df = datasets()
-        quant = df.loc[df['Dataset Name'] == dataset, 'Quant Type']
-        if quant.empty:
+        # The select can briefly name a dataset the store no longer holds (Clear All).
+        if not dataset or dataset not in dataset_store.names():
             return
-        choices = {0: "Default"}
-        if quant.values[0] != "Spectral Counts":
-            choices.update({2: "Two-component AFT", 3: "One-component AFT"})
+        choices = backend.imputation_choices(dataset_store.row(dataset)['Quant Type'])
         selected = input.imputation_method.get()
         if int(selected) not in choices:
             selected = "0"
@@ -1687,9 +1709,10 @@ def server(input: Inputs, output: Outputs, session: Session):
                 # Save the results to the dataset directory
                 output_path = os.path.join(out_dir, dataset_name, "Feature_enrichment.csv")
                 result.to_csv(output_path, index=False)
-                logger.info("Feature enrichment written to %s (%d rows)", output_path, len(result))
 
                 progress.set(message="Running protein feature analysis", detail="Done!", value=100)
+            notify(f"Feature enrichment for '{dataset_name}': {len(result)} rows written to "
+                   "Feature_enrichment.csv")
         except Exception as e:
             notify(f"Feature analysis failed for '{dataset_name}': {e}",
                    type="error", duration=None, exc_info=True)
@@ -1994,7 +2017,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             try:
                 scores = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
                 baits = scores['Experiment.ID'].unique().tolist()
-                ui.update_select("comp_bait_b", choices=baits)
+                ui.update_select("comp_bait_b", choices=baits,
+                                 selected=baits[1] if len(baits) > 1 else None)
             except FileNotFoundError:
                 # Expected before a dataset has been scored.
                 logger.debug("No annotated_scores.csv for %s yet", dataset_name)
@@ -2138,21 +2162,24 @@ def server(input: Inputs, output: Outputs, session: Session):
             selected = next(iter(choices))
         ui.update_radio_buttons("dl_preset", choices=choices, selected=selected)
 
-    @reactive.Effect
+    @render.ui
     @reactive.event(input.dl_preset, input.download_dataset)
-    def update_dl_groups():
-        """Populate the Include checkboxes with the preset's column groups or
-        file choices, preserving still-valid picks across switches."""
+    def dl_groups_ui():
+        """The Include checkboxes for the preset's column groups or file choices,
+        preserving still-valid picks across switches; nothing for a preset
+        without items."""
         preset = dp.PRESETS.get(input.dl_preset.get())
         items = () if preset is None else (
             preset.files if preset.kind == "files" else preset.groups)
         if not items:
-            ui.update_checkbox_group("dl_groups", choices=[], selected=[])
-            return
+            return None
         choices = {item.key: item.label for item in items}
-        current = [k for k in input.dl_groups.get() if k in choices]
+        with reactive.isolate():
+            picked = input.dl_groups.get() if "dl_groups" in input else ()
+        current = [k for k in picked if k in choices]
         selected = current or [item.key for item in items if item.default]
-        ui.update_checkbox_group("dl_groups", choices=choices, selected=selected)
+        return ui.input_checkbox_group("dl_groups", tip("Include", "dl_groups"),
+                                       choices=choices, selected=selected)
 
     @reactive.Effect
     @reactive.event(input.download_dataset, datasets)
@@ -2459,10 +2486,12 @@ def server(input: Inputs, output: Outputs, session: Session):
             line = ui.p(ui.span("● ", style="color: green;"),
                         f"Cytoscape {health['version']} at {health['url']}")
         else:
-            line = ui.p(ui.span("● ", style="color: red;"),
-                        f"No Cytoscape at {health['url']}: {health['error']}",
-                        ui.br(), "Start Cytoscape on this machine, or set PROXIMATE_CYTOSCAPE_URL.",
-                        style="color: #a33;")
+            line = ui.div(
+                ui.p(ui.span("● ", style="color: red;"),
+                     f"Cytoscape is not reachable at {health['url']}. Start Cytoscape on this "
+                     "machine or set PROXIMATE_CYTOSCAPE_URL.", style="color: #a33;"),
+                ui.accordion(ui.accordion_panel("Details", ui.tags.pre(health['error'])),
+                             open=False, class_="mb-3"))
         if snap['net_suid'] is None:
             drawn = ui.p("No ProxiMate network drawn yet.", style="color: #666;")
         else:

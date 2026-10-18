@@ -86,6 +86,15 @@ def configure(out_dir):
 
 # --- validation and paths ---------------------------------------------------------
 
+def imputation_choices(quant_type):
+    """Imputation modes the GUI offers for a dataset, keyed as ``score.py`` takes them.
+    AFT imputation models intensities, so spectral counts get the default only."""
+    choices = {0: IMPUTATION_LABELS[0]}
+    if quant_type != 'Spectral Counts':
+        choices.update({k: IMPUTATION_LABELS[k] for k in (2, 3)})
+    return choices
+
+
 def validate_thresholds(thresholds):
     """The four score cutoffs as floats; anything missing, extra or out of range raises."""
     if not isinstance(thresholds, dict):
