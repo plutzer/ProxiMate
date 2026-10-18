@@ -216,6 +216,28 @@ def score_dataset(dataset: str, imputation: int = 0, wdfdr_iterations: int = 100
                                    seed=seed, actor=ACTOR))
 
 
+@register('dataset', "Delete a dataset: its directory, every result in it and its session row. Destructive; needs confirm=true.",
+          tags=('delete', 'remove', 'dataset', 'session'))
+def delete_dataset(dataset: str, confirm: bool = False) -> dict:
+    """Removes ``<out_dir>/<dataset>/`` and the dataset's row from the session; the GUI's
+    table updates.  Refused unless ``confirm`` is true, and while a job runs on the
+    dataset.  A network drawn from it stays in Cytoscape, but the server no longer
+    names it as the drawn dataset.  Tell the user before calling this."""
+    if not confirm:
+        raise ValueError("delete_dataset removes the dataset and its results; pass confirm=true "
+                         "after the user has agreed")
+    backend.delete_dataset(dataset, actor=ACTOR)
+    return {'deleted': dataset, 'datasets': store.names()}
+
+
+@register('dataset', "Rename a dataset: its directory, session row, run.json paths and the drawn Cytoscape network title.",
+          tags=('rename', 'dataset', 'name'))
+def rename_dataset(dataset: str, new_name: str) -> dict:
+    """``new_name`` must be unused and use letters, digits and underscores only.
+    Refused while a job runs on the dataset.  Returns the renamed row."""
+    return _json(backend.rename_dataset(dataset, new_name, actor=ACTOR))
+
+
 @register('dataset', "Replace the whole session with the datasets in a session zip. Destructive; needs confirm=true.",
           tags=('session', 'restore', 'load', 'zip'))
 def load_session(zip_path: str, confirm: bool = False) -> dict:

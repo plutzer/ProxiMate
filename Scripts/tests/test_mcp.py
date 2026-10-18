@@ -236,6 +236,20 @@ def test_load_session_needs_confirmation(scored, tmp_path):
         registry.call('load_session', {'zip_path': str(tmp_path / 'x.zip')})
 
 
+def test_delete_and_rename_are_dataset_ops_and_delete_needs_confirmation(scored):
+    assert {h['name'] for h in registry.search('rename')} >= {'rename_dataset'}
+    assert {h['name'] for h in registry.search('delete')} >= {'delete_dataset'}
+    assert all(registry.OPS[n].mode == 'dataset' for n in ('delete_dataset', 'rename_dataset'))
+    with pytest.raises(ValueError, match='confirm'):
+        registry.call('delete_dataset', {'dataset': 'ds'})
+    assert store.names() == ['ds']
+    renamed = registry.call('rename_dataset', {'dataset': 'ds', 'new_name': 'ds_b'})
+    assert renamed['Dataset Name'] == 'ds_b' and store.names() == ['ds_b']
+    assert registry.call('delete_dataset', {'dataset': 'ds_b', 'confirm': True}) == \
+        {'deleted': 'ds_b', 'datasets': []}
+    assert not scored.exists() and not (scored.parent / 'ds_b').exists()
+
+
 # --- cytoscape ops reach the controller with actor mcp ---------------------------------------
 
 @pytest.fixture
@@ -413,6 +427,8 @@ def test_gui_documentation_covers_every_tab_and_every_tooltip():
     assert covered == set(help_text.TOOLTIPS)
     cy = mcp_tools.get_gui_documentation('Cytoscape')
     assert 'Select Loners' in cy['text']            # the README section rides along
+    scoring = mcp_tools.get_gui_documentation('Network Scoring')
+    assert set(scoring['format_notes']) == set(backend.INPUT_FORMATS)
     with pytest.raises(KeyError):
         mcp_tools.get_gui_documentation('Nope')
 

@@ -6,7 +6,8 @@ module owns validation, the job lock per dataset, provenance and the store.
 
 Operations come in three kinds:
 
-- **dataset**: ``run_parse``, ``run_score``, ``load_session``.  They create or change a
+- **dataset**: ``run_parse``, ``run_score``, ``write_feature_enrichment``,
+  ``delete_dataset``, ``rename_dataset``, ``load_session``.  They create or change a
   dataset directory, take that dataset's job lock (a second caller is refused with
   ``BusyError`` rather than racing) and update the datasets store, so every open
   browser session sees the result.
@@ -32,6 +33,7 @@ import threading
 
 import pandas as pd
 
+import cytoscape_ctl
 import dataset_store as store
 import log_config
 import parse
@@ -64,6 +66,12 @@ PI_METHODS = ('weighted_average', 'single_bait')
 FEATURE_TYPES = ('GO_CC', 'GO_BP', 'GO_MF', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains')
 RESULT_FILES = ('ED.csv', 'interaction.txt', 'merged.csv', 'annotated_scores.csv',
                 'Feature_enrichment.csv', 'run.json')
+# The messages each long operation passes to its ``progress`` callback, in order, so a
+# caller can list them ahead of the run and mark the one under way.
+PARSE_STAGES = ('Parsing the input files', 'Counting what was written', 'Recording the dataset')
+SCORE_STAGES = ('Running SAINT and CompPASS', 'Adding protein annotation', 'Updating the datasets table')
+FEATURE_STAGES = ('Loading the scored table', 'Testing features for enrichment',
+                  'Writing Feature_enrichment.csv')
 
 OUT_DIR = None
 
@@ -184,8 +192,9 @@ def run_parse(name, input_format, files, quant_type, actor='gui', ed_frame=None,
 
     ``files`` maps the format's file keys (see ``INPUT_FORMATS``) to paths.  ``ed_frame``
     replaces the design file with an edited table; ``bait_frame`` does the same for
-    the SAINT bait table.  ``progress(message, fraction)`` is called at each step.
-    Returns the new row.
+    the SAINT bait table.  An empty frame means the file.  ``progress(message, fraction)`` is called with each of
+    ``PARSE_STAGES``.  Returns the new row plus ``n_preys`` and ``n_interactions``, the
+    rows written to prey.txt and interaction.txt.
     """
     if input_format not in INPUT_FORMATS:
         raise ValueError(f"unknown input format {input_format!r}; one of {list(INPUT_FORMATS)}")
@@ -216,9 +225,9 @@ def run_parse(name, input_format, files, quant_type, actor='gui', ed_frame=None,
 
     with _job(name, actor, 'parse'), log_config.run_context(run_id), log_config.dataset_log(output_path):
         logger.info("Parsing dataset '%s' (format=%s, actor=%s)", name, input_format, actor)
-        report(f"Parsing {input_format} inputs", 0.25)
+        report(PARSE_STAGES[0], 0.1)
         if input_format == 'SAINT':
-            if bait_frame is None:
+            if bait_frame is None or bait_frame.empty:
                 bait_frame = pd.read_csv(files['bait'], sep="\t", header=None,
                                          names=["Experiment Name", "Bait", "Type"])
                 bait_frame['Bait ID'] = 'None'
@@ -243,13 +252,22 @@ def run_parse(name, input_format, files, quant_type, actor='gui', ed_frame=None,
             finally:
                 if temporary:
                     os.unlink(ed_path)
-        report("Recording the dataset", 0.85)
+        report(PARSE_STAGES[1], 0.8)
+        counts = {'n_preys': _line_count(os.path.join(output_path, 'prey.txt')),
+                  'n_interactions': _line_count(os.path.join(output_path, 'interaction.txt'))}
+        report(PARSE_STAGES[2], 0.9)
         row = {'Dataset Name': name, 'Input Type': input_format, 'Quant Type': quant_type,
                'Experiments': n_exp, 'Controls': n_ctrl, 'Scored': '', 'Imputation': '',
                'WDFDR iterations': ''}
         store.append(row)
-        report("Done", 1.0)
-    return row
+        logger.info("Parsed '%s': %d experiments, %d controls, %d preys, %d interactions",
+                    name, n_exp, n_ctrl, counts['n_preys'], counts['n_interactions'])
+    return {**row, **counts}
+
+
+def _line_count(path):
+    with open(path, encoding='utf-8') as handle:
+        return sum(1 for _ in handle)
 
 
 # --- score -----------------------------------------------------------------------
@@ -299,8 +317,9 @@ def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_meth
 
     ``imputation`` is 0-3 as ``score.py`` takes it; ``pi_method``/``pi_bait`` apply to
     imputation 2 only and ``aft_min_obs`` (the sigma floor, None for score.py's default
-    of 4) to imputation 2 and 3.  Raises ``StageError`` with the stage's log when either script
-    fails, and ``BusyError`` when the dataset is already being worked on.
+    of 4) to imputation 2 and 3.  ``progress`` is called with each of ``SCORE_STAGES``.
+    Raises ``StageError`` with the stage's log when either script fails, and
+    ``BusyError`` when the dataset is already being worked on.
     """
     row = store.row(name)
     imputation = int(imputation)
@@ -349,7 +368,7 @@ def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_meth
     with _job(name, actor, 'score'), log_config.run_context(run_id), log_config.dataset_log(dataset_path):
         logger.info("Starting scoring for dataset '%s' (quant=%s, imputation=%d, actor=%s)",
                     name, row['Quant Type'], imputation, actor)
-        report("Running SAINT and CompPASS", 0.25)
+        report(SCORE_STAGES[0], 0.1)
         code, tail = _run_stage_subprocess(score_cmd, dataset_path, run_id)
         if code != 0:
             logger.error("score.py failed (exit code %d)", code)
@@ -357,19 +376,87 @@ def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_meth
                              f"{tail or 'No output was logged; check the server log.'}")
         if not os.path.isfile(os.path.join(dataset_path, 'merged.csv')):
             raise StageError(f"Scoring failed for '{name}': merged.csv was not produced")
-        report("Adding protein annotation", 0.65)
+        report(SCORE_STAGES[1], 0.65)
         code, tail = _run_stage_subprocess(ann_cmd, dataset_path, run_id)
         if code != 0:
             logger.error("annotator.py failed (exit code %d)", code)
             raise StageError(f"Annotation failed for '{name}' (exit code {code}):\n"
                              f"{tail or 'No output was logged; check the server log.'}")
-        report("Updating the datasets table", 0.9)
+        report(SCORE_STAGES[2], 0.9)
         store.update(name, Scored='Yes', Imputation=IMPUTATION_LABELS[imputation],
-                     **{'WDFDR iterations': wdfdr_iterations})
+                     **{'WDFDR iterations': wdfdr_iterations},
+                     **session_archive.scored_fields(dataset_path))
         logger.info("Scoring and annotation completed for '%s'", name)
-        report("Done", 1.0)
     return {'dataset': name, 'run_id': run_id, 'organism': organism, 'exclude_hcm': bool(exclude_hcm),
             'imputation': IMPUTATION_LABELS[imputation], 'wdfdr_iterations': wdfdr_iterations}
+
+
+# --- dataset actions ----------------------------------------------------------------
+
+def write_feature_enrichment(name, thresholds, actor='gui', progress=None):
+    """Feature enrichment of every bait's passing preys at ``thresholds``, written to
+    the dataset's Feature_enrichment.csv.  ``progress`` is called with each of
+    ``FEATURE_STAGES``.  Returns the table."""
+    thresholds = validate_thresholds(thresholds)
+    path = _require_scored(name)
+    report = progress or (lambda message, value: None)
+    with _job(name, actor, 'feature enrichment'), log_config.dataset_log(dataset_dir(name)):
+        logger.info("Starting feature enrichment for '%s' (thresholds=%s, actor=%s)",
+                    name, thresholds, actor)
+        report(FEATURE_STAGES[0], 0.1)
+        scores = pd.read_csv(path)
+        report(FEATURE_STAGES[1], 0.3)
+        result = process_refactored(scores, list(FEATURE_TYPES), thresholds)
+        report(FEATURE_STAGES[2], 0.9)
+        result.to_csv(os.path.join(dataset_dir(name), 'Feature_enrichment.csv'), index=False)
+        logger.info("Feature enrichment for '%s': %d rows written", name, len(result))
+    return result
+
+
+def delete_dataset(name, actor='gui'):
+    """Remove the dataset's directory and its row.  A network drawn from it stays in
+    Cytoscape, but the controller no longer names it as the drawn dataset."""
+    store.row(name)
+    path = dataset_dir(name)
+    with _job(name, actor, 'delete'):
+        logger.info("Deleting dataset '%s' (actor=%s)", name, actor)
+        shutil.rmtree(path)
+        store.remove(name)
+    cytoscape_ctl.forget_dataset(name, actor=actor)
+
+
+def _rename_paths(value, old_path, new_path):
+    """``value`` with every string under ``old_path`` moved under ``new_path``."""
+    if isinstance(value, dict):
+        return {k: _rename_paths(v, old_path, new_path) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_rename_paths(v, old_path, new_path) for v in value]
+    if isinstance(value, str) and (value == old_path or value.startswith(old_path + os.sep)):
+        return new_path + value[len(old_path):]
+    return value
+
+
+def rename_dataset(old, new, actor='gui'):
+    """Rename a dataset: its directory, the paths its run.json records, its row and,
+    when it is the drawn one, the Cytoscape network title.  Returns the row."""
+    store.row(old)
+    taken = set(store.names()) | set(session_archive.dataset_directories(OUT_DIR))
+    problem = parse.validate_name(new, taken)
+    if problem != 0:
+        raise ValueError(problem)
+    old_path, new_path = dataset_dir(old), dataset_dir(new)
+    with _job(old, actor, 'rename'):
+        logger.info("Renaming dataset '%s' to '%s' (actor=%s)", old, new, actor)
+        os.rename(old_path, new_path)
+        manifest = os.path.join(new_path, provenance.RUN_JSON_FILENAME)
+        if os.path.isfile(manifest):
+            with open(manifest, encoding='utf-8') as handle:
+                document = json.load(handle)
+            with open(manifest, 'w', encoding='utf-8') as handle:
+                json.dump(_rename_paths(document, old_path, new_path), handle, indent=2)
+        store.update(old, **{'Dataset Name': new})
+    cytoscape_ctl.rename_dataset(old, new, actor=actor)
+    return store.row(new)
 
 
 # --- session -----------------------------------------------------------------------

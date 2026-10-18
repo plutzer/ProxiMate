@@ -209,6 +209,8 @@ on) all follow it. Pick a dataset by clicking its row; every tab follows.
 
 ## Chunk 3 — Data & Scoring tab, dataset actions, progress modal
 
+**Status: completed.**
+
 ### Layout
 
 Top to bottom:

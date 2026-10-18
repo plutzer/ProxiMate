@@ -33,26 +33,43 @@ label sits at the bottom.
 
 ## Network Scoring
 
-Two cards. **Data Parsing** takes a dataset name, an input format (MaxQuant, DIA-NN,
-Pioneer, FragPipe, MSstats or SAINT files) and the matching uploads, plus an
-experimental design CSV that names each experiment, its type (T for a test bait, C for a
-control), its bait and replicate, and optionally the bait's UniProt ID. The design table
-is editable before parsing and the edited table is what gets parsed. *Parse Data* writes
-the SAINT and CompPASS inputs, adds a row to the session table and makes the new dataset
-active.
+Three cards. The **Datasets in this Session** table lists every dataset with its input
+and quant type, experiment and control counts, its *State* (`parsed`, `scored`, or
+`enriched` once Feature Enrichment has been run), when it was scored and against which
+organism, and its imputation and WDFDR settings. Clicking a row makes that dataset
+active. *Delete selected* removes the active dataset and its directory after a
+confirmation; *Rename selected* gives it a new name everywhere (directory, table, run
+manifest and the drawn Cytoscape network); *Clear All Datasets* empties the session; and
+*Download Session Zip* saves every dataset with its results as one archive, which the
+smaller card beside the table restores with *Load Session* (replacing the current
+session).
 
-**Scoring** scores the active dataset (its name is in the card header) and picks the
-organism, the imputation method for missing
-control values (AFT imputation applies to intensity data; a spectral-count dataset
-offers Default only), how π is estimated (imputation 2 only), the sigma floor's minimum
-observation count (imputation 2 and 3; default 4, 0 disables it), the number of WDFDR
-permutations, and for human data whether Human Cell Map evidence is excluded from
-BioGRID. *Score Data* runs SAINTexpress and CompPASS, then annotates the result; the
-row's Scored column flips to Yes. Scoring blocks the page until it finishes.
+**Step 1 — Parse** takes a dataset name, an input format (MaxQuant, DIA-NN, Pioneer,
+FragPipe, MSstats or SAINT files) and the matching uploads. A note under the format
+select says which file the format needs and which of its columns are read, and
+*Download ED template* writes an experimental design CSV with the expected header
+(Experiment Name, Type, Bait, Replicate, Bait ID, Group) and two example rows: one row
+per experiment, with T for a test bait or C for a control, the bait and replicate, and
+optionally the bait's UniProt ID and a control group. The design table is editable
+before parsing and the edited table is what gets parsed. *Parse Data* writes the SAINT
+and CompPASS inputs, adds the dataset to the table and makes it active. When it
+finishes, a summary strip under the button gives the experiment, control, prey and
+interaction counts and a *Score now* button that jumps to the Score card.
 
-The session controls save every dataset as one zip (*Download Session*), restore such a
-zip (*Upload Session Zip*, which replaces the current session), or remove everything
-(*Clear Datasets*).
+**Step 2 — Score** scores the active dataset (its name is in the card header) and picks
+the organism, the imputation method for missing control values (AFT imputation applies
+to intensity data; a spectral-count dataset offers Default only), how π is estimated
+(imputation 2 only), the sigma floor's minimum observation count (imputation 2 and 3;
+default 4, 0 disables it), the number of WDFDR permutations, and for human data whether
+Human Cell Map evidence is excluded from BioGRID. *Score Data* runs SAINTexpress and
+CompPASS, then annotates the result; the row's State becomes `scored`.
+
+Parsing, scoring, feature enrichment and sending to Cytoscape each run under a progress
+modal that lists the job's stages with the current one marked, the elapsed time and the
+last lines of the dataset's `proximate.log`. On success the modal closes and a
+notification reports the outcome; on failure it stays open with the error and the log
+so the cause can be read before closing it. The page stays usable for other tabs, but a
+second job cannot start until the first finishes.
 
 ## Data Thresholding
 

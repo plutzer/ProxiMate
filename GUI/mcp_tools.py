@@ -101,7 +101,8 @@ def get_gui_documentation(section: str = None) -> dict:
     With no section: the table of contents with a paragraph per tab.  With a tab name
     (Network Scoring, Data Thresholding, Protein Feature Analysis, Network Comparison,
     Cytoscape, Downloads): that tab's walkthrough, the tooltip of every control on it
-    keyed by control, and any README section that explains it further.
+    keyed by control, and any README section that explains it further.  Network
+    Scoring also carries ``format_notes``: what each input format needs.
     """
     with open(DOCS_PATH, encoding='utf-8') as handle:
         docs = _split_docs(handle.read())
@@ -118,4 +119,7 @@ def get_gui_documentation(section: str = None) -> dict:
     for title in README_SECTIONS.get(section, ()):
         text += '\n\n### From the README: ' + title + '\n\n' + _readme_section(title)
     controls = {key: help_text.TOOLTIPS[key] for key in help_text.SECTIONS[section]}
-    return {'section': section, 'text': text, 'controls': controls}
+    page = {'section': section, 'text': text, 'controls': controls}
+    if section == 'Network Scoring':
+        page['format_notes'] = dict(help_text.FORMAT_NOTES)
+    return page

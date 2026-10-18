@@ -61,6 +61,8 @@ PASSTHROUGH = [
 STYLE_DEFAULTS = {'EDGE_TARGET_ARROW_SHAPE': 'NONE', 'NETWORK_BACKGROUND_PAINT': '#FFFFFF'}
 
 VISIBILITY_ACTIONS = ('hide_selected', 'show_selected', 'hide_unselected', 'show_all')
+# The messages ``draw`` passes to its ``progress`` callback, in order.
+SEND_STAGES = ('Building the network', 'Drawing it in Cytoscape')
 
 
 @contextlib.contextmanager
@@ -127,10 +129,14 @@ def current_network():
 def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_path=None,
          label_policy='all', layout='force-directed', width_source='abundance',
          literature_weighted=False, biogrid_scope='all', corum_path=None,
-         corum_min_members=3, corum_min_fraction=0.5, preset='abundance_weighted', actor='gui'):
+         corum_min_members=3, corum_min_fraction=0.5, preset='abundance_weighted', actor='gui',
+         progress=None):
     """Build the thresholded network and draw it, replacing every ProxiMate network
     in Cytoscape.  Recreating the style leaves any earlier ProxiMate network on
-    Cytoscape's default style, so none may survive a draw."""
+    Cytoscape's default style, so none may survive a draw.  ``progress(message,
+    fraction)`` is called with each of ``SEND_STAGES``."""
+    report = progress or (lambda message, value: None)
+    report(SEND_STAGES[0], 0.1)
     df = pd.read_csv(scores_path)
     nodes, edges = net.build(df, thresholds, baits=baits, prey_prey=prey_prey,
                              biogrid_path=biogrid_path, label_policy=label_policy,
@@ -142,6 +148,7 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
     style = {'preset': preset, 'width_source': width_source,
              'literature_weighted': bool(literature_weighted), 'biogrid_scope': biogrid_scope}
     title = cy.TITLE_PREFIX + dataset
+    report(SEND_STAGES[1], 0.6)
     with _busy(f'drawing {title}'), STATE['cy_lock']:
         for old in cy.proximate_networks():
             p4c.delete_network(p4c.get_network_suid(old))
@@ -156,6 +163,26 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
         STATE.update(dataset=dataset, title=title, net_suid=suid, nodes=nodes, edges=edges,
                      thresholds=dict(thresholds), style=style)
     return snapshot()
+
+
+def forget_dataset(name, actor='gui'):
+    """Drop the dataset reference when the drawn dataset is deleted.  The drawing and
+    the state behind it stay, so the status can say what happened."""
+    if STATE['dataset'] != name:
+        return
+    with _mutate('forget', f'dataset {name} was deleted; its network stays drawn', actor=actor):
+        STATE['dataset'] = None
+
+
+def rename_dataset(old, new, actor='gui'):
+    """Follow a dataset rename: retitle the drawn network when it is that dataset's."""
+    if STATE['dataset'] != old:
+        return
+    title = cy.TITLE_PREFIX + new
+    with STATE['cy_lock']:
+        p4c.rename_network(title, network=_net())
+    with _mutate('rename', f'{STATE["title"]} -> {title}', actor=actor):
+        STATE.update(dataset=new, title=title)
 
 
 def restyle(preset, width_source, literature_weighted, biogrid_scope, actor='gui'):

@@ -16,8 +16,10 @@ import zipfile
 import tempfile
 import datetime
 import shutil
+import threading
+import time
 from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, prey_gene_names, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
-from Ann_Enrichment import process_refactored, plot_results
+from Ann_Enrichment import plot_results
 from network_comparison import (
     load_and_filter_bait_data,
     calculate_volcano_data,
@@ -28,7 +30,7 @@ from network_comparison import (
 from plot_exports import pca_plot_matplotlib, prey_pca_matplotlib, saint_scatter_matplotlib
 import download_presets as dp
 from download_presets import DEFAULT_CUSTOM_COLUMNS
-from help_text import tip, TOOLTIPS
+from help_text import tip, TOOLTIPS, FORMAT_NOTES
 from thresholds import PRESETS, SLIDERS, DEFAULT, NO_FILTER, preset_id, active_preset, describe
 import session_archive
 import backend
@@ -94,7 +96,36 @@ app_ui = ui.page_navbar(
     ui.nav_panel("Network Scoring",
                  ui.layout_columns(
                     ui.card(
-                        ui.card_header("Data Parsing"),
+                        ui.card_header("Datasets in this Session"),
+                        ui.output_data_frame("render_datasets"),
+                        ui.div(
+                            ui.tooltip(ui.input_action_button("delete_dataset", "Delete selected",
+                                                              class_="btn-sm btn-outline-danger"),
+                                       TOOLTIPS["delete_dataset"]),
+                            ui.tooltip(ui.input_action_button("rename_dataset", "Rename selected",
+                                                              class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["rename_dataset"]),
+                            ui.tooltip(ui.input_action_button("clear_datasets", "Clear All Datasets",
+                                                              class_="btn-sm btn-outline-danger"),
+                                       TOOLTIPS["clear_datasets"]),
+                            ui.tooltip(ui.download_button("download_session", "Download Session Zip",
+                                                          class_="btn-sm"),
+                                       TOOLTIPS["download_session"]),
+                            class_="button-row"),
+                    ),
+                    ui.card(
+                        ui.card_header("Load a saved session"),
+                        ui.input_file("session_file", tip("Upload Session Zip", "session_file")),
+                        ui.input_action_button("upload_session", "Load Session", class_="btn-sm"),
+                    ),
+                    col_widths=[9, 3]
+                 ),
+                 ui.layout_columns(
+                    ui.card(
+                        ui.card_header(
+                            ui.span("Step 1 — Parse", class_="step-title"),
+                            ui.span("Turn quantification files and an experimental design into a dataset.",
+                                    class_="step-purpose")),
                         ui.layout_columns(
                             ui.input_text("dataset_name",
                                         tip("Dataset Name", "dataset_name"),
@@ -104,6 +135,10 @@ app_ui = ui.page_navbar(
                                            selected="MaxQuant"),
                             col_widths=[4, 8]
                         ),
+                        ui.output_ui("format_note"),
+                        ui.tooltip(ui.download_button("ed_template", "Download ED template",
+                                                      class_="btn-sm btn-outline-secondary mb-3"),
+                                   TOOLTIPS["ed_template"]),
                         ui.panel_conditional(
                             "input.input_format === 'MaxQuant'",
                             ui.layout_columns(
@@ -184,10 +219,13 @@ app_ui = ui.page_navbar(
                                 col_widths=[4, 8]
                             )
                         ),
-                        ui.input_action_button("parse_data", "Parse Data")
+                        ui.input_action_button("parse_data", "Parse Data"),
+                        ui.output_ui("parse_summary"),
                     ),
                     ui.card(
-                        ui.card_header(ui.output_text("score_header", inline=True)),
+                        ui.card_header(
+                            ui.span("Step 2 — Score", class_="step-title"),
+                            ui.span(ui.output_text("score_header", inline=True), class_="step-purpose")),
                         # Organism selection for annotation databases.
                         # To add a new organism, add a choice here and sync with
                         # ORGANISMS config in Scripts/annotator.py and setup_datasets.py
@@ -224,29 +262,11 @@ app_ui = ui.page_navbar(
                                              value=4, min=0, step=1),
                         ),
                         ui.input_numeric("wdfdr_iterations", tip("WDFDR Iterations", "wdfdr_iterations"), value=1000),
-                        ui.input_action_button("score_data", "Score Data")
+                        ui.input_action_button("score_data", "Score Data"),
+                        id="score_card",
                     ),
-                    col_widths=[8,4]
+                    col_widths=[8, 4]
                  ),
-                 # Render text if parse button has executed successfully
-                 ui.card(
-                     ui.card_header(
-                        ui.h1('Datasets in this Session'),
-                        ui.layout_columns(
-                            ui.card(
-                                ui.tooltip(ui.input_action_button("clear_datasets", "Clear All Datasets"),
-                                           TOOLTIPS["clear_datasets"]),
-                                ui.tooltip(ui.download_button("download_session", "Download Session Zip"),
-                                           TOOLTIPS["download_session"]),
-                            ),
-                            ui.card(
-                                ui.input_file("session_file", tip("Upload Session Zip", "session_file")),
-                                ui.input_action_button("upload_session", "Load Session"),
-                            ),
-                        )
-                    ),
-                    ui.output_data_frame("render_datasets"),
-                ),
             ),
     ui.nav_panel("Data Thresholding",
                     ui.output_ui("empty_state_thresholding"),
@@ -745,9 +765,47 @@ def server(input: Inputs, output: Outputs, session: Session):
                       style="background: #fff3cd; color: #664d03; padding: 8px 16px; "
                             "border-bottom: 1px solid #ffe69c;")
 
+    feature_enrichment = reactive.Value(pd.DataFrame())
+    last_parse = reactive.Value(None)
+
     @render.data_frame
     def render_datasets():
-        return render.DataGrid(datasets(), selection_mode="row")
+        table = datasets()
+        feature_enrichment()  # the State column follows a finished enrichment run
+        enriched = [os.path.isfile(os.path.join(out_dir, str(name), 'Feature_enrichment.csv'))
+                    for name in table['Dataset Name']]
+        state = ['enriched' if e else 'scored' if scored == 'Yes' else 'parsed'
+                 for e, scored in zip(enriched, table['Scored'])]
+        shown = table.rename(columns={'Dataset Name': 'Dataset', 'Input Type': 'Input',
+                                      'Quant Type': 'Quant'}).drop(columns=['Scored'])
+        shown.insert(5, 'State', state)
+        return render.DataGrid(shown, selection_mode="row")
+
+    @render.ui
+    def format_note():
+        return ui.p(FORMAT_NOTES[input.input_format()], class_="text-muted small")
+
+    @render.download(filename="experimental_design_template.csv")
+    def ed_template():
+        yield "Experiment Name,Type,Bait,Replicate,Bait ID,Group\n"
+        yield "RUVBL1_1,T,RUVBL1,1,Q9Y265,\n"
+        yield "GFP_1,C,GFP,1,None,\n"
+
+    @render.ui
+    def parse_summary():
+        row = last_parse.get()
+        if row is None or row['Dataset Name'] not in available_datasets():
+            return None
+        counts = (('Experiments', 'experiments'), ('Controls', 'controls'),
+                  ('n_preys', 'preys'), ('n_interactions', 'interactions written'))
+        return ui.div(
+            ui.span(f"Parsed '{row['Dataset Name']}':", class_="fw-semibold"),
+            *[ui.span(f"{row[key]} {label}", class_="badge text-bg-light") for key, label in counts],
+            ui.tags.button("Score now", type="button", class_="btn btn-sm btn-primary ms-auto",
+                           onclick="document.getElementById('score_card').scrollIntoView("
+                                   "{behavior: 'smooth', block: 'start'}); "
+                                   "document.getElementById('score_data').focus();"),
+            class_="parse-summary")
 
     @reactive.calc
     def available_datasets():
@@ -996,6 +1054,84 @@ def server(input: Inputs, output: Outputs, session: Session):
         else:
             saint_baits.set(EMPTY_BAITS)
 
+    # Long jobs (parse, score, feature enrichment, Cytoscape send) run in a worker
+    # thread so the session keeps answering.  The thread writes its stage and outcome
+    # into ``job``; the session polls it to drive the progress modal and, on success,
+    # runs the completion callback on its own side.
+    job = {'lock': threading.Lock(), 'version': 0, 'running': False, 'title': '', 'dataset': None,
+           'stages': (), 'stage': None, 'started': 0.0, 'result': None, 'error': None,
+           'on_success': None}
+
+    def start_job(title, dataset, stages, work, on_success):
+        """Run ``work(progress)`` in a thread under the progress modal; ``on_success``
+        receives its return value.  ``stages`` are the messages ``work`` reports."""
+        with job['lock']:
+            busy = job['title'] if job['running'] else None
+            if not busy:
+                job.update(running=True, title=title, dataset=dataset, stages=tuple(stages),
+                           stage=None, started=time.time(), result=None, error=None,
+                           on_success=on_success, version=job['version'] + 1)
+        if busy:
+            notify(f"Wait for '{busy}' to finish first.", type="error")
+            return
+
+        def progress(message, value):
+            with job['lock']:
+                job.update(stage=message, version=job['version'] + 1)
+
+        def run():
+            try:
+                outcome = {'result': work(progress)}
+            except Exception as e:
+                logger.exception("%s failed", title)
+                outcome = {'error': e}
+            with job['lock']:
+                job.update(running=False, version=job['version'] + 1, **outcome)
+
+        threading.Thread(target=run, daemon=True, name=title).start()
+        ui.modal_show(ui.modal(ui.output_ui("job_modal"), title=title, footer=None,
+                               easy_close=False, size="l"))
+
+    @reactive.poll(lambda: (job['version'], int(time.time()) if job['running'] else 0), 1.0)
+    def job_state():
+        with job['lock']:
+            return {key: value for key, value in job.items() if key != 'lock'}
+
+    @render.ui
+    def job_modal():
+        state = job_state()
+        reached = state['stages'].index(state['stage']) if state['stage'] in state['stages'] else -1
+        marks = {'done': '✓', 'current': '●', 'failed': '✗', 'pending': '○'}
+        items = []
+        for i, stage in enumerate(state['stages']):
+            status = ('done' if i < reached else 'pending' if i > reached
+                      else 'failed' if state['error'] is not None else 'current')
+            items.append(ui.tags.li(f"{marks[status]} {stage}", class_=status))
+        elapsed = int(time.time() - state['started'])
+        parts = [ui.tags.ul(*items, class_="job-stages"),
+                 ui.p(f"Elapsed {elapsed // 60}:{elapsed % 60:02d}", class_="text-muted small")]
+        if state['error'] is not None:
+            parts.append(ui.div(format_error_notification(state['error']), class_="job-error"))
+        if state['dataset'] and os.path.isfile(os.path.join(out_dir, state['dataset'], 'proximate.log')):
+            lines = backend.log_tail(state['dataset'], 15)['lines']
+            parts.append(ui.tags.pre("\n".join(lines), class_="job-log"))
+            parts.append(ui.tags.script(
+                "document.querySelectorAll('.job-log').forEach(el => el.scrollTop = el.scrollHeight);"))
+        if not state['running']:
+            parts.append(ui.div(ui.modal_button("Close"), class_="text-end"))
+        return ui.div(*parts)
+
+    @reactive.effect
+    def finish_job():
+        state = job_state()
+        if state['running'] or state['on_success'] is None:
+            return
+        with job['lock']:
+            job['on_success'] = None
+        if state['error'] is None:
+            ui.modal_remove()
+            state['on_success'](state['result'])
+
     @reactive.effect
     @reactive.event(input.parse_data)
     def parse_data():
@@ -1019,14 +1155,16 @@ def server(input: Inputs, output: Outputs, session: Session):
             files = {key: uploaded(main), 'ed': uploaded('ed_file')}
             bait_frame, ed_frame = None, grids[input_format].data_view()
 
-        run_id = log_config.new_run_id()
-        try:
-            with ui.Progress(min=0, max=1) as progress:
-                backend.run_parse(dataset_name, input_format, files, input.quant_type.get(),
-                                  actor='gui', ed_frame=ed_frame, bait_frame=bait_frame,
-                                  run_id=run_id,
-                                  progress=lambda message, value: progress.set(value, message=message))
-            notify(f"Successfully parsed dataset '{dataset_name}'", type="message", duration=5)
+        quant_type = input.quant_type.get()
+
+        def work(progress):
+            return backend.run_parse(dataset_name, input_format, files, quant_type, actor='gui',
+                                     ed_frame=ed_frame, bait_frame=bait_frame, progress=progress)
+
+        def done(row):
+            notify(f"Parsed '{dataset_name}': {row['Experiments']} experiments, {row['Controls']} "
+                   f"controls, {row['n_preys']} preys, {row['n_interactions']} interactions.")
+            last_parse.set(row)
             # Make the new dataset active. The choices are passed here too because the
             # polled refresh of the select has not run yet.
             ui.update_select("active_dataset", choices=dataset_store.names(), selected=dataset_name)
@@ -1034,25 +1172,63 @@ def server(input: Inputs, output: Outputs, session: Session):
             ui.update_text("dataset_name", value="")
             saint_baits.set(EMPTY_BAITS)
             ed_dataframe.set(EMPTY_ED)
-        except ProxiMateError as e:
-            notify(format_error_notification(e), type="error", duration=None)
-        except (ValueError, backend.BusyError) as e:
-            notify(f"Parser: {e}", type="error", duration=None)
-        except FileNotFoundError as e:
-            notify(f"File not found: {e}", type="error", duration=10, exc_info=True)
-        except PermissionError as e:
-            notify(f"Permission denied accessing file: {e}", type="error", duration=10, exc_info=True)
-        except pd.errors.ParserError as e:
-            notify(f"Error parsing file: {e}\n\nEnsure files are in correct format.",
-                   type="error", duration=10, exc_info=True)
+
+        start_job(f"Parsing {dataset_name or 'dataset'}", dataset_name, backend.PARSE_STAGES, work, done)
+
+    # Delete and rename confirm in a modal.  The confirm buttons set their input as an
+    # event (see ``preset_buttons``), since each modal re-creates them.
+    @reactive.effect
+    @reactive.event(input.delete_dataset)
+    def ask_delete():
+        name = active()
+        if not name:
+            notify("No dataset is active.", type="error")
+            return
+        ui.modal_show(ui.modal(
+            ui.p(f"Delete '{name}' and every result in its directory? This cannot be undone."),
+            title="Delete dataset", easy_close=True,
+            footer=ui.div(
+                ui.modal_button("Cancel"),
+                ui.tags.button("Delete", type="button", class_="btn btn-danger ms-2",
+                               onclick="Shiny.setInputValue('confirm_delete', 1, {priority: 'event'})"))))
+
+    @reactive.effect
+    @reactive.event(input.confirm_delete)
+    def confirm_delete():
+        name = active()
+        ui.modal_remove()
+        try:
+            backend.delete_dataset(name, actor='gui')
+            notify(f"Deleted '{name}'.")
         except Exception as e:
-            logger.exception("Unexpected error parsing dataset '%s'", dataset_name)
-            notify(
-                f"An unexpected error occurred while parsing '{dataset_name}':\n{e}\n\n"
-                f"The full error was written to {dataset_name}/proximate.log (run {run_id}).",
-                type="error", duration=None)
+            notify(f"Could not delete '{name}': {e}", type="error", duration=None, exc_info=True)
 
+    @reactive.effect
+    @reactive.event(input.rename_dataset)
+    def ask_rename():
+        name = active()
+        if not name:
+            notify("No dataset is active.", type="error")
+            return
+        ui.modal_show(ui.modal(
+            ui.input_text("rename_to", f"New name for '{name}'", value=name),
+            title="Rename dataset", easy_close=True,
+            footer=ui.div(
+                ui.modal_button("Cancel"),
+                ui.tags.button("Rename", type="button", class_="btn btn-primary ms-2",
+                               onclick="Shiny.setInputValue('confirm_rename', 1, {priority: 'event'})"))))
 
+    @reactive.effect
+    @reactive.event(input.confirm_rename)
+    def confirm_rename():
+        old, new = active(), input.rename_to.get().strip()
+        ui.modal_remove()
+        try:
+            backend.rename_dataset(old, new, actor='gui')
+            ui.update_select("active_dataset", choices=dataset_store.names(), selected=new)
+            notify(f"Renamed '{old}' to '{new}'.")
+        except Exception as e:
+            notify(f"Could not rename '{old}': {e}", type="error", duration=None, exc_info=True)
 
     @reactive.effect
     @reactive.event(input.clear_datasets)
@@ -1099,7 +1275,9 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.text
     def score_header():
-        return f"Scoring: {active()}" if active() else "Scoring (no dataset in the session)"
+        if not active():
+            return "Scoring: no dataset in the session yet."
+        return f"Scoring: {active()} with SAINT and CompPASS, then annotating it."
 
     @reactive.effect
     @reactive.event(input.active_dataset, datasets)
@@ -1153,23 +1331,20 @@ def server(input: Inputs, output: Outputs, session: Session):
             return
         imputation = int(input.imputation_method.get())
         pi_method = input.pi_method.get() if imputation == 2 else None
-        pi_bait = input.pi_bait.get() if pi_method == 'single_bait' else None
-        aft_min_obs = input.aft_min_obs.get() if imputation in (2, 3) else None
-        try:
-            with ui.Progress(min=0, max=1) as progress:
-                backend.run_score(dataset_name, imputation, input.wdfdr_iterations.get(),
-                                  input.organism.get(), input.exclude_hcm.get(),
-                                  pi_method=pi_method, pi_bait=pi_bait, aft_min_obs=aft_min_obs,
-                                  actor='gui',
-                                  progress=lambda message, value: progress.set(
-                                      value, message="Scoring data", detail=message))
-            notify(f"Successfully scored and annotated dataset '{dataset_name}'",
-                   type="message", duration=5)
-        except (backend.StageError, backend.BusyError, ValueError, KeyError) as e:
-            notify(str(e), type="error", duration=None)
-        except Exception as e:
-            logger.exception("Unexpected error during scoring of '%s'", dataset_name)
-            notify(f"Unexpected error during scoring: {e}", type="error", duration=None)
+        settings = dict(imputation=imputation, wdfdr_iterations=input.wdfdr_iterations.get(),
+                        organism=input.organism.get(), exclude_hcm=input.exclude_hcm.get(),
+                        pi_method=pi_method,
+                        pi_bait=input.pi_bait.get() if pi_method == 'single_bait' else None,
+                        aft_min_obs=input.aft_min_obs.get() if imputation in (2, 3) else None)
+
+        def work(progress):
+            return backend.run_score(dataset_name, actor='gui', progress=progress, **settings)
+
+        def done(result):
+            notify(f"Scored and annotated '{dataset_name}' ({result['organism']}, "
+                   f"{result['imputation']} imputation, {result['wdfdr_iterations']} WDFDR iterations).")
+
+        start_job(f"Scoring {dataset_name}", dataset_name, backend.SCORE_STAGES, work, done)
 
     # Quality controls tab
     @reactive.Calc
@@ -1464,9 +1639,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         return plot_saint_scatter(backend.results_path(dataset_name), bait_selection,
                                   thresholds()['SaintScore'])
 
-    feature_enrichment = reactive.Value(pd.DataFrame())
-
-
     # Feature analysis tab
     @reactive.effect
     @reactive.event(input.feature_analysis)
@@ -1475,40 +1647,18 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not dataset_name:
             notify("Score a dataset first.", type="error")
             return
-        try:
-            with ui.Progress(min=0, max=100) as progress, \
-                    log_config.dataset_log(os.path.join(out_dir, dataset_name)):
-                progress.set(message="Running protein feature analysis", value=5)
-                cutoffs = thresholds()
-                logger.info("Starting feature enrichment for '%s' (thresholds=%s)",
-                            dataset_name, cutoffs)
+        cutoffs = thresholds()
 
-                # Get the selected dataset
-                progress.set(message="Running protein feature analysis", detail="Loading dataset...", value=20)
-                dataset = pd.read_csv(os.path.join(out_dir, dataset_name, "annotated_scores.csv"))
+        def work(progress):
+            return backend.write_feature_enrichment(dataset_name, cutoffs, actor='gui', progress=progress)
 
-                progress.set(message="Running protein feature analysis", detail="Processing data...", value=50)
-                result = process_refactored(
-                    dataset,
-                    columns_for_analysis = ['GO_CC', 'GO_BP', 'GO_MF', 'Motifs', 'Regions', 'Repeats', 'Compositions', 'Domains'],
-                    thresholds = cutoffs
-                )
-
-                progress.set(message="Running protein feature analysis", detail="Generating plots...", value=80)
-                # Store the results in the reactive value
-                feature_enrichment.set(result)
-
-                progress.set(message="Running protein feature analysis", detail="Saving results...", value=90)
-                # Save the results to the dataset directory
-                output_path = os.path.join(out_dir, dataset_name, "Feature_enrichment.csv")
-                result.to_csv(output_path, index=False)
-
-                progress.set(message="Running protein feature analysis", detail="Done!", value=100)
+        def done(result):
+            feature_enrichment.set(result)
             notify(f"Feature enrichment for '{dataset_name}': {len(result)} rows written to "
                    "Feature_enrichment.csv")
-        except Exception as e:
-            notify(f"Feature analysis failed for '{dataset_name}': {e}",
-                   type="error", duration=None, exc_info=True)
+
+        start_job(f"Feature enrichment for {dataset_name}", dataset_name, backend.FEATURE_STAGES,
+                  work, done)
 
     @render.plot
     def feature_enrichment_plot():
@@ -2107,6 +2257,9 @@ def server(input: Inputs, output: Outputs, session: Session):
                              open=False, class_="mb-3"))
         if snap['net_suid'] is None:
             drawn = ui.p("No ProxiMate network drawn yet.", style="color: #666;")
+        elif snap['dataset'] is None:
+            drawn = ui.p(f"{snap['title']} is still drawn, but its dataset no longer exists.",
+                         style="color: #a33;")
         else:
             drawn = ui.p(f"{snap['title']}: {snap['n_nodes']} nodes, {snap['n_edges']} edges "
                          f"({snap['n_hidden']} hidden)" + (f" — {snap['busy']}" if snap['busy'] else ""))
@@ -2132,19 +2285,25 @@ def server(input: Inputs, output: Outputs, session: Session):
             else:
                 notify(f"CORUM covers human complexes only; drawing the {organism} network without them.",
                        type="warning")
-        snap = cy_call("send the network to Cytoscape", cytoscape_ctl.draw,
-                       dataset_name, os.path.join(dataset_path, "annotated_scores.csv"),
-                       thresholds(), baits=list(input.cy_baits.get() or []),
-                       prey_prey=input.cy_prey_prey.get(), biogrid_path=biogrid_path,
-                       label_policy=input.cy_labels.get(), layout=input.cy_layout.get(),
-                       width_source=input.cy_edge_width.get(),
+        cutoffs = thresholds()
+        options = dict(baits=list(input.cy_baits.get() or []), prey_prey=input.cy_prey_prey.get(),
+                       biogrid_path=biogrid_path, label_policy=input.cy_labels.get(),
+                       layout=input.cy_layout.get(), width_source=input.cy_edge_width.get(),
                        literature_weighted=input.cy_lit_weighted.get(),
                        biogrid_scope=input.cy_biogrid_scope.get(), corum_path=corum_path,
                        corum_min_members=int(input.cy_corum_min_members.get() or 3),
                        corum_min_fraction=float(input.cy_corum_min_fraction.get() or 0.0),
                        preset=input.cy_style_preset.get())
-        if snap:
+
+        def work(progress):
+            return cytoscape_ctl.draw(dataset_name, os.path.join(dataset_path, "annotated_scores.csv"),
+                                      cutoffs, progress=progress, **options)
+
+        def done(snap):
             notify(f"Drew {snap['n_nodes']} nodes and {snap['n_edges']} edges in Cytoscape.")
+
+        start_job(f"Sending {dataset_name} to Cytoscape", dataset_name, cytoscape_ctl.SEND_STAGES,
+                  work, done)
 
     @reactive.effect
     @reactive.event(input.cy_rethreshold)

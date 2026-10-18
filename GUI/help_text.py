@@ -31,6 +31,7 @@ TOOLTIPS = {
     "pioneer_matrix_file": "The protein_groups_wide.tsv table written by Pioneer's SearchDIA. Run columns are the MS file names without extension.",  # tooltip
     "fragpipe_file": "The combined_protein.tsv table from a FragPipe output folder.",  # tooltip
     "msstats_file": "The ProteinLevelData.csv table exported by MSstats after summarization.",  # tooltip
+    "ed_template": "A CSV with the experimental design header and two example rows to fill in.",  # tooltip
     "ed_file": "CSV describing your experiments. Columns: Experiment Name, Type (T = test, C = control), Bait, Replicate, Bait ID. Optional Group column pairs tests with controls; controls may list several groups or * for all.",  # tooltip
     "ed_file_msstats": "Same experimental design CSV, but each Experiment Name must match an originalRUN value in ProteinLevelData.csv.",  # tooltip
     "saint_bait": "SAINT bait.txt: one row per experiment - experiment name, bait name, and T (test) or C (control).",  # tooltip
@@ -43,6 +44,8 @@ TOOLTIPS = {
     "pi_bait": "The control bait whose replicates are used to fit π. Pick one with several replicates.",  # tooltip
     "aft_min_obs": "Sigma floor for the AFT fit. A prey seen in fewer than this many runs is fitted with the dataset's median per-prey spread instead of its own, which keeps its imputed control mean from being pinned to the bait intensity in small designs. 4 is recommended; 0 turns the floor off.",  # tooltip
     "wdfdr_iterations": "Number of data shuffles used to estimate the WD score's false discovery rate (WDFDR). More iterations are slower but more stable; 0 skips WDFDR entirely.",  # tooltip
+    "delete_dataset": "Removes the active dataset and every result in its directory, after a confirmation. A network drawn from it stays in Cytoscape.",  # tooltip
+    "rename_dataset": "Gives the active dataset a new name everywhere: its directory, the session table, its run manifest and the drawn Cytoscape network.",  # tooltip
     "clear_datasets": "Removes every dataset in this session, including results stored on the server. Download a session zip first if you want to keep them.",  # tooltip
     "download_session": "Saves every dataset in this session, with its results, as one zip you can restore later with Upload Session Zip.",  # tooltip
     "session_file": "A session zip downloaded earlier. Loading it replaces the current session with all of its datasets and results.",  # tooltip
@@ -118,6 +121,18 @@ TOOLTIPS = {
 }
 
 
+# What each input format needs, shown under the format select and served with the
+# documentation.  Every format but SAINT also takes the experimental design CSV.
+FORMAT_NOTES = {
+    "MaxQuant": "Upload proteinGroups.txt from the combined/txt folder plus the experimental design CSV. Read: Majority protein IDs, Gene names, Reverse, Potential contaminant, and the Intensity, LFQ intensity or MS/MS count column of each experiment named in the design.",
+    "DIA-NN": "Upload report.pg_matrix.tsv plus the experimental design CSV. Read: Protein.Group, Protein.Names, Genes and one quantity column per run; the design's Experiment Name values must match the run column headers exactly. Intensity only.",
+    "Pioneer": "Upload protein_groups_wide.tsv from SearchDIA plus the experimental design CSV. Read: the protein group, gene and one quantity column per run, named by the MS file without its extension. Intensity only.",
+    "FragPipe": "Upload combined_protein.tsv plus the experimental design CSV. Read: Protein ID, Gene and each experiment's Intensity, MaxLFQ Intensity or Spectral Count column.",
+    "MSstats": "Upload ProteinLevelData.csv as exported by MSstats plus the experimental design CSV. Read: Protein, originalRUN and LogIntensities; each Experiment Name must match an originalRUN value. Already log2, normalized and imputed, so score with Imputation = Default.",
+    "SAINT": "Upload bait.txt, prey.txt and interaction.txt as SAINTexpress takes them (tab-separated, no header). The design is derived from bait.txt; bait protein IDs can be typed into the table before parsing.",
+}
+
+
 def tip(label, key):
     """Label followed by an info icon; hovering the icon shows TOOLTIPS[key].
 
@@ -139,8 +154,9 @@ SECTIONS = {
         "dataset_name", "input_format", "quant_type", "pg_file", "diann_matrix_file",
         "pioneer_matrix_file", "fragpipe_file", "msstats_file", "ed_file", "ed_file_msstats",
         "saint_bait", "saint_prey", "saint_interaction", "organism", "exclude_hcm",
-        "imputation_method", "pi_method", "pi_bait", "aft_min_obs", "wdfdr_iterations", "clear_datasets",
-        "download_session", "session_file",
+        "imputation_method", "pi_method", "pi_bait", "aft_min_obs", "wdfdr_iterations",
+        "delete_dataset", "rename_dataset", "clear_datasets", "download_session", "session_file",
+        "ed_template",
     ],
     "Data Thresholding": [
         "pca_imputation", "pca_normalization",

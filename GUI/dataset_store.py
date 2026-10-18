@@ -89,6 +89,15 @@ def update(name, **fields):
         _commit(t, f"updated {name} ({', '.join(fields)})")
 
 
+def remove(name):
+    with STATE['lock']:
+        t = STATE['table']
+        mask = t['Dataset Name'].astype(str) == str(name)
+        if not mask.any():
+            raise KeyError(f"no dataset named {name!r} in the session")
+        _commit(t[~mask], f"removed {name}")
+
+
 def replace(new_table):
     with STATE['lock']:
         _commit(new_table.copy(), "replaced")
