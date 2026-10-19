@@ -24,10 +24,66 @@
     font-size: 0.9em;
 }
 
-/* A short heading above a group of related controls. */
-.section-label {
-    font-weight: 500;
-    margin-bottom: 5px;
+/* Every card's body has the same padding, and stacked cards the same gap. */
+.card > .card-body {
+    padding: 1rem 1.25rem;
+}
+.card {
+    margin-bottom: 1rem;
+}
+/* A card body is a flex column; buttons placed directly in it keep their own width
+   instead of stretching across the card. */
+.card-body > .btn,
+.card-body > bslib-tooltip > .btn {
+    align-self: flex-start;
+}
+
+/* A short heading above a group of related controls inside a card. */
+.section-heading {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #495057;
+    margin: 0.75rem 0 0.5rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid #dee2e6;
+}
+
+/* Explanations and secondary details beside a control or plot. */
+.help-text {
+    font-size: 0.875em;
+    color: #6c757d;
+}
+
+/* The info icon after a label; hovering it shows the tooltip. */
+.info-icon {
+    cursor: help;
+    color: #6c757d;
+    font-size: 0.85em;
+}
+
+/* Shown above the tabs while an agent job holds a dataset's lock. */
+.agent-banner {
+    background: #fff3cd;
+    color: #664d03;
+    padding: 8px 16px;
+    border-bottom: 1px solid #ffe69c;
+}
+
+/* A single action button centered between two rows of cards. */
+.centered-action {
+    text-align: center;
+    margin: 0.5rem 0 1.5rem;
+}
+
+/* Connection state lines, such as the Cytoscape status. */
+.status-ok {
+    color: #198754;
+}
+.status-bad,
+.status-error {
+    color: #b02a37;
 }
 
 /* What a tab shows in place of its controls until a dataset that fits is active. */
@@ -69,12 +125,12 @@
     margin-top: 0.75rem;
 }
 
-/* The step cards' headers: the step name over a one-line purpose. */
+/* The step cards' headers: the step name followed by a one-line purpose. */
 .step-title {
     font-weight: 600;
 }
 .step-purpose {
-    display: block;
+    margin-left: 0.5rem;
     font-size: 0.85em;
     font-weight: 400;
     color: #6c757d;
@@ -132,4 +188,27 @@
     text-align: center;
     padding: 2rem 1rem;
     margin: 0;
+}
+
+/* The Cytoscape tab: the pre-send estimate and the activity table. */
+.cy-estimate {
+    font-size: 0.9em;
+    color: #6c757d;
+    margin: 0.5rem 0 0;
+}
+.cy-estimate.error {
+    color: #b35a5a;
+}
+.cy-activity {
+    max-height: 300px;
+    overflow-y: auto;
+}
+.cy-activity td {
+    white-space: normal;
+    word-break: break-word;
+}
+.cy-activity th {
+    position: sticky;
+    top: 0;
+    background: #fff;
 }

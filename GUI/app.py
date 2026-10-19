@@ -1,5 +1,5 @@
 from functools import partial
-from shiny import App, Inputs, Outputs, Session, reactive, render, ui, run_app
+from shiny import App, Inputs, Outputs, Session, reactive, render, req, ui, run_app
 import plotly.graph_objects as go
 import plotly.express as px
 from shinywidgets import output_widget, render_widget, render_plotly
@@ -37,7 +37,7 @@ import backend
 import dataset_store
 import mcp_registry
 import cytoscape_ctl
-from cytoscape_net import STYLE_PRESETS
+from cytoscape_net import SEND_WARN_EDGES, STYLE_PRESETS, selection_table
 import log_config
 import provenance
 from log_config import get_logger
@@ -95,7 +95,7 @@ def threshold_sliders(prefix, values):
 
 app_ui = ui.page_navbar(
     ui.nav_spacer(),
-    ui.nav_panel("Network Scoring",
+    ui.nav_panel("Data & Scoring",
                  ui.layout_columns(
                     ui.card(
                         ui.card_header("Datasets in this Session"),
@@ -199,7 +199,7 @@ app_ui = ui.page_navbar(
                                     ui.input_file("ed_file", tip("Experimental Design File", "ed_file_msstats")),
                                     ui.tags.small(
                                         "Note: MSstats data is already log2-transformed, normalized, and imputed. Set Imputation Method to 'Default' (0).",
-                                        class_="text-muted small d-block mt-2"
+                                        class_="help-text d-block mt-2"
                                     )
                                 ),
                                 ui.output_data_frame("ed_table_msstats"),
@@ -270,7 +270,7 @@ app_ui = ui.page_navbar(
                     col_widths=[8, 4]
                  ),
             ),
-    ui.nav_panel("Data Thresholding",
+    ui.nav_panel("Quality Control",
                     ui.output_ui("empty_state_thresholding"),
                     # The PCA plots read the parsed data, so they show for any dataset.
                     ui.panel_conditional(
@@ -367,26 +367,25 @@ app_ui = ui.page_navbar(
                     ),
                     ),
     ),
-    ui.nav_panel("Protein Feature Analysis",
+    ui.nav_panel("Feature Enrichment",
                 ui.output_ui("empty_state_feature_analysis"),
                 ui.panel_conditional(
                 "output.active_state === 'scored'",
                 ui.layout_columns(
                     ui.card(
-                        ui.card_header("Parameters for Feature Analysis"),
+                        ui.card_header("Foreground"),
                         ui.p("Preys passing the sidebar thresholds form the foreground tested for enrichment.",
-                             class_="text-muted small"),
-                        ui.tooltip(ui.input_action_button("feature_analysis", "Run Feature Analysis"),
+                             class_="help-text"),
+                        ui.tooltip(ui.input_action_button("feature_analysis", "Run Feature Enrichment"),
                                    TOOLTIPS["feature_analysis"]),
                     ),
                     ui.card(
-                        ui.card_header("Feature Enrichment Analysis"),
+                        ui.card_header("Top features"),
                         ui.input_select("feature_type", tip("Select Feature Type", "feature_type"), choices=["GO_CC", "GO_BP", "GO_MF", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
                         ui.input_numeric("num_features", tip("Number of Features to Display", "num_features"), value=30, min=1, max=100),
                         ui.output_ui("feature_heatmap_body"),
                         ui.download_button("download_heatmap", "Export Heatmap PNG", class_="btn-sm"),
-                        ui.hr(),
-                        ui.h5("Download Enrichment Results"),
+                        ui.p("Download Enrichment Results", class_="section-heading"),
                         ui.layout_columns(
                             ui.input_select("download_feature_type", tip("Feature Type", "feature_type"),
                                           choices=["All", "GO_CC", "GO_BP", "GO_MF", "Motifs", "Regions", "Repeats", "Compositions", "Domains"]),
@@ -406,7 +405,7 @@ app_ui = ui.page_navbar(
                 ),
                 ),
     ),
-    ui.nav_panel("Network Comparison",
+    ui.nav_panel("Compare Baits",
         ui.output_ui("empty_state_network_comparison"),
         ui.panel_conditional(
         "output.active_state === 'scored'",
@@ -434,8 +433,8 @@ app_ui = ui.page_navbar(
 
         # Compare button
         ui.div(
-            ui.input_action_button("compare_networks", "Compare Networks", class_="btn-primary"),
-            style="text-align: center; margin: 20px 0;"
+            ui.input_action_button("compare_networks", "Compare", class_="btn-primary"),
+            class_="centered-action"
         ),
 
         # Middle section: Volcano plot
@@ -446,7 +445,7 @@ app_ui = ui.page_navbar(
             ui.p("Flanking strips hold preys detected under only one bait "
                  "(y = -log10 BFDR); the central panel holds shared preys "
                  "(y = -log10 BH-adjusted p).",
-                 class_="text-muted small mt-2"),
+                 class_="help-text mt-2"),
         ),
 
         # Bottom section: Venn diagram and gene lists
@@ -481,7 +480,10 @@ app_ui = ui.page_navbar(
         ui.layout_columns(
             ui.card(
                 ui.card_header("Network"),
+                ui.p("Network", class_="section-heading"),
                 ui.input_selectize("cy_baits", tip("Baits", "cy_baits"), choices=[], multiple=True),
+                ui.output_ui("cy_thresholds_line"),
+                ui.p("Style", class_="section-heading"),
                 ui.input_select("cy_style_preset", tip("Style preset", "cy_style_preset"),
                                 choices={key: preset["label"] for key, preset in STYLE_PRESETS.items()}),
                 ui.input_select("cy_labels", tip("Labels", "cy_labels"),
@@ -489,17 +491,17 @@ app_ui = ui.page_navbar(
                 ui.input_select("cy_layout", tip("Layout", "cy_layout"),
                                 choices=["force-directed", "kamada-kawai", "circular", "grid",
                                          "hierarchical", "degree-circle"]),
-                ui.p("Edge style", class_="section-label"),
                 ui.input_select("cy_edge_width", tip("Edge width", "cy_edge_width"),
                                 choices={"abundance": "Abundance (intensity / spectral counts)",
                                          "SaintScore": "SAINT score", "WD": "WD score",
                                          "FoldChange": "Fold change", "uniform": "Uniform"}),
+                ui.p("Edges", class_="section-heading"),
                 ui.input_checkbox("cy_prey_prey", tip("Prey-prey BioGRID edges", "cy_prey_prey"), value=True),
                 ui.input_select("cy_biogrid_scope", tip("BioGRID edges", "cy_biogrid_scope"),
                                 choices={"all": "All pairs", "multivalidated": "Multivalidated only"}),
                 ui.input_checkbox("cy_lit_weighted", tip("Weight BioGRID edges by publications", "cy_lit_weighted"),
                                   value=True),
-                ui.p("Complexes", class_="section-label"),
+                ui.p("Complexes", class_="section-heading"),
                 ui.input_checkbox("cy_corum", tip("CORUM complex edges", "cy_corum"), value=False),
                 ui.layout_columns(
                     ui.input_numeric("cy_corum_min_members", tip("Min subunits drawn", "cy_corum_min_members"),
@@ -508,6 +510,7 @@ app_ui = ui.page_navbar(
                                      value=0.5, min=0.0, max=1.0, step=0.05),
                     col_widths=(6, 6),
                 ),
+                ui.output_ui("cy_estimate"),
                 ui.div(
                     ui.tooltip(ui.input_action_button("cy_send", "Send to Cytoscape", class_="btn-primary"),
                                TOOLTIPS["cy_send"]),
@@ -515,104 +518,133 @@ app_ui = ui.page_navbar(
                                TOOLTIPS["cy_rethreshold"]),
                     ui.tooltip(ui.input_action_button("cy_restyle", "Apply Style", class_="btn-outline-secondary"),
                                TOOLTIPS["cy_restyle"]),
-                    class_="d-flex flex-wrap gap-2 mt-2",
+                    class_="button-row",
                 ),
             ),
             ui.card(
                 ui.card_header("Cytoscape"),
-                ui.output_ui("cy_status"),
-                ui.input_action_button("cy_probe", "Check Connection", class_="btn-sm btn-outline-secondary"),
-                ui.hr(),
-                ui.p("Selection", class_="section-label"),
-                ui.div(
-                    ui.tooltip(ui.input_action_button("cy_read_selection", "Read Selection", class_="btn-sm btn-outline-primary"),
-                               TOOLTIPS["cy_read_selection"]),
-                    ui.tooltip(ui.input_action_button("cy_hide_selected", "Hide Edges", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_hide_selected"]),
-                    ui.tooltip(ui.input_action_button("cy_show_selected", "Show Edges", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_show_selected"]),
-                    ui.tooltip(ui.input_action_button("cy_hide_unselected", "Hide Others", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_hide_unselected"]),
-                    ui.tooltip(ui.input_action_button("cy_show_all", "Show All", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_show_all"]),
-                    ui.tooltip(ui.input_action_button("cy_select_loners", "Select Loners", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_select_loners"]),
-                    ui.tooltip(ui.input_action_button("cy_select_satellites", "Select Satellites", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_select_satellites"]),
-                    class_="d-flex flex-wrap gap-2 mb-3",
+                ui.accordion(
+                    ui.accordion_panel(
+                        "Status",
+                        ui.output_ui("cy_status"),
+                        ui.div(
+                            ui.input_action_button("cy_probe", "Check Connection", class_="btn-sm btn-outline-secondary"),
+                            ui.tooltip(ui.input_action_button("cy_unlock", "Unlock View", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["cy_unlock"]),
+                            class_="button-row",
+                        ),
+                        value="status",
+                    ),
+                    ui.accordion_panel(
+                        ui.span("Selection ", ui.output_text("cy_selection_count", inline=True)),
+                        ui.div(
+                            ui.tooltip(ui.input_action_button("cy_read_selection", "Read Selection", class_="btn-sm btn-outline-primary"),
+                                       TOOLTIPS["cy_read_selection"]),
+                            ui.tooltip(ui.input_action_button("cy_hide_selected", "Hide Edges", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["cy_hide_selected"]),
+                            ui.tooltip(ui.input_action_button("cy_show_selected", "Show Edges", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["cy_show_selected"]),
+                            ui.tooltip(ui.input_action_button("cy_hide_unselected", "Hide Others", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["cy_hide_unselected"]),
+                            ui.tooltip(ui.input_action_button("cy_show_all", "Show All", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["cy_show_all"]),
+                            ui.tooltip(ui.input_action_button("cy_select_loners", "Select Loners", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["cy_select_loners"]),
+                            ui.tooltip(ui.input_action_button("cy_select_satellites", "Select Satellites", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["cy_select_satellites"]),
+                            class_="button-row mb-3",
+                        ),
+                        ui.output_data_frame("cy_selection_table"),
+                        ui.div(
+                            ui.tooltip(ui.download_button("cy_download_selection", "Download selection CSV", class_="btn-sm"),
+                                       TOOLTIPS["cy_download_selection"]),
+                            class_="button-row",
+                        ),
+                        value="selection",
+                    ),
+                    ui.accordion_panel(
+                        "Select by relation",
+                        ui.layout_columns(
+                            ui.input_text("cy_rel_seed", tip("Seed", "cy_rel_seed"), placeholder="bait or protein"),
+                            ui.input_select("cy_rel_kind", tip("Relation", "cy_rel_kind"),
+                                            choices={"interactors": "Interactors of a bait",
+                                                     "singletons": "Singletons of a bait (its only preys)",
+                                                     "partners": "BioGRID or complex partners",
+                                                     "cocomplex": "CORUM co-complex members"}),
+                            col_widths=(5, 7),
+                        ),
+                        ui.layout_columns(
+                            ui.input_numeric("cy_rel_saint", tip("Min SAINT", "cy_rel_cuts"), value=None, min=0, max=1, step=0.05),
+                            ui.input_numeric("cy_rel_bfdr", "Max BFDR", value=None, min=0, max=1, step=0.01),
+                            ui.input_numeric("cy_rel_abundance", "Min abundance", value=None, min=0),
+                            ui.input_numeric("cy_rel_pubs", "Min publications", value=None, min=0, step=1),
+                            col_widths=(3, 3, 3, 3),
+                        ),
+                        ui.div(
+                            ui.tooltip(ui.input_action_button("cy_rel_replace", "Replace Selection", class_="btn-sm btn-outline-primary"),
+                                       TOOLTIPS["cy_rel_replace"]),
+                            ui.tooltip(ui.input_action_button("cy_rel_add", "Add to Selection", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["cy_rel_add"]),
+                            class_="button-row",
+                        ),
+                        value="relation",
+                    ),
+                    ui.accordion_panel(
+                        "Cluster the selection",
+                        ui.layout_columns(
+                            ui.input_numeric("cy_cl_resolution", tip("Resolution", "cy_cl_resolution"), value=1.0, min=0.1, max=5, step=0.1),
+                            ui.input_numeric("cy_cl_seed", tip("Seed", "cy_cl_seed"), value=17, min=0, step=1),
+                            ui.input_numeric("cy_cl_lit_weight", tip("Reference weight", "cy_cl_lit_weight"), value=1.0, min=0, step=0.25),
+                            col_widths=(4, 4, 4),
+                        ),
+                        ui.layout_columns(
+                            ui.input_select("cy_cl_layout", tip("Cluster layout", "cy_cl_layout"),
+                                            choices={"circles": "Circles", "force-directed": "Force-directed",
+                                                     "kamada-kawai": "Kamada-Kawai"}),
+                            ui.input_checkbox("cy_cl_recolor", tip("Recolor communities", "cy_cl_recolor"), value=True),
+                            col_widths=(6, 6),
+                        ),
+                        ui.div(
+                            ui.tooltip(ui.input_action_button("cy_cluster", "Cluster and Repack", class_="btn-sm btn-outline-primary"),
+                                       TOOLTIPS["cy_cluster"]),
+                            class_="button-row",
+                        ),
+                        value="cluster",
+                    ),
+                    ui.accordion_panel(
+                        "Saved layouts",
+                        ui.input_selectize("cy_layout_name", tip("Saved layout", "cy_layout_name"), choices=[],
+                                           options={"create": True, "placeholder": "pick a saved layout or type a new name"}),
+                        ui.div(
+                            ui.tooltip(ui.input_action_button("cy_save_layout", "Save Layout", class_="btn-sm btn-outline-primary"),
+                                       TOOLTIPS["cy_save_layout"]),
+                            ui.tooltip(ui.input_action_button("cy_load_layout", "Load Layout", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["cy_load_layout"]),
+                            class_="button-row",
+                        ),
+                        value="layouts",
+                    ),
+                    ui.accordion_panel(
+                        "Export",
+                        ui.div(
+                            ui.tooltip(ui.input_action_button("cy_export", "Export PNG", class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["cy_export"]),
+                            class_="button-row",
+                        ),
+                        value="export",
+                    ),
+                    open=["status", "selection"],
                 ),
-                ui.p("Select by relation", class_="section-label"),
-                ui.layout_columns(
-                    ui.input_text("cy_rel_seed", tip("Seed", "cy_rel_seed"), placeholder="bait or protein"),
-                    ui.input_select("cy_rel_kind", tip("Relation", "cy_rel_kind"),
-                                    choices={"interactors": "Interactors of a bait",
-                                             "singletons": "Singletons of a bait (its only preys)",
-                                             "partners": "BioGRID or complex partners",
-                                             "cocomplex": "CORUM co-complex members"}),
-                    col_widths=(5, 7),
-                ),
-                ui.layout_columns(
-                    ui.input_numeric("cy_rel_saint", tip("Min SAINT", "cy_rel_cuts"), value=None, min=0, max=1, step=0.05),
-                    ui.input_numeric("cy_rel_bfdr", "Max BFDR", value=None, min=0, max=1, step=0.01),
-                    ui.input_numeric("cy_rel_abundance", "Min abundance", value=None, min=0),
-                    ui.input_numeric("cy_rel_pubs", "Min publications", value=None, min=0, step=1),
-                    col_widths=(3, 3, 3, 3),
-                ),
-                ui.div(
-                    ui.tooltip(ui.input_action_button("cy_rel_replace", "Replace Selection", class_="btn-sm btn-outline-primary"),
-                               TOOLTIPS["cy_rel_replace"]),
-                    ui.tooltip(ui.input_action_button("cy_rel_add", "Add to Selection", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_rel_add"]),
-                    class_="d-flex flex-wrap gap-2 mb-3",
-                ),
-                ui.p("Cluster the selection", class_="section-label"),
-                ui.layout_columns(
-                    ui.input_numeric("cy_cl_resolution", tip("Resolution", "cy_cl_resolution"), value=1.0, min=0.1, max=5, step=0.1),
-                    ui.input_numeric("cy_cl_seed", tip("Seed", "cy_cl_seed"), value=17, min=0, step=1),
-                    ui.input_numeric("cy_cl_lit_weight", tip("Reference weight", "cy_cl_lit_weight"), value=1.0, min=0, step=0.25),
-                    col_widths=(4, 4, 4),
-                ),
-                ui.layout_columns(
-                    ui.input_select("cy_cl_layout", tip("Cluster layout", "cy_cl_layout"),
-                                    choices={"circles": "Circles", "force-directed": "Force-directed",
-                                             "kamada-kawai": "Kamada-Kawai"}),
-                    ui.input_checkbox("cy_cl_recolor", tip("Recolor communities", "cy_cl_recolor"), value=True),
-                    col_widths=(6, 6),
-                ),
-                ui.div(
-                    ui.tooltip(ui.input_action_button("cy_cluster", "Cluster and Repack", class_="btn-sm btn-outline-primary"),
-                               TOOLTIPS["cy_cluster"]),
-                    class_="d-flex flex-wrap gap-2 mb-3",
-                ),
-                ui.p("Layout", class_="section-label"),
-                ui.input_selectize("cy_layout_name", tip("Saved layout", "cy_layout_name"), choices=[],
-                                   options={"create": True, "placeholder": "pick a saved layout or type a new name"}),
-                ui.div(
-                    ui.tooltip(ui.input_action_button("cy_save_layout", "Save Layout", class_="btn-sm btn-outline-primary"),
-                               TOOLTIPS["cy_save_layout"]),
-                    ui.tooltip(ui.input_action_button("cy_load_layout", "Load Layout", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_load_layout"]),
-                    class_="d-flex flex-wrap gap-2 mb-3",
-                ),
-                ui.p("Network", class_="section-label"),
-                ui.div(
-                    ui.tooltip(ui.input_action_button("cy_export", "Export PNG", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_export"]),
-                    ui.tooltip(ui.input_action_button("cy_unlock", "Unlock View", class_="btn-sm btn-outline-secondary"),
-                               TOOLTIPS["cy_unlock"]),
-                    class_="d-flex flex-wrap gap-2 mb-3",
-                ),
-                ui.output_data_frame("cy_selection_table"),
             ),
-            ui.card(
-                ui.card_header("Activity"),
-                ui.output_text_verbatim("cy_activity"),
-            ),
-            col_widths=(4, 5, 3),
+            col_widths=(4, 8),
+        ),
+        ui.card(
+            ui.card_header("Activity"),
+            ui.output_ui("cy_activity"),
         ),
         ),
     ),
-    ui.nav_panel("Downloads",
+    ui.nav_panel("Export",
                     ui.output_ui("empty_state_downloads"),
                     ui.panel_conditional(
                     "output.active_state !== 'none'",
@@ -686,7 +718,7 @@ app_ui = ui.page_navbar(
         ),
         # Resolved once: the build cannot change while the server is running, and this
         # is the identifier a bug report has to quote to be reproducible.
-        ui.div(provenance.version_label(), class_="text-muted small"),
+        ui.div(provenance.version_label(), class_="help-text"),
         width=300,
     ),
     title="ProxiMate",
@@ -772,8 +804,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             return None
         lines = [f"{job['what']} of '{name}' (since {job['since'][11:]})" for name, job in jobs.items()]
         return ui.div("Agent working: " + "; ".join(lines) + ". The dataset is locked until it finishes.",
-                      style="background: #fff3cd; color: #664d03; padding: 8px 16px; "
-                            "border-bottom: 1px solid #ffe69c;")
+                      class_="agent-banner")
 
     feature_enrichment = reactive.Value(pd.DataFrame())
     last_parse = reactive.Value(None)
@@ -793,7 +824,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.ui
     def format_note():
-        return ui.p(FORMAT_NOTES[input.input_format()], class_="text-muted small")
+        return ui.p(FORMAT_NOTES[input.input_format()], class_="help-text")
 
     @render.download(filename="experimental_design_template.csv")
     def ed_template():
@@ -872,7 +903,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if rows:
             ui.update_select("active_dataset", selected=str(datasets().iloc[rows[0]]['Dataset Name']))
 
-    # The shared thresholds.  Sliders are addressed by prefix so the Network Comparison
+    # The shared thresholds.  Sliders are addressed by prefix so the Compare Baits
     # tab's two private sets reuse the same helpers.
     def read_thresholds(prefix):
         return {key: getattr(input, f"{prefix}_{suffix}")() for suffix, key, *_ in SLIDERS}
@@ -920,11 +951,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         """What a tab shows in place of its controls until a dataset that fits is active."""
         if not available_datasets():
             return ui.div(ui.h4("No datasets in this session"),
-                          ui.p(f"Parse and score a dataset on the Network Scoring tab to {purpose}."),
+                          ui.p(f"Parse and score a dataset on the Data & Scoring tab to {purpose}."),
                           class_="empty-state")
         if needs_scores and active() and not active_scored():
             return ui.div(ui.p(f"'{active()}' is parsed but not scored. "
-                               "Score it on the Network Scoring tab."), class_="empty-state")
+                               "Score it on the Data & Scoring tab."), class_="empty-state")
         return None
 
     @render.ui
@@ -1123,7 +1154,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             items.append(ui.tags.li(f"{marks[status]} {stage}", class_=status))
         elapsed = int(time.time() - state['started'])
         parts = [ui.tags.ul(*items, class_="job-stages"),
-                 ui.p(f"Elapsed {elapsed // 60}:{elapsed % 60:02d}", class_="text-muted small")]
+                 ui.p(f"Elapsed {elapsed // 60}:{elapsed % 60:02d}", class_="help-text")]
         if state['error'] is not None:
             parts.append(ui.div(format_error_notification(state['error']), class_="job-error"))
         if state['dataset'] and os.path.isfile(os.path.join(out_dir, state['dataset'], 'proximate.log')):
@@ -1360,7 +1391,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         start_job(f"Scoring {dataset_name}", dataset_name, backend.SCORE_STAGES, work, done)
 
-    # Quality controls tab
+    # Quality Control tab
     @reactive.Calc
     def pca_matrix_cached():
         # Shared by the experiment and prey PCA plots and their PNG exports, so
@@ -1483,7 +1514,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             label_text = "Metrics for All Baits"
         else:
             label_text = f"Metrics for {bait_selection}"
-        return ui.h5(label_text, style="margin-bottom: 15px; margin-top: 0px; font-weight: 600;")
+        return ui.p(label_text, class_="section-heading")
 
     @reactive.calc
     def qc_metrics():
@@ -1660,7 +1691,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if input.qc_bait() == "All":
             return plot_placeholder("Select one bait above to see its SAINT score against fold change.")
         return ui.div(output_widget("saint_scatter_plot"),
-                      ui.p("Dashed line: SAINT threshold from the sidebar.", class_="text-muted small"))
+                      ui.p("Dashed line: SAINT threshold from the sidebar.", class_="help-text"))
 
     @render_widget
     def saint_scatter_plot():
@@ -1671,7 +1702,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         return plot_saint_scatter(backend.results_path(dataset_name), bait_selection,
                                   thresholds()['SaintScore'])
 
-    # Feature analysis tab
+    # Feature Enrichment tab
     @reactive.effect
     @reactive.event(input.feature_analysis)
     def feature_analysis():
@@ -1698,7 +1729,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         _ = feature_enrichment.get()
         dataset = active_scored()
         if not dataset or not os.path.exists(os.path.join(out_dir, dataset, "Feature_enrichment.csv")):
-            return "Run Feature Analysis to see the top features."
+            return "Run Feature Enrichment to see the top features."
         feature_data = pd.read_csv(os.path.join(out_dir, dataset, "Feature_enrichment.csv"))
         feature_type = input.feature_type()
         try:
@@ -1833,7 +1864,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         default = "log2_zscore" if quant in ("Intensity", "LFQ") else "zscore"
         ui.update_select("pca_normalization", selected=default)
 
-    # Network Comparison tab: two baits of the active dataset, each with its own
+    # Compare Baits tab: two baits of the active dataset, each with its own
     # threshold set.
 
     @reactive.Calc
@@ -1882,13 +1913,13 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.ui
     def volcano_body():
         if not input.compare_networks():
-            return plot_placeholder("Choose two baits and click Compare Networks.")
+            return plot_placeholder("Choose two baits and click Compare.")
         return output_widget("volcano_plot")
 
     @render.ui
     def venn_body():
         if not input.compare_networks():
-            return plot_placeholder("Choose two baits and click Compare Networks.")
+            return plot_placeholder("Choose two baits and click Compare.")
         return ui.output_plot("venn_diagram")
 
     @render_widget
@@ -1986,7 +2017,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_switch("dl_apply_thresholds", label=f"Apply thresholds ({describe(thresholds())})")
 
     @reactive.Effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(input.active_dataset, datasets, feature_enrichment)
     def update_dl_presets():
         """Offer only the presets whose required files exist for this dataset."""
         dataset_name = active()
@@ -2046,7 +2077,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @reactive.Calc
     def cached_download_data():
-        """Cache the active dataset's annotated_scores.csv for the Downloads tab.
+        """Cache the active dataset's annotated_scores.csv for the Export tab.
         Only re-reads when the active dataset changes, not on slider changes."""
         dataset = active()
         if not dataset:
@@ -2059,7 +2090,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.Calc
     def cached_enrichment_data():
         """Cache Feature_enrichment.csv for the active dataset; empty frame
-        when the Feature Analysis tab has not produced one."""
+        when the Feature Enrichment tab has not produced one."""
         dataset = active()
         if not dataset:
             return pd.DataFrame()
@@ -2283,45 +2314,108 @@ def server(input: Inputs, output: Outputs, session: Session):
             cy_health.set(health)
         snap = cytoscape_ctl.snapshot()
         if health['ok']:
-            line = ui.p(ui.span("● ", style="color: green;"),
+            line = ui.p(ui.span("● ", class_="status-ok"),
                         f"Cytoscape {health['version']} at {health['url']}")
         else:
             line = ui.div(
-                ui.p(ui.span("● ", style="color: red;"),
+                ui.p(ui.span("● ", class_="status-bad"),
                      f"Cytoscape is not reachable at {health['url']}. Start Cytoscape on this "
-                     "machine or set PROXIMATE_CYTOSCAPE_URL.", style="color: #a33;"),
+                     "machine or set PROXIMATE_CYTOSCAPE_URL.", class_="status-error"),
                 ui.accordion(ui.accordion_panel("Details", ui.tags.pre(health['error'])),
                              open=False, class_="mb-3"))
         if snap['net_suid'] is None:
-            drawn = ui.p("No ProxiMate network drawn yet.", style="color: #666;")
+            drawn = ui.p("No ProxiMate network drawn yet.", class_="help-text")
         elif snap['dataset'] is None:
             drawn = ui.p(f"{snap['title']} is still drawn, but its dataset no longer exists.",
-                         style="color: #a33;")
+                         class_="status-error")
         else:
             drawn = ui.p(f"{snap['title']}: {snap['n_nodes']} nodes, {snap['n_edges']} edges "
                          f"({snap['n_hidden']} hidden)" + (f" — {snap['busy']}" if snap['busy'] else ""))
         return ui.div(line, drawn)
 
+    @render.ui
+    def cy_thresholds_line():
+        return ui.p(f"Thresholds (sidebar): {describe(thresholds())}", class_="help-text")
+
+    @reactive.calc
+    def cy_estimate_args():
+        """The ``backend.estimate_network`` arguments the send options currently give."""
+        return dict(name=active_scored(), thresholds=thresholds(),
+                    baits=list(input.cy_baits.get() or []), prey_prey=input.cy_prey_prey.get(),
+                    biogrid_scope=input.cy_biogrid_scope.get(), corum=input.cy_corum.get(),
+                    corum_min_members=int(input.cy_corum_min_members.get() or 3),
+                    corum_min_fraction=float(input.cy_corum_min_fraction.get() or 0.0))
+
+    def estimate_text(counts):
+        text = (f"{counts['baits']} baits, {counts['nodes']} nodes, {counts['edges']} edges "
+                f"({counts['proximity_edges']} bait-prey, {counts['literature_edges']} BioGRID, "
+                f"{counts['complex_edges']} complex)")
+        if counts['hidden_edges']:
+            text += f", plus {counts['hidden_edges']} BioGRID edges hidden by the scope"
+        return text
+
+    # The estimate waits until the send options have been still for half a second, so
+    # dragging a slider builds the network once rather than at every step.
+    cy_estimate_request = reactive.Value((None, 0.0))
+
+    @reactive.effect
+    def cy_queue_estimate():
+        cy_estimate_request.set((cy_estimate_args(), time.monotonic() + 0.5))
+
+    @render.ui
+    def cy_estimate():
+        args, due = cy_estimate_request.get()
+        wait = due - time.monotonic()
+        if wait > 0:
+            reactive.invalidate_later(wait)
+            req(False, cancel_output=True)
+        if not args or not args['name']:
+            return None
+        try:
+            counts = backend.estimate_network(**args)
+        except ValueError as e:
+            return ui.p(str(e), class_="cy-estimate error")
+        return ui.p("Will draw: " + estimate_text(counts), class_="cy-estimate")
+
     @reactive.effect
     @reactive.event(input.cy_send)
     def cy_send():
-        dataset_name = active_scored()
-        if not dataset_name:
+        args = cy_estimate_args()
+        if not args['name']:
             notify("Score a dataset first.", type="error")
             return
+        try:
+            counts = backend.estimate_network(**args)
+        except ValueError as e:
+            notify(f"Could not send to Cytoscape: {e}", type="error")
+            return
+        if counts['edges'] <= SEND_WARN_EDGES:
+            cy_start_send()
+            return
+        ui.modal_show(ui.modal(
+            ui.p(f"This network has {estimate_text(counts)}: more than {SEND_WARN_EDGES} edges, "
+                 "which Cytoscape draws slowly and which is hard to read."),
+            ui.p("Consider the \"Multivalidated only\" BioGRID scope or fewer baits."),
+            title="Large network", easy_close=True,
+            footer=ui.div(
+                ui.modal_button("Cancel"),
+                ui.tags.button("Send anyway", type="button", class_="btn btn-primary ms-2",
+                               onclick="Shiny.setInputValue('confirm_cy_send', 1, {priority: 'event'})"))))
+
+    @reactive.effect
+    @reactive.event(input.confirm_cy_send)
+    def confirm_cy_send():
+        ui.modal_remove()
+        cy_start_send()
+
+    def cy_start_send():
+        dataset_name = active_scored()
         dataset_path = os.path.join(out_dir, dataset_name)
-        settings = provenance.annotation_settings(dataset_path)
-        organism = settings["organism"]
-        biogrid_path = provenance.biogrid_summary_path(
-            organism, exclude_hcm=settings["exclude_hcm"])
-        corum_path = None
-        if input.cy_corum.get():
-            from setup_datasets import CORUM_FILENAME, ORGANISMS
-            if ORGANISMS[organism]["has_corum"]:
-                corum_path = os.path.join(provenance.DEFAULT_DATASETS_DIR, CORUM_FILENAME)
-            else:
-                notify(f"CORUM covers human complexes only; drawing the {organism} network without them.",
-                       type="warning")
+        try:
+            biogrid_path, corum_path = backend.network_sources(dataset_name, input.cy_corum.get())
+        except ValueError as e:
+            notify(f"Could not send to Cytoscape: {e}", type="error")
+            return
         cutoffs = thresholds()
         options = dict(baits=list(input.cy_baits.get() or []), prey_prey=input.cy_prey_prey.get(),
                        biogrid_path=biogrid_path, label_policy=input.cy_labels.get(),
@@ -2425,7 +2519,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         result = cy_call("read the selection", cytoscape_ctl.read_selection)
         if result:
             chosen, detail = result
-            cy_selection.set(detail if len(detail) else chosen)
+            cy_selection.set(selection_table(detail, cytoscape_ctl.STATE['nodes']) if len(detail) else chosen)
             notify(f"{len(chosen)} node(s) selected, touching {len(detail)} edge(s).")
 
     for _button, _action in (("cy_hide_selected", "hide_selected"),
@@ -2537,16 +2631,36 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.data_frame
     def cy_selection_table():
-        return render.DataGrid(cy_selection.get(), height="250px")
+        if cy_selection.get().empty:
+            return None
+        return render.DataGrid(cy_selection.get(), width="100%", height="400px")
 
     @render.text
+    def cy_selection_count():
+        n = len(cy_selection.get())
+        return f"({n} rows)" if n else ""
+
+    @render.download_button(filename=lambda: f"{cytoscape_ctl.STATE['dataset'] or 'cytoscape'}_selection.csv")
+    def cy_download_selection():
+        if cy_selection.get().empty:
+            notify("Read a selection first.", type="error")
+            return None
+        path = os.path.join(out_dir, "cytoscape_selection.csv")
+        cy_selection.get().to_csv(path, index=False)
+        return path
+
+    @render.ui
     def cy_activity():
         cy_version()
         entries = cytoscape_ctl.snapshot()['log']
         if not entries:
-            return "No Cytoscape activity yet."
-        return "\n".join(f"{e['ts'][11:]}  [{e['actor']}] {e['op']}: {e['detail']}"
-                         for e in reversed(entries))
+            return ui.p("No Cytoscape activity yet.", class_="help-text")
+        header = ui.tags.tr(*[ui.tags.th(h) for h in ("Time", "Actor", "Operation", "Detail")])
+        rows = [ui.tags.tr(ui.tags.td(e['ts'][11:]), ui.tags.td(e['actor']), ui.tags.td(e['op']),
+                           ui.tags.td(e['detail']))
+                for e in reversed(entries)]
+        return ui.div(ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*rows), class_="table table-sm"),
+                      class_="cy-activity")
 
 def log_startup():
     """Record the configuration the server came up with.

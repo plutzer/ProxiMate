@@ -23,6 +23,10 @@ LABEL_POLICIES = ('all', 'baits', 'none')
 EDGE_WIDTH_SOURCES = ('abundance', 'SaintScore', 'WD', 'FoldChange', 'uniform')
 BIOGRID_SCOPES = ('all', 'multivalidated')
 RELATIONS = ('interactors', 'singletons', 'partners', 'cocomplex')
+# A send that would draw more visible edges than this asks for confirmation first.
+SEND_WARN_EDGES = 5000
+# Decimals the selection table shows per score column.
+SELECTION_DECIMALS = {'SaintScore': 3, 'BFDR': 3, 'WD': 3, 'WDFDR': 3, 'FoldChange': 2}
 
 # A style preset is every look the tables encode: node encodings by role (sizes are
 # (width, height)), edge encodings by kind, and the send options that go with it in the
@@ -423,6 +427,29 @@ def edge_visibility(edges, thresholds, biogrid_scope='all'):
     if biogrid_scope == 'multivalidated' and literature.any():
         visible &= ~literature | edges['multivalidated'].eq(True)
     return visible
+
+
+def network_counts(nodes, edges, thresholds, biogrid_scope='all'):
+    """What drawing ``build``'s tables shows: bait, prey and node counts, the visible
+    edges of each kind under ``biogrid_scope`` and their total (``edges``), and the
+    BioGRID edges the scope sends hidden (``hidden_edges``)."""
+    visible = edge_visibility(edges, thresholds, biogrid_scope)
+    kinds = edges.loc[visible, 'interaction'].value_counts()
+    roles = nodes['role'].value_counts()
+    return {'baits': int(roles.get('bait', 0)), 'preys': int(roles.get('prey', 0)),
+            'nodes': len(nodes), 'proximity_edges': int(kinds.get('proximity', 0)),
+            'literature_edges': int(kinds.get('literature', 0)),
+            'complex_edges': int(kinds.get('complex', 0)),
+            'edges': int(visible.sum()), 'hidden_edges': int((~visible).sum())}
+
+
+def selection_table(detail, nodes):
+    """The edges around a selection as the Cytoscape tab lists them: a ``Target gene``
+    column after ``target`` and the scores rounded by ``SELECTION_DECIMALS``."""
+    table = detail.round(SELECTION_DECIMALS)
+    symbols = dict(zip(nodes['id'], nodes['symbol']))
+    table.insert(table.columns.get_loc('target') + 1, 'Target gene', table['target'].map(symbols))
+    return table
 
 
 def node_alpha(nodes, edges):

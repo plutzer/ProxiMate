@@ -215,9 +215,9 @@ none reads what the GUI's sliders show. Operations are classed by what they touc
 | Mode | Operations | Effect on a person at the GUI |
 | --- | --- | --- |
 | read | `list_datasets`, `get_dataset_info`, `get_run_info`, `tail_log`, `server_status`, `cytoscape_read_selection`, `cytoscape_list_nodes`, `cytoscape_get_positions`, `cytoscape_list_layouts`, `cytoscape_list_style_presets` | none |
-| sandbox | `get_scores`, `threshold_metrics`, `feature_analysis`, `get_prey_annotations`, `compare_networks` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
-| dataset | `parse_dataset`, `score_dataset`, `load_session` | the dataset table and dropdowns update within a second; a dataset being scored by either side refuses a second job; `parse_dataset` reads input files by their paths inside the container, so mount the folder that holds them; `load_session` is destructive and needs `confirm` |
-| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_nodes`, `cytoscape_select_related`, `cytoscape_clear_selection`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_save_layout`, `cytoscape_load_layout`, `cytoscape_export_image` | the drawn network changes under the mouse; the Cytoscape tab's status shows the thresholds it was drawn at and the activity panel lists each operation as `[mcp]` |
+| sandbox | `get_scores`, `threshold_metrics`, `feature_analysis`, `get_prey_annotations`, `compare_networks`, `cytoscape_estimate` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
+| dataset | `parse_dataset`, `score_dataset`, `load_session`, `delete_dataset`, `rename_dataset` | the session table and the sidebar's active-dataset select update within a second; a dataset being scored by either side refuses a second job; `parse_dataset` reads input files by their paths inside the container, so mount the folder that holds them; `load_session` and `delete_dataset` are destructive and need `confirm` |
+| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_nodes`, `cytoscape_select_related`, `cytoscape_clear_selection`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_save_layout`, `cytoscape_load_layout`, `cytoscape_export_image` | the drawn network changes under the mouse; the Cytoscape tab's activity table lists each operation with actor `mcp` |
 
 Sends, exports and layout saves from MCP are recorded in the dataset's `run.json` with their full
 argument set. `curl localhost:3839/api/health` reports the datasets, running jobs and
@@ -238,8 +238,8 @@ strength of the same kind of assay, so the container also builds
 `/Datasets/human/biogrid_summary_no_hcm.csv`: the human summary with every evidence line
 from that paper removed. Interactions with other evidence are kept, with the HCM entries
 dropped from their evidence lists. Select it with the "Exclude Human Cell Map evidence"
-checkbox in the scoring panel (human only) or `--exclude-hcm` on `run_pipeline.sh`. The
-choice is recorded in `run.json`, and the QC tab's known-interaction and network-degree
+checkbox on the Score card (human only) or `--exclude-hcm` on `run_pipeline.sh`. The
+choice is recorded in `run.json`, and the Quality Control tab's known-interaction and network-degree
 metrics use the same file the run was annotated against.
 
 ### Choosing the database snapshot (experienced users)

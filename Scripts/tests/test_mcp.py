@@ -53,7 +53,8 @@ def test_search_matches_name_summary_and_tags_and_filters_by_mode():
     assert {'threshold_metrics', 'cytoscape_apply_thresholds'} <= hits
     assert all(h['mode'] == 'sandbox' for h in registry.search('', mode='sandbox'))
     assert {h['name'] for h in registry.search('', mode='sandbox')} == \
-        {'get_scores', 'threshold_metrics', 'feature_analysis', 'get_prey_annotations', 'compare_networks'}
+        {'get_scores', 'threshold_metrics', 'feature_analysis', 'get_prey_annotations', 'compare_networks',
+         'cytoscape_estimate'}
     assert len(registry.search('')) == len(registry.OPS)
     with pytest.raises(ValueError, match='mode'):
         registry.search('', mode='bogus')
@@ -234,6 +235,21 @@ def test_parse_dataset_lands_in_the_store_and_records_the_actor(out_dir):
 def test_load_session_needs_confirmation(scored, tmp_path):
     with pytest.raises(ValueError, match='confirm'):
         registry.call('load_session', {'zip_path': str(tmp_path / 'x.zip')})
+
+
+def test_cytoscape_estimate_counts_the_network_without_drawing(scored):
+    assert registry.OPS['cytoscape_estimate'].mode == 'sandbox'
+    assert 'cytoscape_estimate' in {h['name'] for h in registry.search('estimate')}
+    before = _tree(scored)
+
+    counts = registry.call('cytoscape_estimate', {'dataset': 'ds', 'thresholds': THRESHOLDS,
+                                                  'prey_prey': False})
+
+    assert (counts['baits'], counts['preys'], counts['proximity_edges'], counts['edges']) == (2, 3, 4, 4)
+    assert counts['send_warn_edges'] == 5000
+    assert _tree(scored) == before
+    with pytest.raises(ValueError, match='no bait'):
+        registry.call('cytoscape_estimate', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'baits': ['Nope']})
 
 
 def test_delete_and_rename_are_dataset_ops_and_delete_needs_confirmation(scored):
@@ -427,7 +443,7 @@ def test_gui_documentation_covers_every_tab_and_every_tooltip():
     assert covered == set(help_text.TOOLTIPS)
     cy = mcp_tools.get_gui_documentation('Cytoscape')
     assert 'Select Loners' in cy['text']            # the README section rides along
-    scoring = mcp_tools.get_gui_documentation('Network Scoring')
+    scoring = mcp_tools.get_gui_documentation('Data & Scoring')
     assert set(scoring['format_notes']) == set(backend.INPUT_FORMATS)
     with pytest.raises(KeyError):
         mcp_tools.get_gui_documentation('Nope')
@@ -481,7 +497,7 @@ def test_the_five_tools_answer_over_http(mcp_url, drawn):
                 found = await session.call_tool('search_tools', {'query': 'threshold_metrics'})
                 details = await session.call_tool('get_tool_details', {'name': 'threshold_metrics'})
                 called = await session.call_tool('call_tool', {'name': 'list_datasets', 'arguments': {}})
-                docs = await session.call_tool('get_gui_documentation', {'section': 'Downloads'})
+                docs = await session.call_tool('get_gui_documentation', {'section': 'Export'})
                 picture = await session.call_tool('view_network', {'height': 300})
                 return names, found, details, called, docs, picture
 
@@ -497,7 +513,7 @@ def test_the_five_tools_answer_over_http(mcp_url, drawn):
     assert payload(details)['mode'] == 'sandbox'
     assert payload(called)['ok'] is True
     assert payload(called)['result']['datasets'][0]['Dataset Name'] == 'ds'
-    assert payload(docs)['section'] == 'Downloads'
+    assert payload(docs)['section'] == 'Export'
     assert not picture.isError, picture.content
     block = picture.content[0]
     assert block.type == 'image' and block.mimeType == 'image/png'

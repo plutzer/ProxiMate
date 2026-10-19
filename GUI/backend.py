@@ -34,6 +34,7 @@ import threading
 import pandas as pd
 
 import cytoscape_ctl
+import cytoscape_net
 import dataset_store as store
 import log_config
 import parse
@@ -42,7 +43,7 @@ import session_archive
 from Ann_Enrichment import process_refactored
 from network_comparison import calculate_volcano_data, load_and_filter_bait_data
 from QC_plots import apply_score_thresholds, calculate_threshold_metrics
-from setup_datasets import ORGANISMS
+from setup_datasets import CORUM_FILENAME, ORGANISMS
 from log_config import get_logger
 
 logger = get_logger(__name__)
@@ -609,6 +610,37 @@ def threshold_metrics(name, thresholds, bait=None, biogrid_path=None):
     return out
 
 
+def network_sources(name, corum=False):
+    """``(biogrid_path, corum_path)`` a Cytoscape network of dataset ``name`` draws its
+    reference edges from, for the organism it was annotated with; ``corum_path`` is
+    None unless ``corum``.  CORUM covers human complexes only."""
+    settings = provenance.annotation_settings(dataset_dir(name))
+    organism = settings['organism']
+    biogrid_path = provenance.biogrid_summary_path(organism, exclude_hcm=settings['exclude_hcm'])
+    if not corum:
+        return biogrid_path, None
+    if not ORGANISMS[organism]['has_corum']:
+        raise ValueError(f"CORUM covers human complexes only; this dataset is {organism}")
+    return biogrid_path, os.path.join(provenance.DEFAULT_DATASETS_DIR, CORUM_FILENAME)
+
+
+def estimate_network(name, thresholds, baits=None, prey_prey=True, biogrid_scope='all',
+                     corum=False, corum_min_members=3, corum_min_fraction=0.5):
+    """What sending dataset ``name`` to Cytoscape with these options would draw, as
+    ``cytoscape_net.network_counts``, without touching Cytoscape.  Raises ValueError
+    when no interaction passes."""
+    thresholds = validate_thresholds(thresholds)
+    scores = pd.read_csv(_require_scored(name))
+    for bait in baits or []:
+        _require_bait(scores, bait)
+    biogrid_path, corum_path = network_sources(name, corum)
+    nodes, edges = cytoscape_net.build(scores, thresholds, baits=baits, prey_prey=prey_prey,
+                                       biogrid_path=biogrid_path, corum_path=corum_path,
+                                       corum_min_members=corum_min_members,
+                                       corum_min_fraction=corum_min_fraction)
+    return cytoscape_net.network_counts(nodes, edges, thresholds, biogrid_scope)
+
+
 def feature_analysis(name, thresholds, feature_types=None):
     """Feature enrichment for every bait's foreground at these thresholds, as a table.
 
@@ -684,7 +716,7 @@ def compare_sets(data_a, data_b):
 
 
 def compare_networks(name, bait_a, bait_b, thresholds_a, thresholds_b):
-    """The Network Comparison tab's volcano table and Venn gene lists."""
+    """The Compare Baits tab's volcano table and Venn gene lists."""
     thresholds_a = validate_thresholds(thresholds_a)
     thresholds_b = validate_thresholds(thresholds_b)
     scores = pd.read_csv(_require_scored(name), usecols=['Experiment.ID'])

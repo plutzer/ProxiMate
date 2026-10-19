@@ -380,6 +380,33 @@ def drawn(scores, tmp_path):
     return cn.build(scores, PASSING, biogrid_path=_biogrid(tmp_path, [('P1', 'P2', 5, True)]))
 
 
+def test_network_counts_split_nodes_by_role_and_visible_edges_by_kind(scores, tmp_path):
+    scores.loc[len(scores)] = _row('BaitA', 'PA', 'P4', 'G4')
+    biogrid = _biogrid(tmp_path, [('P1', 'P2', 3, True), ('P2', 'P4', 1, False)])
+    nodes, edges = cn.build(scores, PASSING, biogrid_path=biogrid)
+
+    counts = cn.network_counts(nodes, edges, PASSING)
+    # BaitA -> P1, P2, P4; BaitB -> P2 and BaitA (PA); literature P1-P2, P2-P4
+    assert counts == {'baits': 2, 'preys': 3, 'nodes': 5, 'proximity_edges': 5,
+                      'literature_edges': 2, 'complex_edges': 0, 'edges': 7, 'hidden_edges': 0}
+
+    counts = cn.network_counts(nodes, edges, PASSING, biogrid_scope='multivalidated')
+    assert (counts['literature_edges'], counts['edges'], counts['hidden_edges']) == (1, 6, 1)
+
+
+def test_the_selection_table_names_targets_and_rounds_scores(drawn):
+    nodes, edges = drawn
+    detail = edges[['source', 'target', 'interaction', 'SaintScore', 'BFDR', 'FoldChange']].copy()
+    detail['SaintScore'] = 0.123456
+    detail['FoldChange'] = 2.71828
+
+    table = cn.selection_table(detail, nodes)
+
+    assert list(table.columns[:3]) == ['source', 'target', 'Target gene']
+    assert table.set_index('target')['Target gene'].to_dict() == {'P1': 'G1', 'P2': 'G2', 'BaitA': 'BaitA'}
+    assert set(table['SaintScore']) == {0.123} and set(table['FoldChange']) == {2.72}
+
+
 def test_degrees_count_visible_edges_of_every_kind(drawn):
     nodes, edges = drawn
 

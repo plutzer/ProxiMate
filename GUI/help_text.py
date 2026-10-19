@@ -10,8 +10,6 @@ from shiny import ui
 
 from thresholds import PRESETS, describe
 
-INFO_STYLE = "cursor: help; color: #6c757d; font-size: 0.85em;"
-
 TOOLTIPS = {
     # ---- Sidebar: the active dataset and the thresholds every tab reads ----
     "active_dataset": "The dataset every tab works on. Pick one here or click its row in the session table; parsing a dataset makes it active.",  # tooltip
@@ -22,7 +20,7 @@ TOOLTIPS = {
     "preset_saint_only": f"Sets {describe(PRESETS['SAINT only'])}: keeps the interactions SAINT calls confident and ignores the CompPASS scores.",  # tooltip
     "preset_wdfdr_only": f"Sets {describe(PRESETS['WDFDR only'])}: keeps the interactions the CompPASS WD score calls specific and ignores SAINT.",  # tooltip
     "preset_both": f"Sets {describe(PRESETS['Both'])}: keeps only interactions that pass both the SAINT and the WDFDR cut.",  # tooltip
-    # ---- Network Scoring tab ----
+    # ---- Data & Scoring tab ----
     "dataset_name": "A short name for this analysis. It labels the dataset everywhere in the app and in downloaded files.",  # tooltip
     "input_format": "The software that produced your quantification file. This sets which upload fields appear below.",  # tooltip
     "quant_type": "Which measurement to score. Intensity = summed raw signal; LFQ = label-free quantification, normalized across runs; Spectral Counts = number of spectra identifying each protein.",  # tooltip
@@ -49,7 +47,7 @@ TOOLTIPS = {
     "clear_datasets": "Removes every dataset in this session, including results stored on the server. Download a session zip first if you want to keep them.",  # tooltip
     "download_session": "Saves every dataset in this session, with its results, as one zip you can restore later with Upload Session Zip.",  # tooltip
     "session_file": "A session zip downloaded earlier. Loading it replaces the current session with all of its datasets and results.",  # tooltip
-    # ---- Data Thresholding tab ----
+    # ---- Quality Control tab ----
     "pca_imputation": "How to handle proteins not detected in every experiment. Row minimum = fill with that protein's smallest observed value; Zero = fill with 0; Drop = keep only fully observed preys.",  # tooltip
     "pca_normalization": "Scaling applied before PCA. Z-score centers each protein; log2 + Z-score first compresses large intensity ranges (good for raw intensities); None uses values as-is.",  # tooltip
     "pca_min_detection": "Keep only proteins detected in at least this fraction of experiments. Raising it removes sparsely observed proteins that can distort the PCA.",  # tooltip
@@ -61,13 +59,13 @@ TOOLTIPS = {
     "metric_enrichment": "How much more often the kept interactions are already known in BioGRID, compared to before filtering. Higher suggests the thresholds favor real interactions.",  # tooltip
     "qc_results": "Every interaction passing the sidebar thresholds, for the bait selected above or all baits. Filter and sort in the table; Download CSV saves the same rows.",  # tooltip
     "metric_degree": "Average number of known BioGRID partners each kept prey has among the other kept preys. Densely connected networks often reflect real complexes.",  # tooltip
-    # ---- Protein Feature Analysis tab ----
+    # ---- Feature Enrichment tab ----
     "feature_analysis": "Tests whether protein features are over-represented: preys passing all four thresholds (the foreground) are compared against all detected preys.",  # tooltip
     "feature_type": "Category of features to display. GO_BP / GO_CC / GO_MF = Gene Ontology Biological Process, Cellular Component, Molecular Function; the rest are UniProt sequence features.",  # tooltip
     "num_features": "How many of the top-scoring features to show in the heatmap.",  # tooltip
     "download_pvalue_threshold": "Keep features whose p-value, adjusted for testing many features at once, is at or below this. 0.05 is a common cutoff.",  # tooltip
     "download_enrichment_threshold": "Keep features at least this many times more frequent in the network than expected by chance.",  # tooltip
-    # ---- Network Comparison tab ----
+    # ---- Compare Baits tab ----
     "comp_bait": "The bait whose interaction network forms this side of the comparison.",  # tooltip
     "comp_use_shared": "Copy the sidebar's four thresholds into this network's sliders.",  # tooltip
     "volcano_plot": "Compares prey abundance between the two baits: x = fold change, y = statistical confidence. Points far up and to either side differ most reliably.",  # tooltip
@@ -81,6 +79,7 @@ TOOLTIPS = {
     "cy_send": "Build the network passing the thresholds and draw it in Cytoscape, replacing the previous ProxiMate network.",  # tooltip
     "cy_rethreshold": "Hide edges that fail the current thresholds without redrawing, so your hand layout survives. Loosening needs a new send.",  # tooltip
     "cy_read_selection": "List the nodes selected in Cytoscape with the scores of their edges.",  # tooltip
+    "cy_download_selection": "Save the selection table as shown, with its rounded scores, as a CSV file.",  # tooltip
     "cy_hide_selected": "Hide every edge touching a node selected in Cytoscape.",  # tooltip
     "cy_show_selected": "Show every edge touching a node selected in Cytoscape.",  # tooltip
     "cy_hide_unselected": "Hide every edge that does not touch a selected node, leaving the selection's neighborhood.",  # tooltip
@@ -111,7 +110,7 @@ TOOLTIPS = {
     "cy_cl_layout": "How each community is arranged after clustering. Circles puts each on its own ring, tiled in rows. Force-directed and Kamada-Kawai lay each community out by its own edges inside a disc sized by its membership and place the discs by the edges between communities; better for large selections.",  # tooltip
     "cy_cl_recolor": "Color each community of two or more nodes with its own fill. A community of one node always keeps its color.",  # tooltip
     "cy_cluster": "Run Leiden over the selected preys, color communities of two or more nodes, and arrange each community by the cluster layout inside the box the selection occupies. Only selected preys move; selected baits stay put.",  # tooltip
-    # ---- Downloads tab ----
+    # ---- Export tab ----
     "dl_apply_thresholds": "On, score-based exports (Annotated Scores, Cytoscape, Gene List, ProHits-viz, Custom) keep only rows passing the sidebar thresholds; off exports every row. Experimental Design, SAINT Inputs and Enriched Features are never filtered.",  # tooltip
     "dl_preset": "Ready-made export formats for common next steps. A preset appears only when the dataset has the files it needs.",  # tooltip
     "dl_groups": "Toggle whole families of related columns (or files, for SAINT Inputs) in and out of the export.",  # tooltip
@@ -143,7 +142,7 @@ def tip(label, key):
     return ui.span(
         label,
         " ",
-        ui.tooltip(ui.span("ⓘ", style=INFO_STYLE), TOOLTIPS[key]),
+        ui.tooltip(ui.span("ⓘ", class_="info-icon"), TOOLTIPS[key]),
     )
 
 
@@ -151,7 +150,7 @@ def tip(label, key):
 SECTIONS = {
     "Sidebar": ["active_dataset", "saintscore", "bfdr", "wd", "wdfdr", "preset_saint_only",
                 "preset_wdfdr_only", "preset_both"],
-    "Network Scoring": [
+    "Data & Scoring": [
         "dataset_name", "input_format", "quant_type", "pg_file", "diann_matrix_file",
         "pioneer_matrix_file", "fragpipe_file", "msstats_file", "ed_file", "ed_file_msstats",
         "saint_bait", "saint_prey", "saint_interaction", "organism", "exclude_hcm",
@@ -159,18 +158,18 @@ SECTIONS = {
         "delete_dataset", "rename_dataset", "clear_datasets", "download_session", "session_file",
         "ed_template",
     ],
-    "Data Thresholding": [
+    "Quality Control": [
         "pca_imputation", "pca_normalization",
         "pca_min_detection", "experiment_pca", "prey_pca", "prey_pca_color", "qc_bait",
         "metric_network_size", "metric_enrichment", "metric_degree", "qc_results",
     ],
-    "Protein Feature Analysis": [
+    "Feature Enrichment": [
         "feature_analysis", "feature_type", "num_features", "download_pvalue_threshold",
         "download_enrichment_threshold",
     ],
-    "Network Comparison": ["comp_bait", "comp_use_shared", "volcano_plot", "venn", "gene_lists"],
+    "Compare Baits": ["comp_bait", "comp_use_shared", "volcano_plot", "venn", "gene_lists"],
     "Cytoscape": [key for key in TOOLTIPS if key.startswith("cy_")],
-    "Downloads": [
+    "Export": [
         "dl_apply_thresholds", "dl_preset", "dl_groups", "custom_columns", "dl_genelist_mode",
         "dl_prohits_abundance", "batch_export",
     ],

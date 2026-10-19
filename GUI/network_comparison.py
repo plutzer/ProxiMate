@@ -1,5 +1,5 @@
 """
-Network Comparison Module for ProxiMate
+Bait comparison module for ProxiMate
 
 This module provides functions for comparing protein-protein interaction networks
 between two baits, including data loading, filtering, statistical analysis, and visualization.
@@ -424,7 +424,7 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
 
     fig.update_layout(
         # Centered so the title clears the left strip's subplot title
-        title=dict(text=f"Network Comparison: {bait_a} vs {bait_b}",
+        title=dict(text=f"Compare Baits: {bait_a} vs {bait_b}",
                    x=0.5, xanchor='center'),
         hovermode='closest',
         height=500,
@@ -552,7 +552,7 @@ def create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b):
 
     ax_center.set_xlabel(f"log2(Mean Intensity {bait_a} / Mean Intensity {bait_b})", fontsize=12)
     ax_center.set_ylabel("-log10(adjusted p-value)", fontsize=12)
-    ax_center.set_title(f"Network Comparison: {bait_a} vs {bait_b}", fontsize=14, fontweight='bold')
+    ax_center.set_title(f"Compare Baits: {bait_a} vs {bait_b}", fontsize=14, fontweight='bold')
     ax_center.legend(title="Category", loc='upper right', fontsize=9)
     ax_center.grid(True, alpha=0.3)
 

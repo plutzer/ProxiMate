@@ -27,8 +27,8 @@ DOCS_PATH = os.path.join(GUI_DIR, 'gui_docs.md')
 README_PATH = os.path.join(os.path.dirname(GUI_DIR), 'README.md')
 
 # README sections that complement a tab's page.
-README_SECTIONS = {'Cytoscape': ('Cytoscape',), 'Network Scoring': ('Logs and provenance',
-                                                                     'Excluding Human Cell Map evidence')}
+README_SECTIONS = {'Cytoscape': ('Cytoscape',), 'Data & Scoring': ('Logs and provenance',
+                                                                    'Excluding Human Cell Map evidence')}
 
 
 def search_tools(query: str = '', mode: str = None) -> list:
@@ -99,10 +99,10 @@ def get_gui_documentation(section: str = None) -> dict:
     """What the user sees in the ProxiMate GUI, tab by tab, to help them use it.
 
     With no section: the table of contents with a paragraph per tab.  With a tab name
-    (Network Scoring, Data Thresholding, Protein Feature Analysis, Network Comparison,
-    Cytoscape, Downloads): that tab's walkthrough, the tooltip of every control on it
-    keyed by control, and any README section that explains it further.  Network
-    Scoring also carries ``format_notes``: what each input format needs.
+    (Data & Scoring, Quality Control, Feature Enrichment, Compare Baits, Cytoscape,
+    Export): that tab's walkthrough, the tooltip of every control on it keyed by
+    control, and any README section that explains it further.  Data & Scoring also
+    carries ``format_notes``: what each input format needs.
     """
     with open(DOCS_PATH, encoding='utf-8') as handle:
         docs = _split_docs(handle.read())
@@ -120,6 +120,6 @@ def get_gui_documentation(section: str = None) -> dict:
         text += '\n\n### From the README: ' + title + '\n\n' + _readme_section(title)
     controls = {key: help_text.TOOLTIPS[key] for key in help_text.SECTIONS[section]}
     page = {'section': section, 'text': text, 'controls': controls}
-    if section == 'Network Scoring':
+    if section == 'Data & Scoring':
         page['format_notes'] = dict(help_text.FORMAT_NOTES)
     return page

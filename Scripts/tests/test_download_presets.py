@@ -1,4 +1,4 @@
-"""Tests for GUI/download_presets.py: the Downloads tab preset registry and
+"""Tests for GUI/download_presets.py: the Export tab preset registry and
 the pure export-builder functions behind it."""
 
 import os

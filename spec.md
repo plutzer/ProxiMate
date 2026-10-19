@@ -339,6 +339,8 @@ threshold from the sidebar."
 
 ## Chunk 5 — Cytoscape tab
 
+**Status: completed.**
+
 ### Activity panel
 
 Replace the `output_text_verbatim` with a `render.DataGrid` (or a simple HTML table
@@ -389,6 +391,8 @@ operations.
 
 ## Chunk 6 — Names, stylesheet, documentation pass
 
+**Status: completed.**
+
 - Rename tabs: Data & Scoring, Quality Control, Feature Enrichment, Compare Baits,
   Cytoscape, Export. Update every reference: `app.py`, `help_text.py` SECTIONS keys
   and tooltip texts that name a tab, `gui_docs.md` headings and prose, `mcp_ops.py`
@@ -410,3 +414,47 @@ operations.
 Live validation of the experimental design table while editing; auto-generating the
 design from the quant file; a theme library or brand styling; Playwright tests;
 cross-dataset bait comparison.
+
+---
+
+## Open decisions to revisit
+
+Choices made during implementation without asking the owner. Each may be overturned
+at the start of a later session.
+
+### From chunk 5 (Cytoscape tab)
+
+1. **What counts toward `SEND_WARN_EDGES`.** The warning compares the 5000 limit with
+   *visible* edges only. The "Multivalidated only" scope does not drop the other
+   BioGRID pairs: they are still sent to Cytoscape, hidden, so restyling can show
+   them again. The estimate line reports them separately ("plus N BioGRID edges hidden
+   by the scope"). On TIP49 with all 27 baits, "All pairs" gives 15,786 edges and warns;
+   "Multivalidated only" gives 4,968 visible (plus 10,818 hidden) and does not. If
+   Cytoscape load rather than readability is the concern, count all sent edges or
+   stop sending the hidden pairs.
+2. **CORUM on a non-human dataset refuses the send.** The GUI used to warn and draw
+   without complexes. It now shows an error, matching the MCP `cytoscape_send`; both
+   resolve their reference files through `backend.network_sources()`. The estimate
+   line shows the same message in red.
+3. **Unlock View lives in the Status panel.** The spec listed no panel for it.
+4. **Column layout.** The Network and Cytoscape cards are 4/8 columns and the Activity
+   table spans the full width below them, rather than three columns 4/5/3.
+5. **Docs claim removed.** `gui_docs.md` used to say the status line shows the
+   thresholds the network was drawn at. It does not, so the sentence was dropped
+   rather than adding the thresholds to the status line.
+
+### From chunk 6 (names, stylesheet, documentation)
+
+1. **Buttons keep their natural width.** Buttons placed directly in a card body (Parse
+   Data, Score Data, Export PNG, Download ED template, ...) used to stretch across the
+   card; `proximate.css` now aligns them left at their own width everywhere.
+2. **Feature Enrichment labels.** The button reads *Run Feature Enrichment* and the two
+   cards are *Foreground* and *Top features*. The Compare Baits button reads *Compare*;
+   its cards stay *Network A* / *Network B*. MCP operation names (`feature_analysis`,
+   `compare_networks`) are unchanged.
+3. **Changelog.** Unreleased gained entries for the dataset actions, progress modal, QC
+   results table and Cytoscape estimate, which earlier chunks had not recorded.
+4. **Export presets refresh after enrichment.** The *Enriched Features* preset now
+   appears as soon as a Feature Enrichment run finishes, not only after a dataset change.
+   Still open: on first opening the Export tab the *Experimental Design* preview can be
+   empty until the preset is re-selected.
