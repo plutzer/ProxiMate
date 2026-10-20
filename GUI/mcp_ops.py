@@ -16,7 +16,6 @@ import cytoscape_net
 import dataset_store as store
 import provenance
 from mcp_registry import register
-from setup_datasets import CORUM_FILENAME, ORGANISMS
 
 ACTOR = 'mcp'
 
@@ -103,8 +102,9 @@ def server_status(probe: bool = False) -> dict:
 def get_scores(dataset: str, thresholds: dict, baits: list = None, top_n: int = 500) -> dict:
     """The rows of annotated_scores.csv passing ``thresholds``, restricted to ``baits``
     when given: Experiment.ID (bait), Prey.ID, First_ID, First_Prey_Gene, SaintScore,
-    BFDR, WD, WDFDR, FoldChange, AvgIntensity, In.BioGRID.  Ordered by bait then SAINT
-    score, at most ``top_n`` rows; ``n_per_bait`` counts every passing row."""
+    BFDR, WD, WDFDR, FoldChange, AvgIntensity or AvgSpec, In.BioGRID, Multivalidated.
+    Ordered by bait then SAINT score, at most ``top_n`` rows; ``n_per_bait`` counts
+    every passing row."""
     rows = backend.passing_scores(dataset, thresholds, baits)
     out = _records(rows, top_n)
     out.update(dataset=dataset, thresholds=backend.validate_thresholds(thresholds),
@@ -115,7 +115,7 @@ def get_scores(dataset: str, thresholds: dict, baits: list = None, top_n: int = 
 @register('sandbox', "QC metrics at a threshold set: median network size, BioGRID enrichment, mean degree.",
           tags=('thresholds', 'qc', 'metrics', 'known', 'degree'))
 def threshold_metrics(dataset: str, thresholds: dict, bait: str = None) -> dict:
-    """The Data Thresholding tab's metrics for ``thresholds`` = {SaintScore, BFDR, WD,
+    """The Quality Control tab's metrics for ``thresholds`` = {SaintScore, BFDR, WD,
     WDFDR}: interactions before and after filtering, known (In.BioGRID) before and
     after, median passing preys per bait, enrichment of known interactions, and the
     mean number of BioGRID partners each passing prey has among the other passing
@@ -128,7 +128,7 @@ def threshold_metrics(dataset: str, thresholds: dict, bait: str = None) -> dict:
           tags=('feature', 'enrichment', 'GO', 'domains', 'hypergeometric'))
 def feature_analysis(dataset: str, thresholds: dict, feature_types: list = None,
                      top_n: int = 200) -> dict:
-    """Runs the Protein Feature Analysis tab's test at ``thresholds`` and returns the
+    """Runs the Feature Enrichment tab's test at ``thresholds`` and returns the
     table (Bait, Feature, Feature_type, k, n, K, M, p_value, enrichment, adj_p) sorted
     by adjusted p-value, at most ``top_n`` rows.  ``feature_types`` is a subset of
     GO_CC, GO_BP, GO_MF, Motifs, Regions, Repeats, Compositions, Domains (default all).
@@ -164,7 +164,7 @@ def get_prey_annotations(dataset: str, thresholds: dict, ids: list = None, top_n
           tags=('compare', 'volcano', 'venn', 'baits', 'fold change'))
 def compare_networks(dataset: str, bait_a: str, bait_b: str, thresholds_a: dict,
                      thresholds_b: dict, top_n: int = 500, include_volcano: bool = True) -> dict:
-    """The Network Comparison tab's data: ``genes`` holds the sorted gene lists passing
+    """The Compare Baits tab's data: ``genes`` holds the sorted gene lists passing
     thresholds in only A, only B and both; ``volcano`` holds every prey seen under
     either bait with status (shared / a_only / b_only), mean intensities, log2 fold
     change, adjusted p-value and the -log10 BFDR for one-sided preys, at most
@@ -216,6 +216,28 @@ def score_dataset(dataset: str, imputation: int = 0, wdfdr_iterations: int = 100
                                    seed=seed, actor=ACTOR))
 
 
+@register('dataset', "Delete a dataset: its directory, every result in it and its session row. Destructive; needs confirm=true.",
+          tags=('delete', 'remove', 'dataset', 'session'))
+def delete_dataset(dataset: str, confirm: bool = False) -> dict:
+    """Removes ``<out_dir>/<dataset>/`` and the dataset's row from the session; the GUI's
+    table updates.  Refused unless ``confirm`` is true, and while a job runs on the
+    dataset.  A network drawn from it stays in Cytoscape, but the server no longer
+    names it as the drawn dataset.  Tell the user before calling this."""
+    if not confirm:
+        raise ValueError("delete_dataset removes the dataset and its results; pass confirm=true "
+                         "after the user has agreed")
+    backend.delete_dataset(dataset, actor=ACTOR)
+    return {'deleted': dataset, 'datasets': store.names()}
+
+
+@register('dataset', "Rename a dataset: its directory, session row, run.json paths and the drawn Cytoscape network title.",
+          tags=('rename', 'dataset', 'name'))
+def rename_dataset(dataset: str, new_name: str) -> dict:
+    """``new_name`` must be unused and use letters, digits and underscores only.
+    Refused while a job runs on the dataset.  Returns the renamed row."""
+    return _json(backend.rename_dataset(dataset, new_name, actor=ACTOR))
+
+
 @register('dataset', "Replace the whole session with the datasets in a session zip. Destructive; needs confirm=true.",
           tags=('session', 'restore', 'load', 'zip'))
 def load_session(zip_path: str, confirm: bool = False) -> dict:
@@ -256,6 +278,23 @@ def cytoscape_list_style_presets() -> dict:
                         for name, p in cytoscape_net.STYLE_PRESETS.items()]}
 
 
+@register('sandbox', "Count the baits, nodes and edges cytoscape_send would draw, without touching Cytoscape.",
+          tags=('cytoscape', 'estimate', 'size', 'count', 'network', 'edges', 'nodes'))
+def cytoscape_estimate(dataset: str, thresholds: dict, baits: list = None, prey_prey: bool = True,
+                       biogrid_scope: str = 'all', corum: bool = False, corum_min_members: int = 3,
+                       corum_min_fraction: float = 0.5) -> dict:
+    """The size of the network ``cytoscape_send`` with the same arguments would draw:
+    ``baits``, ``preys``, ``nodes``, the visible ``proximity_edges`` (bait-prey),
+    ``literature_edges`` (BioGRID prey-prey) and ``complex_edges`` (CORUM), their total
+    ``edges``, and ``hidden_edges`` (BioGRID pairs the multivalidated scope sends
+    hidden).  The GUI asks for confirmation above ``send_warn_edges`` visible edges."""
+    counts = backend.estimate_network(dataset, thresholds, baits=list(baits or []),
+                                      prey_prey=prey_prey, biogrid_scope=biogrid_scope,
+                                      corum=corum, corum_min_members=int(corum_min_members),
+                                      corum_min_fraction=float(corum_min_fraction))
+    return _json({**counts, 'send_warn_edges': cytoscape_net.SEND_WARN_EDGES})
+
+
 @register('cytoscape', "Draw a dataset's thresholded network in Cytoscape; replace=true when one is already drawn.",
           tags=('cytoscape', 'send', 'draw', 'network', 'layout', 'biogrid', 'corum', 'preset'))
 def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey: bool = True,
@@ -294,14 +333,7 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
     scores_path = backend.results_path(dataset)
     if not os.path.isfile(scores_path):
         raise FileNotFoundError(f"dataset {dataset!r} has no annotated_scores.csv; score it first")
-    settings = provenance.annotation_settings(dataset_path)
-    organism = settings['organism']
-    biogrid_path = provenance.biogrid_summary_path(organism, exclude_hcm=settings['exclude_hcm'])
-    corum_path = None
-    if corum:
-        if not ORGANISMS[organism]['has_corum']:
-            raise ValueError(f"CORUM covers human complexes only; this dataset is {organism}")
-        corum_path = os.path.join(provenance.DEFAULT_DATASETS_DIR, CORUM_FILENAME)
+    biogrid_path, corum_path = backend.network_sources(dataset, corum)
     params = {'thresholds': thresholds, 'baits': baits, 'prey_prey': prey_prey,
               'label_policy': label_policy, 'layout': layout, 'width_source': width_source,
               'literature_weighted': literature_weighted, 'biogrid_scope': biogrid_scope,

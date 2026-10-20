@@ -400,6 +400,18 @@ def test_the_matplotlib_scatter_draws_one_series_per_group(tmp_path):
     assert labels == ["Not in BioGRID", "In BioGRID", "Multivalidated"]
 
 
+def test_both_scatters_plot_fold_change_on_a_log_axis(tmp_path):
+    path = _scatter_scores(tmp_path, AvgIntensity=1.5e6, ctrlIntensity="1e5")
+
+    plotly_fig = saint_scatter_plot(path, "B1", 0.7)
+    assert plotly_fig.layout.xaxis.type == "log"
+    assert plotly_fig.layout.xaxis.title.text == "Fold change"
+
+    mpl_fig = plot_exports.saint_scatter_matplotlib(path, "B1", 0.7)
+    assert mpl_fig.axes[0].get_xscale() == "log"
+    assert mpl_fig.axes[0].get_xlabel() == "Fold change"
+
+
 # --- PCA data preparation ------------------------------------------------------
 
 EXPERIMENTS = [
@@ -568,6 +580,16 @@ def test_pca_plot_has_one_point_per_experiment(dataset):
     assert sum(len(trace.x) for trace in fig.data) == len(EXPERIMENTS)
     assert isinstance(plot_exports.pca_plot_matplotlib(interaction, ed),
                       matplotlib.figure.Figure)
+
+
+def test_pca_legend_has_one_entry_per_test_bait_plus_one_grey_control(dataset):
+    """b_2 is a control run under the BaitB name; it joins the Control series."""
+    interaction, ed = dataset
+    fig = pca_plot(interaction, ed)
+    assert sorted(trace.name for trace in fig.data) == ["BaitA", "BaitB", "Control"]
+    control = next(trace for trace in fig.data if trace.name == "Control")
+    assert control.marker.color == "grey" and len(control.x) == 1
+    assert pca_plot(interaction, ed, show_legend=False).layout.showlegend is False
 
 
 @pytest.mark.parametrize("mode", ["none", "continuous", "categorical"])

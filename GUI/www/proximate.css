@@ -1,0 +1,214 @@
+/* Shiny's file-input progress bar is too short for its "Upload complete" text. */
+.shiny-input-container .progress {
+    height: 1.5rem;
+}
+.shiny-input-container .progress-bar {
+    white-space: nowrap;
+    overflow: visible;
+}
+
+/* Sidebar: the shared controls every tab reads. */
+.sidebar .form-group {
+    margin-bottom: 0.75rem;
+}
+.sidebar .irs {
+    white-space: nowrap;
+}
+.mcp-command {
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-size: 0.75em;
+}
+.wdfdr-warning {
+    color: #b35900;
+    font-size: 0.9em;
+}
+
+/* Every card's body has the same padding, and stacked cards the same gap. */
+.card > .card-body {
+    padding: 1rem 1.25rem;
+}
+.card {
+    margin-bottom: 1rem;
+}
+/* A card body is a flex column; buttons placed directly in it keep their own width
+   instead of stretching across the card. */
+.card-body > .btn,
+.card-body > bslib-tooltip > .btn {
+    align-self: flex-start;
+}
+
+/* A short heading above a group of related controls inside a card. */
+.section-heading {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #495057;
+    margin: 0.75rem 0 0.5rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid #dee2e6;
+}
+
+/* Explanations and secondary details beside a control or plot. */
+.help-text {
+    font-size: 0.875em;
+    color: #6c757d;
+}
+
+/* The info icon after a label; hovering it shows the tooltip. */
+.info-icon {
+    cursor: help;
+    color: #6c757d;
+    font-size: 0.85em;
+}
+
+/* Shown above the tabs while an agent job holds a dataset's lock. */
+.agent-banner {
+    background: #fff3cd;
+    color: #664d03;
+    padding: 8px 16px;
+    border-bottom: 1px solid #ffe69c;
+}
+
+/* A single action button centered between two rows of cards. */
+.centered-action {
+    text-align: center;
+    margin: 0.5rem 0 1.5rem;
+}
+
+/* Connection state lines, such as the Cytoscape status. */
+.status-ok {
+    color: #198754;
+}
+.status-bad,
+.status-error {
+    color: #b02a37;
+}
+
+/* What a tab shows in place of its controls until a dataset that fits is active. */
+.empty-state {
+    text-align: center;
+    padding: 40px;
+    color: #666;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+/* The preset buttons share the sidebar's width without wrapping their labels. */
+.preset-row {
+    display: flex;
+    gap: 0.5rem;
+}
+.preset-row bslib-tooltip {
+    flex: 1 1 0;
+    display: flex;
+}
+.preset-row .btn {
+    flex: 1 1 0;
+    white-space: nowrap;
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+}
+
+/* An open tooltip never intercepts a click meant for the control beneath it. */
+.tooltip {
+    pointer-events: none;
+}
+
+/* A row of related buttons, such as the session table's actions. */
+.button-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+/* The step cards' headers: the step name followed by a one-line purpose. */
+.step-title {
+    font-weight: 600;
+}
+.step-purpose {
+    margin-left: 0.5rem;
+    font-size: 0.85em;
+    font-weight: 400;
+    color: #6c757d;
+}
+
+/* The counts shown under the parse card once a parse has finished. */
+.parse-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: #f0f7ec;
+    border: 1px solid #cfe4c4;
+    border-radius: 6px;
+}
+
+/* The progress modal: the stage list, the error and the dataset log tail. */
+.job-stages {
+    list-style: none;
+    padding-left: 0;
+}
+.job-stages .done {
+    color: #198754;
+}
+.job-stages .current {
+    font-weight: 600;
+}
+.job-stages .failed {
+    color: #b02a37;
+    font-weight: 600;
+}
+.job-stages .pending {
+    color: #6c757d;
+}
+.job-error {
+    white-space: pre-wrap;
+    color: #b02a37;
+    margin-bottom: 0.75rem;
+}
+.job-log {
+    font-size: 0.75em;
+    max-height: 16em;
+    overflow: auto;
+    background: #f8f9fa;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    white-space: pre-wrap;
+}
+
+/* A plot card's message until it has something to draw. */
+.plot-placeholder {
+    color: #6c757d;
+    text-align: center;
+    padding: 2rem 1rem;
+    margin: 0;
+}
+
+/* The Cytoscape tab: the pre-send estimate and the activity table. */
+.cy-estimate {
+    font-size: 0.9em;
+    color: #6c757d;
+    margin: 0.5rem 0 0;
+}
+.cy-estimate.error {
+    color: #b35a5a;
+}
+.cy-activity {
+    max-height: 300px;
+    overflow-y: auto;
+}
+.cy-activity td {
+    white-space: normal;
+    word-break: break-word;
+}
+.cy-activity th {
+    position: sticky;
+    top: 0;
+    background: #fff;
+}

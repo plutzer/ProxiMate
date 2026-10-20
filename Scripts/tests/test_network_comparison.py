@@ -304,6 +304,14 @@ def test_central_panel_holds_one_trace_per_category_with_its_preys():
     assert right == {"Network A only": 1}
 
 
+def test_volcano_draws_each_category_once_per_panel_with_webgl():
+    fig = create_volcano_plot(_volcano_frame(), "BaitA", "BaitB")
+
+    keys = [(trace.xaxis, trace.name) for trace in fig.data]
+    assert len(keys) == len(set(keys))
+    assert all(trace.type == "scattergl" for trace in fig.data)
+
+
 def test_matplotlib_volcano_has_three_axes():
     fig = create_volcano_plot_matplotlib(_volcano_frame(), "BaitA", "BaitB")
     assert len(fig.axes) == 3

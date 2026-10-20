@@ -1,12 +1,14 @@
 """Tests for the session archive: what a downloaded session contains, which uploads are
 accepted as one, and how the datasets table survives a restart."""
 
+import json
 import zipfile
 
 import pandas as pd
 import pytest
 
 from session_archive import (
+    DATASET_COLUMNS,
     DATASETS_TABLE,
     SessionArchiveError,
     extract_session_archive,
@@ -19,8 +21,8 @@ from session_archive import (
 
 def _row(name):
     return {"Dataset Name": name, "Input Type": "MaxQuant", "Quant Type": "Intensity",
-            "Experiments": 4, "Controls": 2, "Scored": "Yes", "Imputation": 0,
-            "WDFDR iterations": 2}
+            "Experiments": 4, "Controls": 2, "Scored": "Yes", "Scored at": "2026-01-01 12:00 UTC",
+            "Organism": "human", "Imputation": 0, "WDFDR iterations": 2}
 
 
 def _session(out_dir, names):
@@ -101,6 +103,25 @@ def test_unusable_uploads_are_refused(tmp_path, members):
 
     with pytest.raises(SessionArchiveError):
         inspect_session_archive(path)
+
+
+def test_an_archive_without_the_manifest_columns_loads_them_from_run_json(tmp_path):
+    """Sessions saved before the table carried 'Scored at' and 'Organism' still load;
+    the two come from each dataset's run.json, blank when it records no annotation."""
+    old_row = {k: v for k, v in _row("A").items() if k not in ("Scored at", "Organism")}
+    table_csv = pd.DataFrame([old_row, {**old_row, "Dataset Name": "B"}]).to_csv(index=False)
+    manifest = json.dumps({"runs": {"r1": {"stages": [
+        {"stage": "annotate", "status": "ok", "ended_utc": "2026-03-04T05:06:07Z",
+         "extra": {"organism": "mouse"}}]}}})
+    path = _archive(tmp_path, {DATASETS_TABLE: table_csv, "A/run.json": manifest, "B/ED.csv": "x"})
+    out = tmp_path / "Outputs"
+    out.mkdir()
+
+    table = extract_session_archive(path, str(out))
+
+    assert list(table.columns) == DATASET_COLUMNS
+    assert table.set_index("Dataset Name")["Scored at"].to_dict() == {"A": "2026-03-04 05:06 UTC", "B": ""}
+    assert table.set_index("Dataset Name")["Organism"].to_dict() == {"A": "mouse", "B": ""}
 
 
 def test_extraction_drops_rows_whose_directory_is_not_in_the_archive(tmp_path):

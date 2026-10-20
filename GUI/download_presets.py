@@ -1,5 +1,5 @@
 """
-Download preset registry and export builders for the Downloads tab.
+Download preset registry and export builders for the Export tab.
 
 Pure logic only: functions take DataFrames/paths and return DataFrames, file
 lists, or paths, so everything is testable without a Shiny session. app.py owns

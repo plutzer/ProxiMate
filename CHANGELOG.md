@@ -11,6 +11,8 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-20
+
 ### Added
 - A *Style preset* select on the Cytoscape tab. *Abundance/literature weighted* is the
   existing look; *Highlight knowns* draws black ellipse baits, grey rounded preys with a
@@ -26,7 +28,27 @@ section to the version and date and starts a fresh Unreleased section above it.
   checkbox. A community of one node keeps its color. The MCP `cytoscape_cluster_selection`
   operation takes `layout` and `recolor`.
 
+- *Delete selected* and *Rename selected* on the session table, with the MCP operations
+  `delete_dataset` and `rename_dataset`. The table gains *State*, *Scored at* and
+  *Organism* columns.
+- Parsing, scoring, feature enrichment and Cytoscape sends run under a progress modal
+  that lists the job's stages and the tail of the dataset's log, and stays open with the
+  error when a job fails.
+- The Quality Control tab lists the passing interactions in a filterable table with a
+  CSV download.
+- The Cytoscape tab estimates the network a send would draw, asks for confirmation above
+  5000 visible edges, and lists its activity in a table; the MCP server gains
+  `cytoscape_estimate`.
+
 ### Changed
+- The tabs are renamed *Data & Scoring*, *Quality Control*, *Feature Enrichment*,
+  *Compare Baits*, *Cytoscape* and *Export*; `get_gui_documentation` takes the new names.
+- The sidebar now holds the active dataset, which every tab works on (pick it there or
+  click its row in the session table), and one set of four score thresholds that the
+  Quality Control metrics, Feature Enrichment, Cytoscape and the Export tab (behind an
+  *Apply thresholds* switch) all read. The per-tab dataset selects and slider sets are
+  gone, and the presets are now *SAINT only*, *WDFDR only* and *Both*. Compare Baits
+  compares two baits of the active dataset; cross-dataset comparison is dropped.
 - BioGRID prey-prey edges are weighted by publication count by default.
 - The Cytoscape tab's *Sync Positions* button is replaced by *Save Layout* and *Load
   Layout*: a layout is a named `id,x,y` CSV under `<dataset>/cytoscape/layouts/`, saved by
@@ -137,7 +159,9 @@ section to the version and date and starts a fresh Unreleased section above it.
 Last version published to Docker Hub by hand, before this changelog existed. Older
 versions are listed at https://hub.docker.com/r/plutzer/proximate/tags.
 
-[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.4.0
+[0.3.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.3.0
 [0.2.1]: https://github.com/plutzer/ProxiMate/releases/tag/v0.2.1
 [0.2.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.2.0
 [0.1.11]: https://hub.docker.com/r/plutzer/proximate/tags
