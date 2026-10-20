@@ -11,6 +11,8 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-20
+
 ### Added
 - A *Style preset* select on the Cytoscape tab. *Abundance/literature weighted* is the
   existing look; *Highlight knowns* draws black ellipse baits, grey rounded preys with a
@@ -157,7 +159,9 @@ section to the version and date and starts a fresh Unreleased section above it.
 Last version published to Docker Hub by hand, before this changelog existed. Older
 versions are listed at https://hub.docker.com/r/plutzer/proximate/tags.
 
-[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.4.0
+[0.3.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.3.0
 [0.2.1]: https://github.com/plutzer/ProxiMate/releases/tag/v0.2.1
 [0.2.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.2.0
 [0.1.11]: https://hub.docker.com/r/plutzer/proximate/tags
