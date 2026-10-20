@@ -5,6 +5,7 @@ import seaborn as sns
 from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 import argparse
+import re
 from collections import Counter
 from QC_plots import apply_score_thresholds
 import matplotlib.ticker as ticker
@@ -129,7 +130,7 @@ def process_refactored(data, columns_for_analysis, thresholds):
     return pd.concat(frames, ignore_index=True)[RESULT_COLUMNS]
 
 
-MAX_LABEL_CHARS = 42
+MAX_LABEL_CHARS = 60
 
 
 def _truncate_label(label):
@@ -142,6 +143,24 @@ def _truncate_label(label):
     if len(label) <= MAX_LABEL_CHARS:
         return label
     return label[:MAX_LABEL_CHARS - 3] + '...'
+
+
+# The raw UniProt column each GO feature type is trimmed from; it names each term's id
+# as "term [GO:0005634]".
+GO_SOURCE_COLUMNS = {'GO_CC': 'Gene Ontology (cellular component)',
+                     'GO_BP': 'Gene Ontology (biological process)',
+                     'GO_MF': 'Gene Ontology (molecular function)'}
+
+
+def go_term_ids(scores):
+    """Map (feature type, GO term name) -> GO id from the raw UniProt GO columns of an
+    annotated scores table."""
+    ids = {}
+    for feature_type, column in GO_SOURCE_COLUMNS.items():
+        for cell in scores[column].dropna().unique():
+            for term, go_id in re.findall(r'\s*([^;]+?) \[(GO:\d+)\]', cell):
+                ids[(feature_type, term)] = go_id
+    return ids
 
 
 def plot_results(results, feature_type, num_features=30):
@@ -176,7 +195,9 @@ def plot_results(results, feature_type, num_features=30):
     # Hierarchical clustering needs at least two items on an axis; a single-bait
     # dataset or a single passing feature otherwise makes scipy raise on an empty
     # distance matrix.
-    grid = sns.clustermap(filtered_results, cmap='viridis', figsize=(12, 8),
+    # 0.28 in per row keeps a 9 pt label from touching its neighbors.
+    height = max(5, 0.28 * filtered_results.shape[0] + 2)
+    grid = sns.clustermap(filtered_results, cmap='viridis', figsize=(12, height),
                           row_cluster=filtered_results.shape[0] > 1,
                           col_cluster=filtered_results.shape[1] > 1,
                           dendrogram_ratio=(0.18, 0.18), cbar_pos=None)
@@ -193,7 +214,7 @@ def plot_results(results, feature_type, num_features=30):
     ax.set_xticklabels(ordered_columns, rotation=45, ha='right', fontsize=8)
 
     ax.set_yticks(np.arange(len(ordered_rows)) + 0.5)
-    ax.set_yticklabels([_truncate_label(label) for label in ordered_rows], fontsize=7)
+    ax.set_yticklabels([_truncate_label(label) for label in ordered_rows], fontsize=9)
 
     # The colorbar goes in the corner the two dendrograms leave empty, as a cell of the
     # clustermap's own grid rather than as a free-floating inset: only an axes the grid

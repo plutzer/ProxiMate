@@ -2,89 +2,179 @@
 
 ProxiMate scores proximity-labeling proteomics screens. A run moves left to right
 through the navigation bar: parse the raw quantification into a **dataset**, score it,
-then explore the scored network in the remaining tabs. Every dataset is a directory
+then explore the scored network in the remaining tabs: *Data & Scoring*, *Quality
+Control*, *Feature Enrichment*, *Compare Baits*, *Cytoscape* and *Export*. Every dataset is a directory
 under the output directory holding the SAINT inputs, `merged.csv` (SAINT and CompPASS
 scores), `annotated_scores.csv` (with BioGRID, UniProt, HPA and CORUM annotation),
 `proximate.log` and `run.json` (the run manifest). The "Datasets in this Session"
-table at the top of the first tab lists every dataset and whether it is scored.
+table on the Data & Scoring tab lists every dataset and its state. The sidebar names
+the **active dataset**, which every tab works on, and holds the four score thresholds
+every tab reads.
 
-The same four score thresholds appear on most tabs and always mean the same thing:
-SAINT score (higher is better), BFDR (lower is stricter), CompPASS WD score (higher is
-better; 0 disables), and WDFDR (lower is stricter; 1.0 disables). An interaction passes
-only when it clears all four. The preset buttons set all four at once.
+## Sidebar
 
-## Network Scoring
+The *Active dataset* select lists every dataset in the session with a badge saying
+whether it is *parsed* or *scored*. Clicking a row of the session table on the Data &
+Scoring tab picks that dataset, and parsing a dataset makes it active. Tabs that need
+scores (Quality Control's metrics and table, Feature Enrichment, Compare Baits,
+Cytoscape) show "'{name}' is parsed but not scored" instead of their controls while the
+active dataset is only parsed; with no dataset at all, every tab says to parse one.
 
-Two cards. **Data Parsing** takes a dataset name, an input format (MaxQuant, DIA-NN,
-Pioneer, FragPipe, MSstats or SAINT files) and the matching uploads, plus an
-experimental design CSV that names each experiment, its type (T for a test bait, C for a
-control), its bait and replicate, and optionally the bait's UniProt ID. The design table
-is editable before parsing and the edited table is what gets parsed. *Parse Data* writes
-the SAINT and CompPASS inputs and adds a row to the session table.
+Below it, four sliders set the score thresholds every tab reads: SAINT score (higher is
+better), BFDR (lower is stricter), CompPASS WD score (higher is better; 0 disables), and
+WDFDR (lower is stricter; 1 disables). An interaction passes only when it clears all
+four. Three preset buttons set all four at once: *SAINT only* (SAINT ≥ 0.9, BFDR ≤ 0.05,
+WDFDR off), *WDFDR only* (WDFDR ≤ 0.05, SAINT off) and *Both* (SAINT ≥ 0.9, BFDR ≤ 0.05,
+WDFDR ≤ 0.05); WD stays at 0 in all three. The button whose values the sliders hold is
+highlighted. The sliders start at *SAINT only*. A warning appears when the active
+dataset was scored with 0 WDFDR iterations and the WDFDR slider is below 1, because such
+a dataset has no WDFDR values and nothing would pass.
 
-**Scoring** picks a parsed dataset, the organism, the imputation method for missing
-control values (AFT imputation applies to intensity data; a spectral-count dataset
-offers Default only), how π is estimated (imputation 2 only), the sigma floor's minimum
-observation count (imputation 2 and 3; default 4, 0 disables it), the number of WDFDR
-permutations, and for human data whether Human Cell Map evidence is excluded from
-BioGRID. *Score Data* runs SAINTexpress and CompPASS, then annotates the result; the
-row's Scored column flips to Yes. Scoring blocks the page until it finishes.
+Two collapsed panels hold the commands that connect an agent (Claude Code or Codex CLI)
+to this server's MCP endpoint and the bug-report and repository links. The version
+label sits at the bottom.
 
-The session controls save every dataset as one zip (*Download Session*), restore such a
-zip (*Upload Session Zip*, which replaces the current session), or remove everything
-(*Clear Datasets*).
+## Data & Scoring
 
-## Data Thresholding
+Four cards. The **Datasets in this Session** table lists every dataset with its input
+and quant type, experiment and control counts, its *State* (`parsed`, `scored`, or
+`enriched` once Feature Enrichment has been run), when it was scored and against which
+organism, and its imputation and WDFDR settings. Clicking a row makes that dataset
+active. *Delete selected* removes the active dataset and its directory after a
+confirmation; *Rename selected* gives it a new name everywhere (directory, table, run
+manifest and the drawn Cytoscape network); *Clear All Datasets* empties the session; and
+*Download Session Zip* saves every dataset with its results as one archive, which the
+smaller *Load a saved session* card beside the table restores with *Load Session*
+(replacing the current session).
 
-Quality control for one scored dataset. The four threshold sliders drive three metrics:
-the median number of preys per bait that pass, how much more often passing interactions
-are already known in BioGRID than before filtering, and the mean number of known BioGRID
-partners each passing prey has among the other passing preys. A bait selector restricts
-the metrics to one bait. Two PCA plots show experiments positioned by their protein
-profile (replicates should cluster) and preys by their pattern across experiments, with
-controls for imputation, normalization and a minimum detection fraction. A per-bait
-scatter shows each prey's scores against the SAINT cutoff. Plots can be exported as PNG.
+**Step 1 — Parse** takes a dataset name, an input format (MaxQuant, DIA-NN, Pioneer,
+FragPipe, MSstats or SAINT files) and the matching uploads. A note under the format
+select says which file the format needs and which of its columns are read, and
+*Download ED template* writes an experimental design CSV with the expected header
+(Experiment Name, Type, Bait, Replicate, Bait ID, Group) and two example rows: one row
+per experiment, with T for a test bait or C for a control, the bait and replicate, and
+optionally the bait's UniProt ID and a control group. The design table is editable
+before parsing and the edited table is what gets parsed. *Parse Data* writes the SAINT
+and CompPASS inputs, adds the dataset to the table and makes it active. When it
+finishes, a summary strip under the button gives the experiment, control, prey and
+interaction counts and a *Score now* button that jumps to the Score card.
 
-## Protein Feature Analysis
+**Step 2 — Score** scores the active dataset (its name is in the card header) and picks
+the organism, the imputation method for missing control values (AFT imputation applies
+to intensity data; a spectral-count dataset offers Default only), how π is estimated
+(imputation 2 only), the sigma floor's minimum observation count (imputation 2 and 3;
+default 4, 0 disables it), the number of WDFDR permutations, and for human data whether
+Human Cell Map evidence is excluded from BioGRID. *Score Data* runs SAINTexpress and
+CompPASS, then annotates the result; the row's State becomes `scored`.
 
-For each bait, the preys passing the four thresholds (the foreground) are tested for
+Parsing, scoring, feature enrichment and sending to Cytoscape each run under a progress
+modal that lists the job's stages with the current one marked, the elapsed time and the
+last lines of the dataset's `proximate.log`. On success the modal closes and a
+notification reports the outcome; on failure it stays open with the error and the log
+so the cause can be read before closing it. The page stays usable for other tabs, but a
+second job cannot start until the first finishes.
+
+## Quality Control
+
+Quality control for the active dataset. Two PCA plots, available as soon as the dataset
+is parsed, show experiments positioned by their protein profile (replicates should
+cluster) and preys by their pattern across experiments, with controls for imputation,
+normalization and a minimum detection fraction. Once the dataset is scored, the sidebar
+thresholds drive three metrics: the median number of preys per bait that pass, how much
+more often passing interactions are already known in BioGRID than before filtering, and
+the mean number of known BioGRID partners each passing prey has among the other passing
+preys. A bait selector restricts the metrics to one bait, and a per-bait scatter shows
+each prey's SAINT score against fold change (log scale) with the sidebar's SAINT cutoff
+as a dashed line. In the experiment PCA, controls form one grey series and each test
+bait has one color and one legend entry; with more than 20 baits the legend is hidden
+until *Show legend* is ticked. Below the metrics, *Passing interactions* lists every
+interaction passing the sidebar thresholds for the selected bait (or all baits): bait,
+prey gene and UniProt ID, SAINT, BFDR, WD, WDFDR, fold change, abundance (AvgSpec or
+AvgIntensity), and the BioGRID and multivalidated flags, rounded to 3 decimals. The
+table filters and sorts, and *Download CSV* saves the same rows. Plots can be exported
+as PNG.
+
+## Feature Enrichment
+
+For each bait, the preys passing the sidebar thresholds (the foreground) are tested for
 over-representation of protein features against every prey detected in the run: Gene
 Ontology terms (cellular component, biological process, molecular function) and UniProt
-sequence features (motifs, regions, repeats, compositions, domains). *Run Analysis*
-computes the table and writes `Feature_enrichment.csv` into the dataset directory; the
-heatmap shows the top features of one feature type, and the table can be downloaded
-with p-value and enrichment cutoffs.
+sequence features (motifs, regions, repeats, compositions, domains). *Run Feature
+Enrichment* computes the table under the progress modal and writes `Feature_enrichment.csv` into the dataset directory; the
+heatmap shows the top features of one feature type (labels are cut at 60 characters;
+the figure grows with the number of rows), and the table can be downloaded with p-value
+and enrichment cutoffs. The download carries each feature's full name and, for Gene
+Ontology terms, its GO id.
 
-## Network Comparison
+## Compare Baits
 
-Compares two baits of one dataset, each with its own threshold set. A three-panel
-volcano plot shows preys present under both baits (log2 fold change of mean intensity
+Compares two baits of the active dataset, each with its own threshold set (cards
+*Network A* and *Network B*). Both sets start from the sidebar thresholds when the bait
+lists load, and *Use shared thresholds* copies the sidebar's current values into one
+set. Baits from different datasets cannot be compared. *Compare* draws a three-panel
+volcano plot that shows preys present under both baits (log2 fold change of mean intensity
 against the adjusted t-test p-value) flanked by preys detected under only one bait,
 plotted by their SAINT BFDR. A Venn diagram counts preys passing thresholds in only A,
 only B, or both, and the gene lists behind each region are shown as text to copy.
 
 ## Cytoscape
 
-Sends the interactions passing a threshold set into a Cytoscape desktop on the same
-machine and keeps a link to it. The send options choose which baits to draw, whether to
-add grey prey-prey edges from BioGRID (optionally only multivalidated pairs, thickened by
-publication count), black CORUM complex edges for human data, node label policy, the
-layout algorithm and what edge width encodes. Each send replaces the previous ProxiMate
-network. With a network drawn: *Apply Thresholds* hides edges that fail tighter
-thresholds without redrawing, so a hand layout survives (loosening needs a new send);
-*Apply Edge Style* restyles in place; *Read Selection* lists the selected nodes with the
-scores of their edges; the hide/show buttons act on edges around the selection; the
-selection tools pick a bait's loners or satellites or the nodes a relation names for a
-seed; *Cluster and Repack* runs Leiden over the selected preys and re-packs them by
-community, leaving selected baits in place; *Record Positions* stores
-where nodes were dragged; *Export PNG* writes an image under the dataset's `cytoscape/`
-folder; *Unlock* frees a view that stopped panning. The status line names the drawn
-dataset and the thresholds it was drawn at, and the activity panel lists every
-operation with who did it (`gui` or `mcp`).
+Sends the active dataset's interactions passing the sidebar thresholds into a Cytoscape
+desktop on the same machine and keeps a link to it.
 
-## Downloads
+The left *Network* card holds the send options under four headings. *Network* picks the
+baits to draw (empty draws all) and repeats the sidebar thresholds read-only. *Style*: the
+*Style preset* select picks the look: *Abundance/literature weighted* draws orange diamond
+baits and blue-grey preys with bait-prey width following abundance and BioGRID edges
+thickened by publications; *Highlight knowns* draws black ellipse baits and grey rounded
+preys, puts a red border on preys whose interaction with a drawn bait is
+BioGRID-multivalidated, and uses grey edges of one width with black complex edges.
+Picking a preset also sets the send options it is designed for, which the user can still
+change. The other style options are the node label policy, the layout algorithm and what
+bait-prey edge width encodes. *Edges*: whether to add prey-prey BioGRID edges, all pairs
+or only multivalidated ones (the others are sent hidden), optionally thickened by
+publication count. *Complexes*: CORUM complex edges for human data, under two criteria.
 
-Exports for one dataset. Ready-made presets (annotated scores, Cytoscape edge table,
-gene lists pooled or per bait, a ProHits-viz table, SAINT inputs, enriched features) and
-a custom column picker. The four thresholds filter score-based exports only; a batch
-export zips everything for the dataset.
+Under the options a line reads "Will draw: N baits, X nodes, Y edges" with the edges by
+kind; it follows the thresholds, baits and edge options half a second after they stop
+changing, and shows in red why nothing would be drawn (for example when no interaction
+passes). A send that would draw more than 5000 visible edges first asks for confirmation
+and suggests the *Multivalidated only* BioGRID scope or fewer baits. Each send replaces the
+previous ProxiMate network. With a network drawn, *Re-apply Thresholds* hides edges that
+fail tighter thresholds without redrawing, so a hand layout survives (loosening needs a
+new send), and *Apply Style* applies the preset and edge options in place.
+
+The *Cytoscape* card groups the tools on the drawn network in collapsible panels.
+*Status* says whether Cytoscape answers and which network is drawn; *Check Connection*
+asks again and *Unlock View* frees a view that stopped panning. *Selection*: *Read
+Selection* lists the selected nodes with the edges touching them, their target gene and
+scores (SAINT, BFDR, WD and WDFDR to 3 decimals, fold change to 2); the panel header
+shows the row count and *Download selection CSV* saves the table. The hide/show buttons
+act on edges around the selection, and *Select Loners* / *Select Satellites* pick a
+bait's loners or satellites. *Select by relation* selects the nodes a relation names
+for a seed. *Cluster the selection*: *Cluster and Repack* runs Leiden over the selected
+preys and arranges them by community with the chosen cluster layout (circles, or a
+force-directed or Kamada-Kawai layout of each community inside its own disc), coloring
+communities of two or more nodes unless *Recolor communities* is off, and leaving
+selected baits in place. *Saved layouts*: *Save Layout* writes every drawn node's
+position to a named `id,x,y` file under the dataset's `cytoscape/layouts/` folder,
+merging into an earlier save of that name so one layout can cover several bait subsets;
+*Load Layout* moves the drawn nodes a saved layout names back to those positions and
+leaves the rest where they are. *Export*: *Export PNG* writes an image under the
+dataset's `cytoscape/` folder.
+
+The *Activity* table below lists every operation on the drawn network, newest first,
+with its time, who did it (`gui` or `mcp`), the operation and its detail.
+
+## Export
+
+Exports for the active dataset, available as soon as it is parsed. The *Download Builder*
+card picks a preset: Experimental Design, SAINT Inputs, Enriched Features, Annotated
+Scores, Cytoscape Edge Table, Gene List (pooled or per bait, for STRING or g:Profiler),
+ProHits-viz Table, or Custom Columns with a column picker; a preset appears only when the
+dataset has the files it needs, and checkboxes toggle its column groups. The *Apply
+thresholds* switch, off by default, filters score-based exports by the sidebar
+thresholds its label names; off, every row is exported. The *Preview* card shows the
+export with its row count, and *Download* saves exactly what is previewed. *Batch Export* zips everything
+for the dataset: `merged.csv`, `annotated_scores.csv`, `Feature_enrichment.csv` when
+Feature Enrichment has been run, and the SAINT input files.

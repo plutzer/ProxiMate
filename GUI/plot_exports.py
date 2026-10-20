@@ -38,28 +38,23 @@ def pca_plot_matplotlib(interaction, experimentalDesign, matrix=None):
     fig = Figure(figsize=(10, 8))
     ax = fig.subplots()
 
-    # Get unique baits and types for coloring/markers
-    unique_baits = pca_df['BaitName'].unique()
+    # One color per test bait; every control is one grey "Control" group
+    unique_groups = pca_df['Group'].unique()
     unique_types = pca_df['Type'].unique()
-
-    # Color palette
-    colors = colormaps["tab10"](np.linspace(0, 1, len(unique_baits)))
-    color_map = dict(zip(unique_baits, colors))
+    colors = colormaps["tab10"](np.linspace(0, 1, len(unique_groups)))
+    color_map = {**dict(zip(unique_groups, colors)), 'Control': 'grey'}
 
     # Marker map for types
     markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h']
     marker_map = dict(zip(unique_types, markers[:len(unique_types)]))
 
-    # Plot each combination
-    for bait in unique_baits:
-        for exp_type in unique_types:
-            subset = pca_df[(pca_df['BaitName'] == bait) & (pca_df['Type'] == exp_type)]
-            if len(subset) > 0:
-                ax.scatter(subset['PC1'], subset['PC2'],
-                          c=[color_map[bait]],
-                          marker=marker_map[exp_type],
-                          s=80, alpha=0.8, edgecolors='white', linewidth=0.5,
-                          label=f"{bait} ({exp_type})")
+    for group in unique_groups:
+        subset = pca_df[pca_df['Group'] == group]
+        ax.scatter(subset['PC1'], subset['PC2'],
+                  c=[color_map[group]],
+                  marker=marker_map[subset['Type'].iloc[0]],
+                  s=80, alpha=0.8, edgecolors='white', linewidth=0.5,
+                  label=group)
 
     ax.set_xlabel(f"PC1 ({explained_variance[0]*100:.2f}% variance)", fontsize=12)
     ax.set_ylabel(f"PC2 ({explained_variance[1]*100:.2f}% variance)", fontsize=12)
@@ -67,7 +62,7 @@ def pca_plot_matplotlib(interaction, experimentalDesign, matrix=None):
 
     # Legend below plot
     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12),
-              ncol=min(4, len(unique_baits)), fontsize=9)
+              ncol=min(4, len(unique_groups)), fontsize=9)
 
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -184,10 +179,8 @@ def saint_scatter_matplotlib(results_path, bait_name, saintscore_threshold):
     ax.axhline(y=saintscore_threshold, color='red', linestyle='--', linewidth=2,
                label=f'Threshold: {saintscore_threshold}', zorder=4)
 
-    # Add zero line for fold change
-    ax.axvline(x=0, color='lightgray', linestyle='-', linewidth=1, zorder=0)
-
-    ax.set_xlabel("Fold Change (log2)", fontsize=12)
+    ax.set_xscale('log')
+    ax.set_xlabel("Fold change", fontsize=12)
     ax.set_ylabel("SAINT Score", fontsize=12)
     ax.set_ylim(-0.05, 1.05)
     ax.set_title(f"SAINT Score vs Fold Change - {bait_name}", fontsize=14, fontweight='bold')

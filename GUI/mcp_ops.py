@@ -16,7 +16,6 @@ import cytoscape_net
 import dataset_store as store
 import provenance
 from mcp_registry import register
-from setup_datasets import CORUM_FILENAME, ORGANISMS
 
 ACTOR = 'mcp'
 
@@ -103,8 +102,9 @@ def server_status(probe: bool = False) -> dict:
 def get_scores(dataset: str, thresholds: dict, baits: list = None, top_n: int = 500) -> dict:
     """The rows of annotated_scores.csv passing ``thresholds``, restricted to ``baits``
     when given: Experiment.ID (bait), Prey.ID, First_ID, First_Prey_Gene, SaintScore,
-    BFDR, WD, WDFDR, FoldChange, AvgIntensity, In.BioGRID.  Ordered by bait then SAINT
-    score, at most ``top_n`` rows; ``n_per_bait`` counts every passing row."""
+    BFDR, WD, WDFDR, FoldChange, AvgIntensity or AvgSpec, In.BioGRID, Multivalidated.
+    Ordered by bait then SAINT score, at most ``top_n`` rows; ``n_per_bait`` counts
+    every passing row."""
     rows = backend.passing_scores(dataset, thresholds, baits)
     out = _records(rows, top_n)
     out.update(dataset=dataset, thresholds=backend.validate_thresholds(thresholds),
@@ -115,7 +115,7 @@ def get_scores(dataset: str, thresholds: dict, baits: list = None, top_n: int = 
 @register('sandbox', "QC metrics at a threshold set: median network size, BioGRID enrichment, mean degree.",
           tags=('thresholds', 'qc', 'metrics', 'known', 'degree'))
 def threshold_metrics(dataset: str, thresholds: dict, bait: str = None) -> dict:
-    """The Data Thresholding tab's metrics for ``thresholds`` = {SaintScore, BFDR, WD,
+    """The Quality Control tab's metrics for ``thresholds`` = {SaintScore, BFDR, WD,
     WDFDR}: interactions before and after filtering, known (In.BioGRID) before and
     after, median passing preys per bait, enrichment of known interactions, and the
     mean number of BioGRID partners each passing prey has among the other passing
@@ -128,7 +128,7 @@ def threshold_metrics(dataset: str, thresholds: dict, bait: str = None) -> dict:
           tags=('feature', 'enrichment', 'GO', 'domains', 'hypergeometric'))
 def feature_analysis(dataset: str, thresholds: dict, feature_types: list = None,
                      top_n: int = 200) -> dict:
-    """Runs the Protein Feature Analysis tab's test at ``thresholds`` and returns the
+    """Runs the Feature Enrichment tab's test at ``thresholds`` and returns the
     table (Bait, Feature, Feature_type, k, n, K, M, p_value, enrichment, adj_p) sorted
     by adjusted p-value, at most ``top_n`` rows.  ``feature_types`` is a subset of
     GO_CC, GO_BP, GO_MF, Motifs, Regions, Repeats, Compositions, Domains (default all).
@@ -164,7 +164,7 @@ def get_prey_annotations(dataset: str, thresholds: dict, ids: list = None, top_n
           tags=('compare', 'volcano', 'venn', 'baits', 'fold change'))
 def compare_networks(dataset: str, bait_a: str, bait_b: str, thresholds_a: dict,
                      thresholds_b: dict, top_n: int = 500, include_volcano: bool = True) -> dict:
-    """The Network Comparison tab's data: ``genes`` holds the sorted gene lists passing
+    """The Compare Baits tab's data: ``genes`` holds the sorted gene lists passing
     thresholds in only A, only B and both; ``volcano`` holds every prey seen under
     either bait with status (shared / a_only / b_only), mean intensities, log2 fold
     change, adjusted p-value and the -log10 BFDR for one-sided preys, at most
@@ -216,6 +216,28 @@ def score_dataset(dataset: str, imputation: int = 0, wdfdr_iterations: int = 100
                                    seed=seed, actor=ACTOR))
 
 
+@register('dataset', "Delete a dataset: its directory, every result in it and its session row. Destructive; needs confirm=true.",
+          tags=('delete', 'remove', 'dataset', 'session'))
+def delete_dataset(dataset: str, confirm: bool = False) -> dict:
+    """Removes ``<out_dir>/<dataset>/`` and the dataset's row from the session; the GUI's
+    table updates.  Refused unless ``confirm`` is true, and while a job runs on the
+    dataset.  A network drawn from it stays in Cytoscape, but the server no longer
+    names it as the drawn dataset.  Tell the user before calling this."""
+    if not confirm:
+        raise ValueError("delete_dataset removes the dataset and its results; pass confirm=true "
+                         "after the user has agreed")
+    backend.delete_dataset(dataset, actor=ACTOR)
+    return {'deleted': dataset, 'datasets': store.names()}
+
+
+@register('dataset', "Rename a dataset: its directory, session row, run.json paths and the drawn Cytoscape network title.",
+          tags=('rename', 'dataset', 'name'))
+def rename_dataset(dataset: str, new_name: str) -> dict:
+    """``new_name`` must be unused and use letters, digits and underscores only.
+    Refused while a job runs on the dataset.  Returns the renamed row."""
+    return _json(backend.rename_dataset(dataset, new_name, actor=ACTOR))
+
+
 @register('dataset', "Replace the whole session with the datasets in a session zip. Destructive; needs confirm=true.",
           tags=('session', 'restore', 'load', 'zip'))
 def load_session(zip_path: str, confirm: bool = False) -> dict:
@@ -238,13 +260,49 @@ def _network():
             'thresholds': snap['thresholds'], 'style': snap['style'], 'busy': snap['busy']}
 
 
+def _validate_preset(preset):
+    if preset not in cytoscape_net.STYLE_PRESETS:
+        raise ValueError(f"preset must be one of {tuple(cytoscape_net.STYLE_PRESETS)}")
+    return preset
+
+
+@register('read', "The style presets a network can be drawn or restyled with, and the send options each pairs with.",
+          tags=('cytoscape', 'style', 'preset', 'look'))
+def cytoscape_list_style_presets() -> dict:
+    """Each preset's name (the value ``cytoscape_send`` and ``cytoscape_restyle`` take),
+    label, description and ``send_options``: the prey_prey, biogrid_scope,
+    literature_weighted, corum, width_source and layout values the GUI sets when the
+    preset is picked.  Pass them to ``cytoscape_send`` to draw the preset as designed."""
+    return {'presets': [{'name': name, 'label': p['label'], 'description': p['description'],
+                         'send_options': dict(p['send_options'])}
+                        for name, p in cytoscape_net.STYLE_PRESETS.items()]}
+
+
+@register('sandbox', "Count the baits, nodes and edges cytoscape_send would draw, without touching Cytoscape.",
+          tags=('cytoscape', 'estimate', 'size', 'count', 'network', 'edges', 'nodes'))
+def cytoscape_estimate(dataset: str, thresholds: dict, baits: list = None, prey_prey: bool = True,
+                       biogrid_scope: str = 'all', corum: bool = False, corum_min_members: int = 3,
+                       corum_min_fraction: float = 0.5) -> dict:
+    """The size of the network ``cytoscape_send`` with the same arguments would draw:
+    ``baits``, ``preys``, ``nodes``, the visible ``proximity_edges`` (bait-prey),
+    ``literature_edges`` (BioGRID prey-prey) and ``complex_edges`` (CORUM), their total
+    ``edges``, and ``hidden_edges`` (BioGRID pairs the multivalidated scope sends
+    hidden).  The GUI asks for confirmation above ``send_warn_edges`` visible edges."""
+    counts = backend.estimate_network(dataset, thresholds, baits=list(baits or []),
+                                      prey_prey=prey_prey, biogrid_scope=biogrid_scope,
+                                      corum=corum, corum_min_members=int(corum_min_members),
+                                      corum_min_fraction=float(corum_min_fraction))
+    return _json({**counts, 'send_warn_edges': cytoscape_net.SEND_WARN_EDGES})
+
+
 @register('cytoscape', "Draw a dataset's thresholded network in Cytoscape; replace=true when one is already drawn.",
-          tags=('cytoscape', 'send', 'draw', 'network', 'layout', 'biogrid', 'corum'))
+          tags=('cytoscape', 'send', 'draw', 'network', 'layout', 'biogrid', 'corum', 'preset'))
 def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey: bool = True,
                    label_policy: str = 'all', layout: str = 'force-directed',
                    width_source: str = 'abundance', literature_weighted: bool = False,
                    biogrid_scope: str = 'all', corum: bool = False, corum_min_members: int = 3,
-                   corum_min_fraction: float = 0.5, replace: bool = False) -> dict:
+                   corum_min_fraction: float = 0.5, preset: str = 'abundance_weighted',
+                   replace: bool = False) -> dict:
     """As the Cytoscape tab's Send button, with every option explicit.  Drawing
     removes every ProxiMate network from Cytoscape, with its layout and clustering;
     while one is drawn the call is refused unless ``replace`` is true, so ask the
@@ -253,14 +311,18 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
     ``literature_weighted`` thickens them by publications.  ``corum`` adds complex
     edges (human datasets only) under the two criteria.  ``label_policy`` all, baits
     or none.  ``width_source`` abundance, SaintScore, WD, FoldChange or uniform.
-    ``layout`` is a Cytoscape layout name (force-directed, grid, circular, ...).  The
-    thresholds and options are recorded in the dataset's run.json; the GUI's own
-    sliders keep the user's values."""
+    ``layout`` is a Cytoscape layout name (force-directed, grid, circular, ...).
+    ``preset`` is the look: abundance_weighted or highlight_knowns (red border on preys
+    whose bait interaction is BioGRID-multivalidated); ``cytoscape_list_style_presets``
+    gives the send options each preset is designed for.  The thresholds and options
+    are recorded in the dataset's run.json; the GUI's own sliders keep the user's
+    values."""
     drawn = ctl.snapshot()['dataset']
     if drawn is not None and not replace:
         raise ValueError(f"a network for dataset {drawn!r} is drawn; pass replace=true to remove "
                          "it and draw this one")
     thresholds = backend.validate_thresholds(thresholds)
+    _validate_preset(preset)
     if width_source not in cytoscape_net.EDGE_WIDTH_SOURCES:
         raise ValueError(f"width_source must be one of {cytoscape_net.EDGE_WIDTH_SOURCES}")
     if label_policy not in cytoscape_net.LABEL_POLICIES:
@@ -271,19 +333,12 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
     scores_path = backend.results_path(dataset)
     if not os.path.isfile(scores_path):
         raise FileNotFoundError(f"dataset {dataset!r} has no annotated_scores.csv; score it first")
-    settings = provenance.annotation_settings(dataset_path)
-    organism = settings['organism']
-    biogrid_path = provenance.biogrid_summary_path(organism, exclude_hcm=settings['exclude_hcm'])
-    corum_path = None
-    if corum:
-        if not ORGANISMS[organism]['has_corum']:
-            raise ValueError(f"CORUM covers human complexes only; this dataset is {organism}")
-        corum_path = os.path.join(provenance.DEFAULT_DATASETS_DIR, CORUM_FILENAME)
+    biogrid_path, corum_path = backend.network_sources(dataset, corum)
     params = {'thresholds': thresholds, 'baits': baits, 'prey_prey': prey_prey,
               'label_policy': label_policy, 'layout': layout, 'width_source': width_source,
               'literature_weighted': literature_weighted, 'biogrid_scope': biogrid_scope,
               'corum': corum, 'corum_min_members': corum_min_members,
-              'corum_min_fraction': corum_min_fraction, 'actor': ACTOR}
+              'corum_min_fraction': corum_min_fraction, 'preset': preset, 'actor': ACTOR}
     with provenance.stage(dataset_path, 'cytoscape', entrypoint='mcp.cytoscape_send',
                           params=params) as record:
         record.add_input(scores_path, role='scores')
@@ -292,7 +347,7 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
                  width_source=width_source, literature_weighted=literature_weighted,
                  biogrid_scope=biogrid_scope, corum_path=corum_path,
                  corum_min_members=int(corum_min_members),
-                 corum_min_fraction=float(corum_min_fraction), actor=ACTOR)
+                 corum_min_fraction=float(corum_min_fraction), preset=preset, actor=ACTOR)
         network = _network()
         record.metric('n_nodes', network['n_nodes'])
         record.metric('n_edges', network['n_edges'])
@@ -308,13 +363,19 @@ def cytoscape_apply_thresholds(thresholds: dict) -> dict:
     return {'hidden': int(hidden), 'network': _json(_network())}
 
 
-@register('cytoscape', "Restyle the drawn network: edge width source, BioGRID scope, publication weighting.",
-          tags=('cytoscape', 'style', 'edge width', 'biogrid'))
-def cytoscape_restyle(width_source: str = 'abundance', literature_weighted: bool = False,
-                      biogrid_scope: str = 'all') -> dict:
-    """A style update in place; nothing moves.  Returns how many edges changed."""
-    changed = ctl.restyle_edges(width_source, literature_weighted, biogrid_scope, actor=ACTOR)
-    return {'changed': int(changed)}
+@register('cytoscape', "Restyle the drawn network in place: style preset, edge width source, BioGRID scope, publication weighting.",
+          tags=('cytoscape', 'style', 'preset', 'edge width', 'biogrid'))
+def cytoscape_restyle(preset: str = None, width_source: str = 'abundance',
+                      literature_weighted: bool = False, biogrid_scope: str = 'all') -> dict:
+    """A style update in place; nothing moves and clustered nodes keep their community
+    colors.  ``preset`` defaults to the drawn one (see ``cytoscape_list_style_presets``).
+    Adding prey-prey or complex edges needs ``cytoscape_send``.  Returns how many edges
+    changed and the network's style."""
+    if preset is None:
+        preset = ctl.snapshot()['style']['preset']
+    changed = ctl.restyle(_validate_preset(preset), width_source, literature_weighted,
+                          biogrid_scope, actor=ACTOR)
+    return {'changed': int(changed), 'network': _json(_network())}
 
 
 @register('read', "The nodes selected in Cytoscape with the scores of their edges.",
@@ -388,26 +449,70 @@ def cytoscape_move_nodes(positions: dict) -> dict:
     return {'moved': int(ctl.move_nodes(positions, actor=ACTOR))}
 
 
-@register('cytoscape', "Leiden over the selected preys, colored by community and re-packed inside their box.",
-          tags=('cytoscape', 'cluster', 'leiden', 'community', 'repack'))
+@register('cytoscape', "Leiden over the selected preys, colored by community and re-arranged inside their box.",
+          tags=('cytoscape', 'cluster', 'leiden', 'community', 'repack', 'layout'))
 def cytoscape_cluster_selection(resolution: float = 1.0, seed: int = 17,
-                                literature_weight: float = 1.0) -> dict:
+                                literature_weight: float = 1.0, layout: str = 'circles',
+                                recolor: bool = True) -> dict:
     """Only the selected preys move; the community number lands in the node table.
-    Selected baits keep their place and are returned in ``baits_left``."""
-    return _json(ctl.cluster_selection(resolution, seed, literature_weight, actor=ACTOR))
+    ``layout`` is ``circles`` (each community on its own ring, tiled in rows),
+    ``force-directed`` or ``kamada-kawai`` (each community laid out by its own edges
+    inside a disc, the discs placed by the edges between communities).  ``recolor``
+    gives each community of two or more nodes a fill of its own; a community of one
+    node always keeps its color.  Selected baits keep their place and are returned in
+    ``baits_left``."""
+    return _json(ctl.cluster_selection(resolution, seed, literature_weight, layout, recolor, actor=ACTOR))
+
+
+def _drawn_dataset_path():
+    """The snapshot and the dataset directory of the drawn network; refuses when none is."""
+    snap = ctl.snapshot()
+    if snap['dataset'] is None:
+        raise RuntimeError("no ProxiMate network is in Cytoscape; send one first")
+    return snap, backend.dataset_dir(snap['dataset'])
 
 
 @register('cytoscape', "Export the drawn network as a PNG under the dataset's cytoscape folder.",
           tags=('cytoscape', 'export', 'png', 'image'))
 def cytoscape_export_image(height: int = 2000) -> dict:
     """Returns the image path; recorded in the dataset's run.json with the drawn thresholds."""
-    snap = ctl.snapshot()
-    if snap['dataset'] is None:
-        raise RuntimeError("no ProxiMate network is in Cytoscape; send one first")
-    dataset_path = backend.dataset_dir(snap['dataset'])
+    snap, dataset_path = _drawn_dataset_path()
     with provenance.stage(dataset_path, 'cytoscape', entrypoint='mcp.cytoscape_export_image',
                           params={'height': height, 'actor': ACTOR}) as record:
         path = ctl.export_image(dataset_path, height=int(height), actor=ACTOR)
         record.add_output(path, role='image')
         record.extra(thresholds=snap['thresholds'])
     return {'path': path}
+
+
+@register('read', "The layouts saved for a dataset: named node-position files under its cytoscape/layouts folder.",
+          tags=('cytoscape', 'layout', 'layouts', 'positions', 'saved', 'list'))
+def cytoscape_list_layouts(dataset: str = None) -> dict:
+    """``dataset`` defaults to the drawn one.  Each name is what cytoscape_save_layout and
+    cytoscape_load_layout take."""
+    dataset = dataset or _drawn_dataset_path()[0]['dataset']
+    return {'dataset': dataset, 'layouts': ctl.saved_layouts(backend.dataset_dir(dataset))}
+
+
+@register('cytoscape', "Save the drawn nodes' positions as a named layout under the dataset, merged over an earlier save of that name.",
+          tags=('cytoscape', 'layout', 'save', 'positions'))
+def cytoscape_save_layout(name: str) -> dict:
+    """``name`` is letters, digits and underscores; the file is
+    <dataset>/cytoscape/layouts/<name>.csv with columns id, x, y.  Saving over a name
+    updates the drawn nodes, adds new ones and keeps rows for nodes not drawn, so one
+    layout accumulates across bait subsets.  Recorded in the dataset's run.json."""
+    snap, dataset_path = _drawn_dataset_path()
+    with provenance.stage(dataset_path, 'cytoscape', entrypoint='mcp.cytoscape_save_layout',
+                          params={'name': name, 'actor': ACTOR}) as record:
+        result = ctl.save_layout(dataset_path, name, actor=ACTOR)
+        record.add_output(result['path'], role='layout', rows=result['n_rows'])
+        record.extra(thresholds=snap['thresholds'])
+    return result
+
+
+@register('cytoscape', "Move the drawn nodes a saved layout names to their saved positions; the others stay put.",
+          tags=('cytoscape', 'layout', 'load', 'positions', 'restore'))
+def cytoscape_load_layout(name: str) -> dict:
+    """Fails when the layout names none of the drawn nodes; the view is fitted afterwards.
+    A hand layout in progress is overwritten: say so before calling."""
+    return ctl.load_layout(_drawn_dataset_path()[1], name, actor=ACTOR)

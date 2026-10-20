@@ -119,12 +119,20 @@ to `docker run`, or run with `--network host` and set `PROXIMATE_CYTOSCAPE_URL` 
 `http://127.0.0.1:1234/v1`. py4cytoscape's own request log lands in
 `$PROXIMATE_LOG_DIR/py4cytoscape/`.
 
-**Edge style.** Bait–prey edge width encodes abundance by default (log-banded
-intensity or spectral counts); the *Edge width* select swaps in SAINT score, WD score,
-fold change, or a uniform width. Prey–prey BioGRID edges can be limited to pairs BioGRID
-marks multivalidated, and thickened by the number of publications behind them. *Apply
-Edge Style* pushes these onto the drawn network as a style update, so a hand layout
-survives.
+**Style presets.** The *Style preset* select picks the network's look. *Abundance/
+literature weighted* draws orange diamond baits and blue-grey ellipse preys; bait–prey
+edge width encodes abundance (log-banded intensity or spectral counts) and BioGRID edges
+thicken with the number of publications behind them. *Highlight knowns* draws black
+ellipse baits with white labels and grey rounded preys, marks every prey whose
+interaction with a drawn bait is BioGRID-multivalidated with a red border, and draws grey
+bait–prey edges, lighter-grey BioGRID edges and black complex edges at one width. Picking
+a preset also sets the send options it is designed for (prey–prey edges and their scope,
+publication weighting, CORUM edges, edge width source, layout); each can still be changed
+before sending. The *Edge width* select swaps in SAINT score, WD score, fold change, or a
+uniform width, and prey–prey BioGRID edges can be limited to pairs BioGRID marks
+multivalidated. *Apply Style* pushes the preset and these edge options onto the drawn
+network as a style update, so a hand layout and community colors survive; adding
+prey–prey or complex edges needs a new send.
 
 **Complexes.** For human datasets, *CORUM complex edges* draws black edges between drawn
 proteins that are subunits of one curated complex the screen recovered: at least *Min
@@ -137,9 +145,22 @@ the preys whose only visible neighbor it is and *Select Satellites* adds the two
 preys that currently sit nearer to it. *Select by relation* names a seed and selects its
 interactors (with SAINT, BFDR and abundance cuts), singletons, BioGRID or complex
 partners, or CORUM co-complex members, replacing or adding to the selection. *Cluster
-and Repack* runs Leiden over the selected nodes, colors them by community and re-packs
-each community on its own circle inside the box the selection occupies; only the
+and Repack* runs Leiden over the selected nodes and arranges each community inside the
+box the selection occupies: *Circles* puts each community on its own ring, tiled in
+rows; *Force-directed* and *Kamada-Kawai* lay each community out by its own edges inside
+a disc sized by its membership and place the discs by the edges between communities,
+which suits large selections. Communities of two or more nodes take a color of their own
+unless *Recolor communities* is off; a community of one node keeps its color. Only the
 selected nodes move, and the community number lands in the node table.
+
+**Layouts.** *Save Layout* writes where every drawn node sits to
+`<output_dir>/<dataset>/cytoscape/layouts/<name>.csv`, a three-column `id,x,y` file keyed
+on the node name Cytoscape shows (UniProt accession for preys, bait name for baits).
+Saving over a name updates the drawn nodes, adds new ones and keeps rows for nodes not
+drawn, so one layout can accumulate across bait subsets. *Load Layout* moves the drawn
+nodes a saved layout names back to those positions and leaves the others where they are,
+so a layout made for one network carries over to a re-send with other thresholds or
+baits. Layouts travel with the session archive like every other dataset file.
 
 **Building with a version stamp.** The image contains no git repository, so the
 version recorded in `run.json` comes from a build argument:
@@ -193,12 +214,12 @@ none reads what the GUI's sliders show. Operations are classed by what they touc
 
 | Mode | Operations | Effect on a person at the GUI |
 | --- | --- | --- |
-| read | `list_datasets`, `get_dataset_info`, `get_run_info`, `tail_log`, `server_status`, `cytoscape_read_selection`, `cytoscape_list_nodes`, `cytoscape_get_positions` | none |
-| sandbox | `get_scores`, `threshold_metrics`, `feature_analysis`, `get_prey_annotations`, `compare_networks` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
-| dataset | `parse_dataset`, `score_dataset`, `load_session` | the dataset table and dropdowns update within a second; a dataset being scored by either side refuses a second job; `parse_dataset` reads input files by their paths inside the container, so mount the folder that holds them; `load_session` is destructive and needs `confirm` |
-| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_nodes`, `cytoscape_select_related`, `cytoscape_clear_selection`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_export_image` | the drawn network changes under the mouse; the Cytoscape tab's status shows the thresholds it was drawn at and the activity panel lists each operation as `[mcp]` |
+| read | `list_datasets`, `get_dataset_info`, `get_run_info`, `tail_log`, `server_status`, `cytoscape_read_selection`, `cytoscape_list_nodes`, `cytoscape_get_positions`, `cytoscape_list_layouts`, `cytoscape_list_style_presets` | none |
+| sandbox | `get_scores`, `threshold_metrics`, `feature_analysis`, `get_prey_annotations`, `compare_networks`, `cytoscape_estimate` | none: results are returned, nothing is written under the dataset, and the tab's own settings stay as the user left them |
+| dataset | `parse_dataset`, `score_dataset`, `load_session`, `delete_dataset`, `rename_dataset` | the session table and the sidebar's active-dataset select update within a second; a dataset being scored by either side refuses a second job; `parse_dataset` reads input files by their paths inside the container, so mount the folder that holds them; `load_session` and `delete_dataset` are destructive and need `confirm` |
+| cytoscape | `cytoscape_send`, `cytoscape_apply_thresholds`, `cytoscape_restyle`, `cytoscape_select_nodes`, `cytoscape_select_related`, `cytoscape_clear_selection`, `cytoscape_set_edge_visibility`, `cytoscape_move_nodes`, `cytoscape_cluster_selection`, `cytoscape_save_layout`, `cytoscape_load_layout`, `cytoscape_export_image` | the drawn network changes under the mouse; the Cytoscape tab's activity table lists each operation with actor `mcp` |
 
-Sends and exports from MCP are recorded in the dataset's `run.json` with their full
+Sends, exports and layout saves from MCP are recorded in the dataset's `run.json` with their full
 argument set. `curl localhost:3839/api/health` reports the datasets, running jobs and
 drawn network without touching Cytoscape. `PROXIMATE_MCP_PORT`, `PROXIMATE_MCP_HOST`,
 `PROXIMATE_GUI_PORT` and `PROXIMATE_GUI_HOST` move the ports.
@@ -217,8 +238,8 @@ strength of the same kind of assay, so the container also builds
 `/Datasets/human/biogrid_summary_no_hcm.csv`: the human summary with every evidence line
 from that paper removed. Interactions with other evidence are kept, with the HCM entries
 dropped from their evidence lists. Select it with the "Exclude Human Cell Map evidence"
-checkbox in the scoring panel (human only) or `--exclude-hcm` on `run_pipeline.sh`. The
-choice is recorded in `run.json`, and the QC tab's known-interaction and network-degree
+checkbox on the Score card (human only) or `--exclude-hcm` on `run_pipeline.sh`. The
+choice is recorded in `run.json`, and the Quality Control tab's known-interaction and network-degree
 metrics use the same file the run was annotated against.
 
 ### Choosing the database snapshot (experienced users)

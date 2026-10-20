@@ -53,7 +53,8 @@ def test_search_matches_name_summary_and_tags_and_filters_by_mode():
     assert {'threshold_metrics', 'cytoscape_apply_thresholds'} <= hits
     assert all(h['mode'] == 'sandbox' for h in registry.search('', mode='sandbox'))
     assert {h['name'] for h in registry.search('', mode='sandbox')} == \
-        {'get_scores', 'threshold_metrics', 'feature_analysis', 'get_prey_annotations', 'compare_networks'}
+        {'get_scores', 'threshold_metrics', 'feature_analysis', 'get_prey_annotations', 'compare_networks',
+         'cytoscape_estimate'}
     assert len(registry.search('')) == len(registry.OPS)
     with pytest.raises(ValueError, match='mode'):
         registry.search('', mode='bogus')
@@ -236,6 +237,35 @@ def test_load_session_needs_confirmation(scored, tmp_path):
         registry.call('load_session', {'zip_path': str(tmp_path / 'x.zip')})
 
 
+def test_cytoscape_estimate_counts_the_network_without_drawing(scored):
+    assert registry.OPS['cytoscape_estimate'].mode == 'sandbox'
+    assert 'cytoscape_estimate' in {h['name'] for h in registry.search('estimate')}
+    before = _tree(scored)
+
+    counts = registry.call('cytoscape_estimate', {'dataset': 'ds', 'thresholds': THRESHOLDS,
+                                                  'prey_prey': False})
+
+    assert (counts['baits'], counts['preys'], counts['proximity_edges'], counts['edges']) == (2, 3, 4, 4)
+    assert counts['send_warn_edges'] == 5000
+    assert _tree(scored) == before
+    with pytest.raises(ValueError, match='no bait'):
+        registry.call('cytoscape_estimate', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'baits': ['Nope']})
+
+
+def test_delete_and_rename_are_dataset_ops_and_delete_needs_confirmation(scored):
+    assert {h['name'] for h in registry.search('rename')} >= {'rename_dataset'}
+    assert {h['name'] for h in registry.search('delete')} >= {'delete_dataset'}
+    assert all(registry.OPS[n].mode == 'dataset' for n in ('delete_dataset', 'rename_dataset'))
+    with pytest.raises(ValueError, match='confirm'):
+        registry.call('delete_dataset', {'dataset': 'ds'})
+    assert store.names() == ['ds']
+    renamed = registry.call('rename_dataset', {'dataset': 'ds', 'new_name': 'ds_b'})
+    assert renamed['Dataset Name'] == 'ds_b' and store.names() == ['ds_b']
+    assert registry.call('delete_dataset', {'dataset': 'ds_b', 'confirm': True}) == \
+        {'deleted': 'ds_b', 'datasets': []}
+    assert not scored.exists() and not (scored.parent / 'ds_b').exists()
+
+
 # --- cytoscape ops reach the controller with actor mcp ---------------------------------------
 
 @pytest.fixture
@@ -250,15 +280,19 @@ def drawn(monkeypatch):
     monkeypatch.setattr(ctl.cy, 'set_positions', lambda net, pos: calls.append(('positions', dict(pos))))
     monkeypatch.setattr(ctl.cy, 'update_edge_columns', lambda net, frame: calls.append(('edges', frame)))
     monkeypatch.setattr(ctl.cy, 'update_node_columns', lambda net, frame: calls.append(('nodes', frame)))
+    monkeypatch.setattr(ctl.p4c, 'fit_content', lambda **k: calls.append('fit'))
     nodes = pd.DataFrame({'id': ['BA', 'P1', 'P2'], 'symbol': ['GA', 'G1', 'G2'], 'accession': ['QA', 'P1', 'P2'],
-                          'role': ['bait', 'prey', 'prey'], 'x': [0.0] * 3, 'y': [0.0] * 3})
+                          'role': ['bait', 'prey', 'prey'], 'fill': ['#E69F00', '#B8C4D6', '#B8C4D6'],
+                          'x': [0.0] * 3, 'y': [0.0] * 3})
     edges = pd.DataFrame({'name': ['e1', 'e2'], 'source': ['BA', 'BA'], 'target': ['P1', 'P2'],
                           'interaction': ['proximity'] * 2, 'visible': [True, True],
                           'SaintScore': [0.9, 0.8], 'BFDR': [0.01, 0.02], 'WD': [2.0, 1.0],
-                          'WDFDR': [0.01, 0.01], 'width': [2.0, 2.0], 'kind': ['proximity'] * 2})
+                          'WDFDR': [0.01, 0.01], 'width': [2.0, 2.0], 'color': ['#0072B2'] * 2,
+                          'alpha': [220, 220], 'kind': ['proximity'] * 2})
     ctl.STATE.update(dataset='ds', title='ProxiMate: ds', net_suid=1, nodes=nodes, edges=edges,
                      thresholds=dict(THRESHOLDS),
-                     style={'width_source': 'abundance', 'literature_weighted': False, 'biogrid_scope': 'all'})
+                     style={'preset': 'abundance_weighted', 'width_source': 'abundance',
+                            'literature_weighted': False, 'biogrid_scope': 'all'})
     stub['calls'] = calls
     yield stub
     ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
@@ -312,16 +346,66 @@ def test_cytoscape_send_records_its_settings_in_the_manifest(scored, drawn, monk
         registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS})
     assert not seen
     result = registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'baits': ['BaitA'],
-                                              'layout': 'grid', 'width_source': 'SaintScore', 'replace': True})
+                                              'layout': 'grid', 'width_source': 'SaintScore',
+                                              'preset': 'highlight_knowns', 'replace': True})
     assert seen['actor'] == 'mcp' and seen['baits'] == ['BaitA'] and seen['layout'] == 'grid'
+    assert seen['preset'] == 'highlight_knowns'
     assert result['network']['dataset'] == 'ds'
     manifest = json.load(open(scored / 'run.json'))
     stage = [s for run in manifest['runs'].values() for s in run['stages']][-1]
     assert stage['stage'] == 'cytoscape' and stage['entrypoint'] == 'mcp.cytoscape_send'
     assert stage['params']['thresholds'] == THRESHOLDS and stage['params']['width_source'] == 'SaintScore'
+    assert stage['params']['preset'] == 'highlight_knowns'
     with pytest.raises(ValueError, match='width_source'):
         registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'width_source': 'nope',
                                          'replace': True})
+    with pytest.raises(ValueError, match='preset'):
+        registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'preset': 'neon',
+                                         'replace': True})
+
+
+def test_style_preset_ops_through_the_registry(drawn):
+    listed = registry.call('cytoscape_list_style_presets', {})['presets']
+    assert [p['name'] for p in listed] == ['abundance_weighted', 'highlight_knowns']
+    assert listed[1]['label'] == 'Highlight knowns'
+    assert listed[1]['send_options']['biogrid_scope'] == 'multivalidated' and listed[1]['send_options']['corum']
+    drawn['calls'].clear()
+    result = registry.call('cytoscape_restyle', {'width_source': 'uniform'})
+    kinds = [c[0] for c in drawn['calls']]
+    assert 'edges' in kinds and 'nodes' in kinds and 'positions' not in kinds
+    assert result['changed'] == 2 and result['network']['style']['preset'] == 'abundance_weighted'
+    assert ctl.snapshot()['log'][-1]['actor'] == 'mcp' and ctl.snapshot()['log'][-1]['op'] == 'restyle'
+    with pytest.raises(ValueError, match='preset'):
+        registry.call('cytoscape_restyle', {'preset': 'neon'})
+
+
+def test_cluster_selection_takes_a_layout_and_a_recolor_flag(drawn):
+    props = registry.details('cytoscape_cluster_selection')['schema']['properties']
+    assert props['layout']['default'] == 'circles' and props['recolor']['default'] is True
+    with pytest.raises(ValueError, match='circles'):
+        registry.call('cytoscape_cluster_selection', {'layout': 'spiral'})
+    assert not drawn['calls']
+
+
+def test_layout_ops_save_list_and_load_through_the_registry(scored, drawn):
+    result = registry.call('cytoscape_save_layout', {'name': 'hand'})
+    path = scored / 'cytoscape' / 'layouts' / 'hand.csv'
+    assert result == {'path': str(path), 'written': 3, 'n_rows': 3} and path.is_file()
+    stage = [s for run in json.load(open(scored / 'run.json'))['runs'].values() for s in run['stages']][-1]
+    assert stage['entrypoint'] == 'mcp.cytoscape_save_layout' and stage['params']['name'] == 'hand'
+    assert stage['outputs'][0]['role'] == 'layout' and stage['extra']['thresholds'] == THRESHOLDS
+    assert registry.call('cytoscape_list_layouts', {}) == {'dataset': 'ds', 'layouts': ['hand']}
+    assert registry.call('cytoscape_list_layouts', {'dataset': 'ds'})['layouts'] == ['hand']
+
+    drawn['positions'] = {'P1': (7.0, 7.0), 'P2': (8.0, 8.0), 'BA': (9.0, 9.0)}
+    assert registry.call('cytoscape_load_layout', {'name': 'hand'}) == {'moved': 3, 'unplaced': 0, 'not_drawn': 0}
+    assert drawn['calls'][-2:] == [('positions', {'P1': (0.0, 0.0), 'P2': (1.0, 1.0), 'BA': (2.0, 2.0)}), 'fit']
+    assert registry.activity(1)[0]['detail'] == 'name=hand -> 3 moved'
+    assert ctl.snapshot()['log'][-1]['actor'] == 'mcp'
+
+    ctl.STATE.update(dataset=None, net_suid=None)
+    with pytest.raises(RuntimeError, match='send one first'):
+        registry.call('cytoscape_save_layout', {'name': 'hand'})
 
 
 def test_status_names_the_network_in_cytoscapes_window(drawn, monkeypatch):
@@ -359,6 +443,8 @@ def test_gui_documentation_covers_every_tab_and_every_tooltip():
     assert covered == set(help_text.TOOLTIPS)
     cy = mcp_tools.get_gui_documentation('Cytoscape')
     assert 'Select Loners' in cy['text']            # the README section rides along
+    scoring = mcp_tools.get_gui_documentation('Data & Scoring')
+    assert set(scoring['format_notes']) == set(backend.INPUT_FORMATS)
     with pytest.raises(KeyError):
         mcp_tools.get_gui_documentation('Nope')
 
@@ -411,7 +497,7 @@ def test_the_five_tools_answer_over_http(mcp_url, drawn):
                 found = await session.call_tool('search_tools', {'query': 'threshold_metrics'})
                 details = await session.call_tool('get_tool_details', {'name': 'threshold_metrics'})
                 called = await session.call_tool('call_tool', {'name': 'list_datasets', 'arguments': {}})
-                docs = await session.call_tool('get_gui_documentation', {'section': 'Downloads'})
+                docs = await session.call_tool('get_gui_documentation', {'section': 'Export'})
                 picture = await session.call_tool('view_network', {'height': 300})
                 return names, found, details, called, docs, picture
 
@@ -427,7 +513,7 @@ def test_the_five_tools_answer_over_http(mcp_url, drawn):
     assert payload(details)['mode'] == 'sandbox'
     assert payload(called)['ok'] is True
     assert payload(called)['result']['datasets'][0]['Dataset Name'] == 'ds'
-    assert payload(docs)['section'] == 'Downloads'
+    assert payload(docs)['section'] == 'Export'
     assert not picture.isError, picture.content
     block = picture.content[0]
     assert block.type == 'image' and block.mimeType == 'image/png'

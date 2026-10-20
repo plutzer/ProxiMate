@@ -11,7 +11,6 @@ Usage:
 
 import argparse
 from datetime import datetime, timezone
-import gzip
 import io
 import os
 import subprocess
@@ -40,14 +39,17 @@ ORGANISMS = {
 # Constants
 # ---------------------------------------------------------------------------
 
-# UniProt REST API URL template — organism_id is filled per organism
-UNIPROT_STREAM_URL_TEMPLATE = (
-    "https://rest.uniprot.org/uniprotkb/stream"
+# UniProt REST API URL template — organism_id is filled per organism. The
+# paginated search endpoint is used rather than the bulk stream endpoint, which
+# is a lower-priority service that can stall or truncate large downloads; each
+# response's Link header gives the URL of the next page.
+UNIPROT_SEARCH_URL_TEMPLATE = (
+    "https://rest.uniprot.org/uniprotkb/search"
     "?query=(organism_id:{organism_id})+AND+(reviewed:true)"
     "&format=tsv"
     "&fields=accession,gene_names,cc_subcellular_location,go_c,go_p,go_f,"
     "ft_motif,ft_region,ft_repeat,ft_compbias,ft_domain"
-    "&compressed=true"
+    "&size=500"
 )
 UNIPROT_FILENAME = "uniprot_anns.tsv"
 UNIPROT_REQUIRED_COLUMNS = {
@@ -179,19 +181,21 @@ def download_uniprot(organism_dir: str, force: bool, organism_name: str, organis
         log(f"{label}: {UNIPROT_FILENAME} already exists, skipping (use --force to re-download)")
         return verify_tsv_columns(target, UNIPROT_REQUIRED_COLUMNS)
 
-    url = UNIPROT_STREAM_URL_TEMPLATE.format(organism_id=organism_id)
+    url = UNIPROT_SEARCH_URL_TEMPLATE.format(organism_id=organism_id)
     log(f"{label}: Downloading reviewed proteome annotations (organism_id={organism_id})...")
     try:
-        content = download(url, label)
-        try:
-            decompressed = gzip.decompress(content)
-        except gzip.BadGzipFile:
-            log(f"  {label}: Response was not gzip — using raw content")
-            decompressed = content
+        # The header line is kept from the first page only.
+        lines = []
+        while url:
+            response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            page = response.text.splitlines(keepends=True)
+            lines.extend(page if not lines else page[1:])
+            url = response.links.get("next", {}).get("url")
 
-        with open(target, "wb") as f:
-            f.write(decompressed)
-        log(f"{label}: Written {os.path.getsize(target):,} bytes to {UNIPROT_FILENAME}")
+        with open(target, "w", encoding="utf-8", newline="") as f:
+            f.writelines(lines)
+        log(f"{label}: Written {os.path.getsize(target):,} bytes ({len(lines) - 1:,} entries) to {UNIPROT_FILENAME}")
 
         if not verify_tsv_columns(target, UNIPROT_REQUIRED_COLUMNS):
             log(f"{label}: Column verification FAILED")

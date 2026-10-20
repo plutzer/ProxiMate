@@ -15,7 +15,7 @@ import pytest
 from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 
-from Ann_Enrichment import (MAX_LABEL_CHARS, enrich_foreground, plot_results,
+from Ann_Enrichment import (MAX_LABEL_CHARS, enrich_foreground, go_term_ids, plot_results,
                             process_refactored, split_and_clean)
 
 
@@ -343,3 +343,29 @@ def test_a_long_feature_name_is_truncated_with_an_ellipsis():
 
     assert any(label.endswith("...") for label in labels)
     assert all(len(label) <= MAX_LABEL_CHARS for label in labels)
+
+
+def test_the_figure_grows_with_the_number_of_rows():
+    many = [f"term {letter}" for letter in "abcdefghijklmnopqrstuvwxyz"]
+    grid = plot_results(_results(many), "GO_CC", num_features=30)
+    tall = grid.figure.get_figheight()
+    plt.close(grid.figure)
+    grid = plot_results(_results(many), "GO_CC", num_features=3)
+    short = grid.figure.get_figheight()
+    plt.close(grid.figure)
+
+    assert tall == pytest.approx(0.28 * len(many) + 2)
+    assert short == 5
+
+
+# --- go_term_ids -----------------------------------------------------------------
+
+def test_go_term_ids_reads_the_ids_from_the_raw_uniprot_columns():
+    scores = pd.DataFrame({
+        "Gene Ontology (cellular component)": ["cytoplasm [GO:0005737]; Ino80 complex [GO:0031011]", np.nan],
+        "Gene Ontology (biological process)": [np.nan, "DNA repair [GO:0006281]"],
+        "Gene Ontology (molecular function)": [np.nan, np.nan],
+    })
+    assert go_term_ids(scores) == {("GO_CC", "cytoplasm"): "GO:0005737",
+                                   ("GO_CC", "Ino80 complex"): "GO:0031011",
+                                   ("GO_BP", "DNA repair"): "GO:0006281"}

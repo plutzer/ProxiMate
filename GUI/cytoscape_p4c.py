@@ -182,12 +182,15 @@ def apply_passthrough_style(style, network, defaults, passthrough):
     """Recreate ``style`` with one passthrough mapping per (property, column).
 
     Every look is computed into a table column in Python; Cytoscape only maps.  A
-    style cannot be deleted while applied, so the network steps aside first.
+    style cannot be deleted while applied, so the network steps aside first.  Node
+    dimensions are unlocked so width and height map separately (locked, both follow
+    NODE_SIZE).
     """
     if style in p4c.get_visual_style_names():
         p4c.set_visual_style('default', network=network)
         p4c.delete_visual_style(style)
     p4c.create_visual_style(style, defaults=defaults)
+    p4c.lock_node_dimensions(False, style_name=style)
     p4c.set_visual_style(style, network=network)
     for prop, column in passthrough:
         p4c.update_style_mapping(style, p4c.map_visual_property(prop, column, 'p'))

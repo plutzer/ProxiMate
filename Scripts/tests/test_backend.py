@@ -4,6 +4,7 @@ Dataset operations go through one job lock per dataset and land in the datasets
 store; sandbox operations compute from a dataset directory and leave it untouched.
 """
 
+import json
 import os
 import threading
 
@@ -40,6 +41,12 @@ def _tree(root):
 
 
 # --- thresholds and paths ------------------------------------------------------
+
+def test_imputation_choices_offer_aft_for_intensities_only():
+    assert set(backend.imputation_choices("Spectral Counts")) == {0}
+    assert set(backend.imputation_choices("Intensity")) == {0, 2, 3}
+    assert set(backend.imputation_choices("LFQ")) == {0, 2, 3}
+
 
 def test_thresholds_must_carry_exactly_the_four_scores():
     assert backend.validate_thresholds({'SaintScore': '0.7', 'BFDR': 0.05, 'WD': 0, 'WDFDR': 1}) == \
@@ -130,7 +137,7 @@ def test_score_runs_both_stages_with_the_given_settings_and_marks_the_row(out_di
     assert score_cmd[score_cmd.index('--seed') + 1] == '7'
     assert ann_cmd[1].endswith('annotator.py') and '--excludeHCM' in ann_cmd
     assert store.row('ds1')['Scored'] == 'Yes'
-    assert store.row('ds1')['Imputation'] == 'Refactored AFT'
+    assert store.row('ds1')['Imputation'] == 'Two-component AFT'
     assert result['run_id']
 
 
@@ -205,12 +212,99 @@ def test_a_dataset_being_worked_on_refuses_a_second_job(parsed, monkeypatch):
     assert backend.running_jobs() == {}
 
 
+# --- delete and rename ------------------------------------------------------------
+
+def test_delete_removes_the_directory_the_row_and_the_drawn_dataset_reference(parsed, monkeypatch):
+    import cytoscape_ctl as ctl
+    ctl.STATE.update(dataset='ds1', title='ProxiMate: ds1', net_suid=1)
+    try:
+        backend.delete_dataset('ds1', actor='mcp')
+        assert not parsed.exists() and store.names() == []
+        assert ctl.STATE['dataset'] is None and ctl.STATE['net_suid'] == 1
+        assert ctl.STATE['log'][-1]['op'] == 'forget' and ctl.STATE['log'][-1]['actor'] == 'mcp'
+    finally:
+        ctl.STATE.update(dataset=None, title=None, net_suid=None)
+    with pytest.raises(KeyError):
+        backend.delete_dataset('ds1')
+
+
+def test_rename_moves_the_directory_rewrites_the_manifest_and_the_row(parsed, monkeypatch):
+    import cytoscape_ctl as ctl
+    titles = []
+    monkeypatch.setattr(ctl.p4c, 'rename_network', lambda title, network: titles.append((title, network)))
+    ctl.STATE.update(dataset='ds1', title='ProxiMate: ds1', net_suid=7)
+    try:
+        row = backend.rename_dataset('ds1', 'ds2')
+    finally:
+        ctl.STATE.update(dataset=None, title=None, net_suid=None)
+    assert row['Dataset Name'] == 'ds2' and store.names() == ['ds2']
+    assert not parsed.exists() and (parsed.parent / 'ds2' / 'ED.csv').is_file()
+    manifest = json.load(open(parsed.parent / 'ds2' / 'run.json'))
+    paths = [o['path'] for run in manifest['runs'].values() for s in run['stages'] for o in s['outputs']]
+    assert paths and all(p.startswith(str(parsed.parent / 'ds2') + os.sep) for p in paths)
+    assert titles == [('ProxiMate: ds2', 7)]
+
+
+@pytest.mark.parametrize("new, message", [('ds1', 'already'), ('bad name', 'spaces'),
+                                          ('leftover', 'already'), ('', 'empty')])
+def test_rename_refuses_a_taken_or_invalid_name(parsed, new, message):
+    (parsed.parent / 'leftover').mkdir()
+    with pytest.raises(ValueError, match=message):
+        backend.rename_dataset('ds1', new)
+    assert store.names() == ['ds1'] and parsed.is_dir()
+
+
+def test_delete_and_rename_refuse_a_busy_dataset(parsed):
+    with backend._job('ds1', 'gui', 'score'):
+        with pytest.raises(backend.BusyError, match='score'):
+            backend.delete_dataset('ds1')
+        with pytest.raises(backend.BusyError, match='score'):
+            backend.rename_dataset('ds1', 'ds2')
+    assert parsed.is_dir() and store.names() == ['ds1']
+
+
+def test_parse_returns_the_counts_it_wrote(out_dir):
+    row = backend.run_parse('ds1', 'SAINT', _saint_files(out_dir), 'Spectral Counts')
+    assert (row['n_preys'], row['n_interactions']) == (2, 4)
+    assert 'n_preys' not in store.row('ds1')
+
+
+def test_parse_reads_the_bait_file_when_the_edited_table_is_empty(out_dir):
+    """The GUI clears its bait grid after a parse; a second parse of the same uploads
+    must come from bait.txt, not from the empty grid."""
+    empty = pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"])
+    row = backend.run_parse('ds1', 'SAINT', _saint_files(out_dir), 'Spectral Counts', bait_frame=empty)
+    assert (row['Experiments'], row['Controls']) == (2, 1)
+
+
+def test_score_records_when_and_against_what_the_dataset_was_annotated(parsed, monkeypatch):
+    _fake_stages(monkeypatch, [])
+    backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='mouse', exclude_hcm=False)
+    # The faked annotator records no stage, so the fields stay blank.
+    assert store.row('ds1')['Scored at'] == '' and store.row('ds1')['Organism'] == ''
+
+
+def test_write_feature_enrichment_writes_the_file_under_the_job_lock(scored):
+    scores = pd.read_csv(scored / 'annotated_scores.csv')
+    for column in backend.FEATURE_TYPES:
+        scores[column] = ['GO:1;GO:2', 'GO:1', 'GO:3', 'GO:1;GO:2', 'GO:1']
+    scores.to_csv(scored / 'annotated_scores.csv', index=False)
+    seen = []
+    result = backend.write_feature_enrichment('ds', THRESHOLDS, progress=lambda m, v: seen.append(m))
+    assert seen == list(backend.FEATURE_STAGES)
+    assert len(pd.read_csv(scored / 'Feature_enrichment.csv')) == len(result)
+    with backend._job('ds', 'mcp', 'score'):
+        with pytest.raises(backend.BusyError):
+            backend.write_feature_enrichment('ds', THRESHOLDS)
+
+
 # --- sandbox operations -----------------------------------------------------------
 
 def _score(bait, prey, **overrides):
     row = {"Experiment.ID": bait, "Prey.ID": prey, "First_ID": prey, "Bait.ID": bait,
            "First_Prey_Gene": prey.lower(), "SaintScore": 0.9, "BFDR": 0.01, "WD": 5.0, "WDFDR": 0.01, "In.BioGRID": False,
-           "SCL": "Nucleus" if prey != "P3" else "Vesicle"}
+           "FoldChange": 4.0,
+           "Multivalidated": False, "AvgIntensity": 10.0, "SCL": "Nucleus" if prey != "P3" else "Vesicle"}
     row.update(overrides)
     return row
 
@@ -286,6 +380,24 @@ def test_passing_scores_filters_orders_and_restricts_to_baits(scored):
     assert list(backend.passing_scores('ds', THRESHOLDS, baits=['BaitB'])['Prey.ID']) == ['P1']
     with pytest.raises(ValueError, match='BaitZ'):
         backend.passing_scores('ds', THRESHOLDS, baits=['BaitZ'])
+
+
+def test_results_table_names_orders_and_rounds_the_columns():
+    rows = pd.DataFrame([{'Experiment.ID': 'BaitA', 'Prey.ID': 'P1', 'First_ID': 'Q1', 'First_Prey_Gene': 'g1',
+                          'SaintScore': 0.98765, 'BFDR': 0.00123, 'WD': 12.34567, 'WDFDR': 0.0004,
+                          'FoldChange': 3.14159, 'AvgSpec': 7.25, 'In.BioGRID': True, 'Multivalidated': False}])
+    table = backend.results_table(rows)
+    assert list(table.columns) == ['Bait', 'Prey gene', 'Prey ID', 'SAINT', 'BFDR', 'WD', 'WDFDR',
+                                   'Fold change', 'Abundance', 'In BioGRID', 'Multivalidated']
+    assert table.iloc[0].tolist() == ['BaitA', 'g1', 'Q1', 0.988, 0.001, 12.346, 0.0, 3.142, 7.25, True, False]
+    with pytest.raises(ValueError, match='AvgSpec'):
+        backend.results_table(rows.drop(columns='AvgSpec'))
+
+
+def test_passing_scores_carries_the_results_table_columns(scored):
+    table = backend.results_table(backend.passing_scores('ds', THRESHOLDS))
+    assert table['Abundance'].tolist() == [10.0, 10.0, 10.0, 10.0]
+    assert table['Multivalidated'].tolist() == [False] * 4
 
 
 def test_dataset_info_summarizes_the_row_files_and_baits(scored):
