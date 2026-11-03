@@ -15,7 +15,7 @@ import pytest
 from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 
-from Ann_Enrichment import (MAX_LABEL_CHARS, enrich_foreground, go_term_ids, plot_results,
+from Ann_Enrichment import (LABEL_LINE_CHARS, enrich_foreground, go_term_ids, plot_results,
                             process_refactored, split_and_clean)
 
 
@@ -227,11 +227,11 @@ FEATURES = [
 BAITS = ["CUL3-mT", "mT-CUL3", "KLHL12-mT", "mT-KEAP1"]
 
 
-def _results(features=FEATURES):
+def _results(features=FEATURES, baits=BAITS):
     """A long-format enrichment table of the shape ``process_refactored`` returns."""
     rng = np.random.default_rng(0)
     rows = [(bait, feature, "GO_CC", 5, 50, 20, 2000, 0.001, rng.uniform(1, 40), 0.001)
-            for bait in BAITS for feature in features]
+            for bait in baits for feature in features]
     return pd.DataFrame(rows, columns=["Bait", "Feature", "Feature_type", "k", "n",
                                        "K", "M", "p_value", "enrichment", "adj_p"])
 
@@ -316,7 +316,8 @@ def test_every_selected_feature_gets_a_labelled_row(rendered):
 
     assert set(grid.data2d.index) == set(FEATURES)
     assert list(grid.ax_heatmap.get_yticks()) == list(np.arange(len(FEATURES)) + 0.5)
-    assert [t.get_text() for t in grid.ax_heatmap.get_yticklabels()] == \
+    # Names longer than a line are wrapped at a space.
+    assert [t.get_text().replace("\n", " ") for t in grid.ax_heatmap.get_yticklabels()] == \
         list(grid.data2d.index)
 
 
@@ -347,15 +348,20 @@ def test_features_are_selected_by_adjusted_p_enrichment_and_count():
     assert top < everything
 
 
-def test_a_long_feature_name_is_truncated_with_an_ellipsis():
-    """Drawn in full, one long name takes the width the map itself needs."""
+def test_a_long_feature_name_wraps_onto_two_lines_and_ends_in_an_ellipsis():
+    """Drawn on one line, a long name takes the width the map itself needs."""
     long_name = "positive regulation of transcription " * 4
     grid = plot_results(_results(FEATURES + [long_name]), "GO_CC", num_features=30)
+    renderer = _draw(grid, CONTAINER_SIZE)
     labels = [text.get_text() for text in grid.ax_heatmap.get_yticklabels()]
+    clipped = _clipped(grid.figure, renderer)
     plt.close(grid.figure)
 
-    assert any(label.endswith("...") for label in labels)
-    assert all(len(label) <= MAX_LABEL_CHARS for label in labels)
+    [wrapped] = [label for label in labels if label.startswith("positive regulation of")]
+    assert wrapped.endswith("...")
+    assert len(wrapped.split("\n")) == 2
+    assert all(len(line) <= LABEL_LINE_CHARS for label in labels for line in label.split("\n"))
+    assert clipped == []
 
 
 def test_the_figure_grows_with_the_number_of_rows():
@@ -367,8 +373,39 @@ def test_the_figure_grows_with_the_number_of_rows():
     short = grid.figure.get_figheight()
     plt.close(grid.figure)
 
-    assert tall == pytest.approx(0.28 * len(many) + 2)
+    assert tall == pytest.approx(0.32 * len(many) + 2)
     assert short == 5
+
+
+def _baits(n):
+    return [f"BAIT{i:03d}" for i in range(n)]
+
+
+def _bait_labels(n_baits):
+    """The bait labels drawn on a heatmap of n_baits, at the width of the browser card."""
+    grid = plot_results(_results(baits=_baits(n_baits)), "GO_CC", num_features=30)
+    renderer = _draw(grid, (CONTAINER_SIZE[0], grid.figure.get_figheight()))
+    labels = [t for t in grid.ax_heatmap.get_xticklabels() if t.get_text()]
+    boxes = [t.get_window_extent(renderer) for t in labels]
+    clipped = _clipped(grid.figure, renderer)
+    plt.close(grid.figure)
+    return [t.get_text() for t in labels], boxes, clipped
+
+
+def test_up_to_forty_baits_every_bait_is_labelled_without_overlap():
+    labels, boxes, _ = _bait_labels(40)
+
+    assert sorted(labels) == _baits(40)
+    assert all(_overlap(a, b) == 0 for a, b in zip(boxes, boxes[1:]))
+
+
+def test_past_forty_baits_every_nth_bait_is_labelled_without_overlap():
+    labels, boxes, clipped = _bait_labels(190)
+
+    assert 20 <= len(labels) <= 40
+    assert set(labels) <= set(_baits(190))
+    assert all(_overlap(a, b) == 0 for a, b in zip(boxes, boxes[1:]))
+    assert clipped == []
 
 
 # --- go_term_ids -----------------------------------------------------------------

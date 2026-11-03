@@ -6,6 +6,7 @@ from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 import argparse
 import re
+import textwrap
 from collections import Counter
 from QC_plots import apply_score_thresholds
 import matplotlib.ticker as ticker
@@ -127,19 +128,19 @@ def process_refactored(data, columns_for_analysis, thresholds):
     return pd.concat(frames, ignore_index=True)[RESULT_COLUMNS]
 
 
-MAX_LABEL_CHARS = 60
+LABEL_LINE_CHARS = 30
+# About as many 8 pt bait labels as fit side by side across the map in the browser card.
+MAX_BAIT_LABELS = 40
 
 
-def _truncate_label(label):
-    """Shorten a feature name to something a heatmap row can carry.
+def _wrap_label(label):
+    """Fit a feature name in the heatmap's label margin: at most two lines of
+    LABEL_LINE_CHARS, ending in '...' when the name is longer.
 
     Feature names run to hundreds of characters; drawn in full they take the width the
     map itself needs.
     """
-    label = str(label)
-    if len(label) <= MAX_LABEL_CHARS:
-        return label
-    return label[:MAX_LABEL_CHARS - 3] + '...'
+    return textwrap.fill(str(label), LABEL_LINE_CHARS, max_lines=2, placeholder='...')
 
 
 # The raw UniProt column each GO feature type is trimmed from; it names each term's id
@@ -192,8 +193,8 @@ def plot_results(results, feature_type, num_features=30):
     # Hierarchical clustering needs at least two items on an axis; a single-bait
     # dataset or a single passing feature otherwise makes scipy raise on an empty
     # distance matrix.
-    # 0.28 in per row keeps a 9 pt label from touching its neighbors.
-    height = max(5, 0.28 * filtered_results.shape[0] + 2)
+    # 0.32 in per row keeps a two-line 8 pt label from touching its neighbors.
+    height = max(5, 0.32 * filtered_results.shape[0] + 2)
     grid = sns.clustermap(filtered_results, cmap='viridis', figsize=(12, height),
                           row_cluster=filtered_results.shape[0] > 1,
                           col_cluster=filtered_results.shape[1] > 1,
@@ -207,11 +208,13 @@ def plot_results(results, feature_type, num_features=30):
     ordered_columns = grid.data2d.columns
     ordered_rows = grid.data2d.index
 
-    ax.set_xticks(np.arange(len(ordered_columns)) + 0.5)
-    ax.set_xticklabels(ordered_columns, rotation=45, ha='right', fontsize=8)
+    # Past MAX_BAIT_LABELS baits, every n-th is labelled: a label for each would overlap.
+    stride = int(np.ceil(len(ordered_columns) / MAX_BAIT_LABELS))
+    ax.set_xticks(np.arange(0, len(ordered_columns), stride) + 0.5)
+    ax.set_xticklabels(ordered_columns[::stride], rotation=90, fontsize=8)
 
     ax.set_yticks(np.arange(len(ordered_rows)) + 0.5)
-    ax.set_yticklabels([_truncate_label(label) for label in ordered_rows], fontsize=9)
+    ax.set_yticklabels([_wrap_label(label) for label in ordered_rows], fontsize=8)
 
     # The colorbar goes in the corner the two dendrograms leave empty, as a cell of the
     # clustermap's own grid rather than as a free-floating inset: only an axes the grid
