@@ -2116,9 +2116,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not dataset or preset is None:
             return pd.DataFrame()
         dataset_dir = os.path.join(out_dir, dataset)
-        # Checkbox state can still belong to the previously shown preset while
-        # the update_dl_groups round-trip is in flight; sanitize it.
-        groups = dp.effective_selection(preset, input.dl_groups.get())
+        # dl_groups exists only after dl_groups_ui has drawn checkboxes, and
+        # reading an unset input would silently cancel this render. Its state
+        # can also still belong to the previously shown preset; sanitize it.
+        picked = input.dl_groups.get() if "dl_groups" in input else ()
+        groups = dp.effective_selection(preset, picked)
         try:
             if preset_key == 'ed':
                 ed_path = os.path.join(dataset_dir, "ED.csv")
