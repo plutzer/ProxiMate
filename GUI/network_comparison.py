@@ -393,12 +393,13 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
         )
         return fig
 
-    # The strip titles wrap to the strips' width and grow upward, so the top margin
-    # grows with the number of lines to keep them below the figure title.
+    # The strip titles wrap to the strips' width and grow upward, under the figure
+    # title, so the top margin holds both: 18 px per strip title line and 22 px per
+    # figure title line.
     strip_titles = [wrap_label(f"Only in {bait}", 14, '<br>') for bait in (bait_b, bait_a)]
     title = wrap_label(f"Compare Baits: {bait_a} vs {bait_b}", 60, '<br>')
-    title_lines = title.count('<br>') + 1
-    strip_lines = max(t.count('<br>') for t in strip_titles) + 1
+    strip_height = 18 * (max(t.count('<br>') for t in strip_titles) + 1)
+    top_margin = 40 + 22 * (title.count('<br>') + 1) + strip_height
     fig = make_subplots(
         rows=1, cols=3, column_widths=[0.15, 0.7, 0.15],
         horizontal_spacing=0.06,
@@ -442,10 +443,11 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
 
     fig.update_layout(
         title=dict(text=title, x=0.5, xanchor='center', yref='paper', y=1,
-                   yanchor='bottom', pad=dict(b=20 + 18 * strip_lines)),
-        margin=dict(t=40 + 22 * title_lines + 18 * strip_lines),
+                   yanchor='bottom', pad=dict(b=20 + strip_height)),
+        margin=dict(t=top_margin),
         hovermode='closest',
-        height=500 + 22 * (title_lines - 1) + 18 * (strip_lines - 1),
+        # The panels are the same height however many lines the titles take.
+        height=420 + top_margin,
         template='plotly_white',
         # Horizontal legend below the panels: inside the plot area it would sit on
         # top of the narrow right-hand strip.
