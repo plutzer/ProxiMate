@@ -1455,7 +1455,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render_plotly
     def raw_pca_plot():
-        figure = pca_result()[1]
+        # A copy, so the legend setting stays out of the cached figure.
+        figure = go.Figure(pca_result()[1])
         return figure.update_layout(showlegend=input.pca_show_legend() if many_pca_baits() else True)
 
     @reactive.calc
