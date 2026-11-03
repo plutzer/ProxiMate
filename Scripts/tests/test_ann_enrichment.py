@@ -15,8 +15,8 @@ import pytest
 from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 
-from Ann_Enrichment import (LABEL_LINE_CHARS, enrich_foreground, go_term_ids, plot_results,
-                            process_refactored, split_and_clean)
+from Ann_Enrichment import (LABEL_LINE_CHARS, enrich_foreground, fit_heatmap, go_term_ids,
+                            plot_results, process_refactored, split_and_clean)
 
 
 # --- split_and_clean -----------------------------------------------------------
@@ -207,10 +207,12 @@ def test_conflicting_annotations_for_one_prey_are_an_error():
 
 # --- plot_results -------------------------------------------------------------
 
-# Shiny renders at 96 ppi.  The card the heatmap sits in is around 8.75 inches wide on a
-# maximized window.
+# The app sizes the plot output at 96 px per figure inch and Shiny draws the figure at
+# the output's CSS width; the browser here has a device pixel ratio of 1.5.  The card is
+# 750 CSS px wide with the window maximized and 600 with it narrowed.
 PPI = 96.0
-CONTAINER_SIZE = (8.75, 4.17)
+PIXEL_RATIO = 1.5
+CARD_WIDTHS = [600, 750]
 
 FEATURES = [
     "COP9 signalosome",
@@ -236,26 +238,24 @@ def _results(features=FEATURES, baits=BAITS):
                                        "K", "M", "p_value", "enrichment", "adj_p"])
 
 
-def _draw(grid, size):
-    """Resize and draw the figure the way Shiny does, and return its renderer.
-
-    ``render.plot`` substitutes a tight layout only when the figure carries no layout
-    engine of its own, so applying one here mirrors it rather than pre-empting it.
-    """
+def _render(results, css_width=750, num_features=30):
+    """Build and draw the heatmap the way the app and Shiny's ``render.plot`` do, and
+    return it with its renderer."""
+    grid = plot_results(results, "GO_CC", num_features=num_features)
     figure = grid.figure
-    figure.set_size_inches(*size)
+    css_height = figure.get_figheight() * PPI
     figure.set_dpi(PPI)
-    if figure.get_layout_engine() is None:
-        figure.set_layout_engine(layout="tight")
+    fit_heatmap(grid, css_width / PPI)
+    figure.set_size_inches(css_width / PPI, css_height / PPI)
+    figure.set_dpi(PPI * PIXEL_RATIO)
     figure.canvas.draw()
-    return figure.canvas.get_renderer()
+    return grid, figure.canvas.get_renderer()
 
 
 @pytest.fixture
 def rendered():
-    """Draw the heatmap at the size of a maximized window and clean up after."""
-    grid = plot_results(_results(), "GO_CC", num_features=30)
-    yield grid, _draw(grid, CONTAINER_SIZE)
+    grid, renderer = _render(_results())
+    yield grid, renderer
     plt.close(grid.figure)
 
 
@@ -351,8 +351,7 @@ def test_features_are_selected_by_adjusted_p_enrichment_and_count():
 def test_a_long_feature_name_wraps_onto_two_lines_and_ends_in_an_ellipsis():
     """Drawn on one line, a long name takes the width the map itself needs."""
     long_name = "positive regulation of transcription " * 4
-    grid = plot_results(_results(FEATURES + [long_name]), "GO_CC", num_features=30)
-    renderer = _draw(grid, CONTAINER_SIZE)
+    grid, renderer = _render(_results(FEATURES + [long_name]))
     labels = [text.get_text() for text in grid.ax_heatmap.get_yticklabels()]
     clipped = _clipped(grid.figure, renderer)
     plt.close(grid.figure)
@@ -373,39 +372,74 @@ def test_the_figure_grows_with_the_number_of_rows():
     short = grid.figure.get_figheight()
     plt.close(grid.figure)
 
-    assert tall == pytest.approx(0.32 * len(many) + 2)
-    assert short == 5
+    assert tall > short == 5
+
+
+# Thirty GO cellular-component names, most of them wrapping onto two lines.
+LONG_FEATURES = FEATURES + [
+    "rough endoplasmic reticulum membrane",
+    "endoplasmic reticulum-plasma membrane contact site",
+    "clathrin-coated endocytic vesicle membrane",
+    "SNARE complex",
+    "integral component of cytoplasmic side of endoplasmic reticulum membrane",
+    "mitochondrial inner membrane",
+    "cytoplasmic side of plasma membrane",
+    "basolateral plasma membrane",
+    "intermediate filament cytoskeleton",
+    "sarcoplasmic reticulum membrane",
+    "Z disc",
+    "costamere",
+    "nuclear pore outer ring",
+    "endoplasmic reticulum exit site",
+    "early endosome membrane",
+    "recycling endosome membrane",
+    "trans-Golgi network membrane",
+    "M band",
+    "intercalated disc",
+    "proteasome core complex, alpha-subunit complex",
+]
 
 
 def _baits(n):
-    return [f"BAIT{i:03d}" for i in range(n)]
+    return [f"BAIT{i:03d}-TurboID" for i in range(n)]
 
 
-def _bait_labels(n_baits):
-    """The bait labels drawn on a heatmap of n_baits, at the width of the browser card."""
-    grid = plot_results(_results(baits=_baits(n_baits)), "GO_CC", num_features=30)
-    renderer = _draw(grid, (CONTAINER_SIZE[0], grid.figure.get_figheight()))
-    labels = [t for t in grid.ax_heatmap.get_xticklabels() if t.get_text()]
-    boxes = [t.get_window_extent(renderer) for t in labels]
+def _gaps(boxes, axis):
+    """Space between neighboring boxes along an axis, in points at the drawn dpi."""
+    lo, hi = ("x0", "x1") if axis == "x" else ("y0", "y1")
+    boxes = sorted(boxes, key=lambda box: getattr(box, lo))
+    return [getattr(b, lo) - getattr(a, hi) for a, b in zip(boxes, boxes[1:])]
+
+
+def _labels(grid, renderer, axis):
+    ticks = grid.ax_heatmap.get_xticklabels() if axis == "x" else grid.ax_heatmap.get_yticklabels()
+    labels = [t for t in ticks if t.get_text()]
+    return [t.get_text() for t in labels], [t.get_window_extent(renderer) for t in labels]
+
+
+@pytest.mark.parametrize("css_width", CARD_WIDTHS)
+def test_neighboring_labels_keep_clear_space_at_the_card_width(css_width):
+    grid, renderer = _render(_results(LONG_FEATURES, _baits(191)), css_width)
+    points = 72 / grid.figure.get_dpi()
+    bait_labels, bait_boxes = _labels(grid, renderer, "x")
+    _, feature_boxes = _labels(grid, renderer, "y")
     clipped = _clipped(grid.figure, renderer)
     plt.close(grid.figure)
-    return [t.get_text() for t in labels], boxes, clipped
 
-
-def test_up_to_forty_baits_every_bait_is_labelled_without_overlap():
-    labels, boxes, _ = _bait_labels(40)
-
-    assert sorted(labels) == _baits(40)
-    assert all(_overlap(a, b) == 0 for a, b in zip(boxes, boxes[1:]))
-
-
-def test_past_forty_baits_every_nth_bait_is_labelled_without_overlap():
-    labels, boxes, clipped = _bait_labels(190)
-
-    assert 20 <= len(labels) <= 40
-    assert set(labels) <= set(_baits(190))
-    assert all(_overlap(a, b) == 0 for a, b in zip(boxes, boxes[1:]))
+    assert len(bait_labels) >= 10
+    assert set(bait_labels) <= set(_baits(191))
+    assert min(_gaps(bait_boxes, "x")) * points >= 4
+    assert len(feature_boxes) == len(LONG_FEATURES)
+    assert min(_gaps(feature_boxes, "y")) * points >= 4
     assert clipped == []
+
+
+def test_a_few_baits_are_all_labelled():
+    grid, renderer = _render(_results(baits=_baits(10)), 600)
+    labels, _ = _labels(grid, renderer, "x")
+    plt.close(grid.figure)
+
+    assert sorted(labels) == _baits(10)
 
 
 # --- go_term_ids -----------------------------------------------------------------

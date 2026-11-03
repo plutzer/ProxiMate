@@ -129,8 +129,16 @@ def process_refactored(data, columns_for_analysis, thresholds):
 
 
 LABEL_LINE_CHARS = 30
-# About as many 8 pt bait labels as fit side by side across the map in the browser card.
-MAX_BAIT_LABELS = 40
+LABEL_FONT_SIZE = 8
+# Points per feature row: two lines of an 8 pt label take about 19, the rest is space
+# between neighboring labels.
+FEATURE_ROW_POINTS = 30
+# Points from one bait label to the next: an 8 pt label and as much space again.
+BAIT_LABEL_POINTS = 16
+# The row dendrogram's share of the width, and the column dendrogram's height in inches
+# (the colorbar sits beside it).
+ROW_DENDROGRAM_RATIO = 0.18
+COLUMN_DENDROGRAM_INCHES = 1.5
 
 
 def _wrap_label(label):
@@ -161,7 +169,31 @@ def go_term_ids(scores):
     return ids
 
 
-def plot_results(results, feature_type, num_features=30):
+def fit_heatmap(grid, width):
+    """Lay the heatmap out at `width` inches: size the figure so every feature row has
+    FEATURE_ROW_POINTS, then label as many baits as fit BAIT_LABEL_POINTS apart."""
+    figure, ax = grid.figure, grid.ax_heatmap
+    n_rows, n_columns = grid.data2d.shape
+    inches_per_pixel = 1 / figure.get_dpi()
+
+    figure.set_size_inches(width, figure.get_figheight())
+    figure.canvas.draw()
+    # Margins and gaps: everything but the map and the column dendrogram above it.
+    drawn = ax.get_window_extent().height + grid.ax_col_dendrogram.get_window_extent().height
+    margins = figure.get_figheight() - drawn * inches_per_pixel
+    map_inches = FEATURE_ROW_POINTS * n_rows / 72
+    grid.gs.set_height_ratios([COLUMN_DENDROGRAM_INCHES, map_inches])
+    figure.set_size_inches(width, max(5, margins + COLUMN_DENDROGRAM_INCHES + map_inches))
+    figure.canvas.draw()
+
+    fit = int(ax.get_window_extent().width * inches_per_pixel * 72 // BAIT_LABEL_POINTS)
+    stride = int(np.ceil(n_columns / max(fit, 1)))
+    ax.set_xticks(np.arange(0, n_columns, stride) + 0.5)
+    ax.set_xticklabels(grid.data2d.columns[::stride], rotation=90, fontsize=LABEL_FONT_SIZE)
+
+
+def plot_results(results, feature_type, num_features=30, width=12):
+    """The clustered heatmap of the top features of one type, laid out at `width` inches."""
     # Filter the results for the specific feature type
     filtered_results = results[results['Feature_type'] == feature_type]
 
@@ -193,28 +225,19 @@ def plot_results(results, feature_type, num_features=30):
     # Hierarchical clustering needs at least two items on an axis; a single-bait
     # dataset or a single passing feature otherwise makes scipy raise on an empty
     # distance matrix.
-    # 0.32 in per row keeps a two-line 8 pt label from touching its neighbors.
-    height = max(5, 0.32 * filtered_results.shape[0] + 2)
-    grid = sns.clustermap(filtered_results, cmap='viridis', figsize=(12, height),
+    grid = sns.clustermap(filtered_results, cmap='viridis', figsize=(width, 5),
                           row_cluster=filtered_results.shape[0] > 1,
                           col_cluster=filtered_results.shape[1] > 1,
-                          dendrogram_ratio=(0.18, 0.18), cbar_pos=None)
+                          dendrogram_ratio=ROW_DENDROGRAM_RATIO, cbar_pos=None)
 
     ax = grid.ax_heatmap
     ax.set_xlabel("Bait")
     ax.set_ylabel("Feature")
 
     # data2d holds the data in the order the clustering put it in.
-    ordered_columns = grid.data2d.columns
     ordered_rows = grid.data2d.index
-
-    # Past MAX_BAIT_LABELS baits, every n-th is labelled: a label for each would overlap.
-    stride = int(np.ceil(len(ordered_columns) / MAX_BAIT_LABELS))
-    ax.set_xticks(np.arange(0, len(ordered_columns), stride) + 0.5)
-    ax.set_xticklabels(ordered_columns[::stride], rotation=90, fontsize=8)
-
     ax.set_yticks(np.arange(len(ordered_rows)) + 0.5)
-    ax.set_yticklabels([_wrap_label(label) for label in ordered_rows], fontsize=8)
+    ax.set_yticklabels([_wrap_label(label) for label in ordered_rows], fontsize=LABEL_FONT_SIZE)
 
     # The colorbar goes in the corner the two dendrograms leave empty, as a cell of the
     # clustermap's own grid rather than as a free-floating inset: only an axes the grid
@@ -235,6 +258,7 @@ def plot_results(results, feature_type, num_features=30):
     # fall off the canvas.
     grid.figure.set_layout_engine("tight")
 
+    fit_heatmap(grid, width)
     return grid
 
 
