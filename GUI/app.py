@@ -19,6 +19,7 @@ import shutil
 import threading
 import time
 from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, prey_gene_names, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
+from off_loop import off_loop
 from Ann_Enrichment import plot_results, go_term_ids, GO_SOURCE_COLUMNS
 from network_comparison import (
     load_and_filter_bait_data,
@@ -988,9 +989,15 @@ def server(input: Inputs, output: Outputs, session: Session):
         return ui.p(text, class_="plot-placeholder")
 
     def dataset_baits(name):
-        """The baits of a scored dataset, in file order."""
+        """The baits of a scored dataset, in file order; none for no dataset."""
+        if name is None:
+            return []
         scores = pd.read_csv(backend.results_path(name), usecols=['Experiment.ID'])
         return scores['Experiment.ID'].astype(str).unique().tolist()
+
+    # The bait lists of several tabs, read once per dataset: the read takes seconds on
+    # a large dataset.  Effects take it as their event so they run once it is read.
+    active_baits = off_loop(dataset_baits, lambda: (active_scored(),))
 
     saint_baits = reactive.Value(EMPTY_BAITS)
     ed_dataframe = reactive.Value(EMPTY_ED)
@@ -1396,23 +1403,24 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         start_job(f"Scoring {dataset_name}", dataset_name, backend.SCORE_STAGES, work, done)
 
-    # Quality Control tab
-    @reactive.Calc
-    def pca_matrix_cached():
-        # Shared by the experiment and prey PCA plots and their PNG exports, so
-        # the preprocessing runs once per settings change and all four agree.
-        dataset_name = active()
-        if not dataset_name:
-            return None
+    # Quality Control tab.  Its computations read the dataset's largest files and take
+    # seconds on a large dataset, so they run in worker threads (see off_loop).
+    def experiment_pca(dataset_name, min_detection, imputation, normalization):
+        """The PCA matrix and the experiment PCA figure drawn from it."""
         interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
-        if not os.path.exists(interaction_path):
-            return None
-        return prepare_pca_matrix(
-            interaction_path,
-            min_detection_frac=input.pca_min_detection(),
-            imputation=input.pca_imputation(),
-            normalization=input.pca_normalization(),
-        )
+        matrix = prepare_pca_matrix(interaction_path, min_detection_frac=min_detection,
+                                    imputation=imputation, normalization=normalization)
+        figure = pca_plot(interaction_path, os.path.join(out_dir, dataset_name, "ED.csv"), matrix=matrix)
+        return matrix, figure
+
+    def pca_args():
+        dataset_name = req(active())
+        req(all(os.path.exists(os.path.join(out_dir, dataset_name, f)) for f in ("interaction.txt", "ED.csv")))
+        return dataset_name, input.pca_min_detection(), input.pca_imputation(), input.pca_normalization()
+
+    # Shared by the experiment and prey PCA plots and their PNG exports, so the
+    # preprocessing runs once per settings change and all four agree.
+    pca_result = off_loop(experiment_pca, pca_args)
 
     def _prey_pca_color_data(dataset_name, mode, bait, prey_index):
         """Color data for the prey PCA: (values, label, mode, threshold) as
@@ -1447,22 +1455,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render_plotly
     def raw_pca_plot():
-        with ui.Progress(min=0, max=100) as progress:
-            progress.set(message="Generating Plots...", value=25)
-            dataset_name = active()
-            if not dataset_name:
-                return None
-
-            interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
-            ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
-            if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
-                return None
-
-            matrix = pca_matrix_cached()
-            if matrix is None:
-                return None
-            show_legend = input.pca_show_legend() if many_pca_baits() else True
-            return pca_plot(interaction_path, ed_path, matrix=matrix, show_legend=show_legend)
+        figure = pca_result()[1]
+        return figure.update_layout(showlegend=input.pca_show_legend() if many_pca_baits() else True)
 
     @reactive.calc
     def many_pca_baits():
@@ -1476,23 +1470,19 @@ def server(input: Inputs, output: Outputs, session: Session):
             return None
         return ui.input_checkbox("pca_show_legend", "Show legend", value=False)
 
+    def prey_pca_figure(dataset_name, matrix, color, bait):
+        values, label, mode, threshold = _prey_pca_color_data(dataset_name, color, bait, matrix.index)
+        gene_names = prey_gene_names(os.path.join(out_dir, dataset_name, "prey.txt"))
+        return plot_prey_pca(matrix, color_values=values,
+                             color_label=label, color_mode=mode,
+                             color_threshold=threshold, gene_names=gene_names)
+
+    prey_pca_result = off_loop(prey_pca_figure, lambda: (active(), pca_result()[0], input.prey_pca_color(),
+                                                         input.prey_pca_bait()))
+
     @render_plotly
     def prey_pca_plot():
-        with ui.Progress(min=0, max=100) as progress:
-            progress.set(message="Generating Plots...", value=25)
-            dataset_name = active()
-            if not dataset_name:
-                return None
-            matrix = pca_matrix_cached()
-            if matrix is None:
-                return None
-            values, label, mode, threshold = _prey_pca_color_data(
-                dataset_name, input.prey_pca_color(), input.prey_pca_bait(),
-                matrix.index)
-            gene_names = prey_gene_names(os.path.join(out_dir, dataset_name, "prey.txt"))
-            return plot_prey_pca(matrix, color_values=values,
-                                 color_label=label, color_mode=mode,
-                                 color_threshold=threshold, gene_names=gene_names)
+        return prey_pca_result()
 
 
     def qc_experiments():
@@ -1521,35 +1511,32 @@ def server(input: Inputs, output: Outputs, session: Session):
             label_text = f"Metrics for {bait_selection}"
         return ui.p(label_text, class_="section-heading")
 
-    @reactive.calc
-    def qc_metrics():
-        """The three threshold metrics for the active scored dataset, or None."""
-        if not active_scored():
-            return None
-        return calculate_threshold_metrics(backend.results_path(active_scored()), thresholds(),
-                                           ctrl_experiments=qc_experiments())
+    def qc_scores_args():
+        return req(active_scored()), thresholds(), qc_experiments()
+
+    # The three threshold metrics for the active scored dataset.
+    qc_metrics = off_loop(lambda name, cutoffs, experiments: calculate_threshold_metrics(
+        backend.results_path(name), cutoffs, ctrl_experiments=experiments), qc_scores_args)
 
     @render.ui
     def metric_network_size():
-        metrics = qc_metrics()
-        if metrics is None:
+        if not active_scored():
             return ui.value_box(tip("Median Network Size", "metric_network_size"), "No data", showcase=None)
-        return ui.value_box("Median Network Size", f"{metrics['median_network_size']:.1f}",
+        return ui.value_box("Median Network Size", f"{qc_metrics()['median_network_size']:.1f}",
                             showcase=None, theme="primary")
 
     @render.ui
     def metric_enrichment():
-        metrics = qc_metrics()
-        if metrics is None:
+        if not active_scored():
             return ui.value_box(tip("Known Enrichment", "metric_enrichment"), "No data", showcase=None)
-        return ui.value_box("Known Enrichment", f"{metrics['enrichment_ratio']:.2f}x",
+        return ui.value_box("Known Enrichment", f"{qc_metrics()['enrichment_ratio']:.2f}x",
                             showcase=None, theme="success")
 
     @render.ui
     def metric_degree():
-        metrics = qc_metrics()
-        if metrics is None:
+        if not active_scored():
             return ui.value_box(tip("Mean Prey-Prey Degree", "metric_degree"), "No data", showcase=None)
+        metrics = qc_metrics()
         # A degree of zero is a real result, so an unreadable BioGRID summary is named
         # rather than averaged into one.
         if metrics['mean_degree'] is None:
@@ -1563,11 +1550,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         return ui.value_box("Mean Prey-Prey Degree", f"{metrics['mean_degree']:.1f}",
                             showcase=None, theme="info")
 
-    @reactive.calc
-    def qc_results_frame():
-        """The QC tab's passing interactions for the QC bait selection, as displayed."""
-        rows = backend.passing_scores(active_scored(), thresholds(), qc_experiments())
-        return backend.results_table(rows)
+    # The QC tab's passing interactions for the QC bait selection, as displayed.
+    qc_results_frame = off_loop(lambda name, cutoffs, experiments: backend.results_table(
+        backend.passing_scores(name, cutoffs, experiments)), qc_scores_args)
 
     @render.text
     def qc_results_count():
@@ -1602,7 +1587,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
             notify("Required files not found.", type="error")
             return None
-        fig = pca_plot_matplotlib(interaction_path, ed_path, matrix=pca_matrix_cached())
+        fig = pca_plot_matplotlib(interaction_path, ed_path, matrix=pca_result()[0])
         filepath = os.path.join(out_dir, "pca_plot.png")
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
@@ -1613,10 +1598,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not dataset_name:
             notify("No dataset selected.", type="error")
             return None
-        matrix = pca_matrix_cached()
-        if matrix is None:
-            notify("Required files not found.", type="error")
-            return None
+        matrix = pca_result()[0]
         values, label, mode, threshold = _prey_pca_color_data(
             dataset_name, input.prey_pca_color(), input.prey_pca_bait(),
             matrix.index)
@@ -1698,14 +1680,16 @@ def server(input: Inputs, output: Outputs, session: Session):
         return ui.div(output_widget("saint_scatter_plot"),
                       ui.p("Dashed line: SAINT threshold from the sidebar.", class_="help-text"))
 
+    def scatter_args():
+        bait_selection = input.qc_bait()
+        req(active_scored(), bait_selection != "All")
+        return backend.results_path(active_scored()), bait_selection, thresholds()['SaintScore']
+
+    saint_scatter = off_loop(plot_saint_scatter, scatter_args)
+
     @render_widget
     def saint_scatter_plot():
-        dataset_name = active_scored()
-        bait_selection = input.qc_bait()
-        if not dataset_name or bait_selection == "All":
-            return None
-        return plot_saint_scatter(backend.results_path(dataset_name), bait_selection,
-                                  thresholds()['SaintScore'])
+        return saint_scatter()
 
     # Feature Enrichment tab
     @reactive.effect
@@ -1834,13 +1818,13 @@ def server(input: Inputs, output: Outputs, session: Session):
         return savepath
 
     @reactive.effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(active_baits)
     def update_qc_bait():
-        baits = dataset_baits(active_scored()) if active_scored() else []
+        baits = active_baits()
         ui.update_select("qc_bait", choices=["All"] + baits)
 
     @reactive.effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(active_baits)
     def update_prey_pca_color_choices():
         # Annotation-based color options exist only once the dataset is scored;
         # HPA localization only when the organism has HPA data (human).
@@ -1854,7 +1838,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 choices["hpa"] = "HPA Main location"
             if "first_SCL" in cols:
                 choices["scl"] = "UniProt localization"
-            baits = dataset_baits(active_scored())
+            baits = active_baits()
         ui.update_select("prey_pca_color", choices=choices)
         ui.update_select("prey_pca_bait", choices=baits)
 
@@ -1897,11 +1881,11 @@ def server(input: Inputs, output: Outputs, session: Session):
                                          read_thresholds("comp_b"), out_dir)
 
     @reactive.effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(active_baits)
     def update_comp_baits():
         """Bait lists for the active dataset, B starting on the second bait, and both
         threshold sets starting from the shared one."""
-        baits = dataset_baits(active_scored()) if active_scored() else []
+        baits = active_baits()
         ui.update_select("comp_bait_a", choices=baits)
         ui.update_select("comp_bait_b", choices=baits, selected=baits[1] if len(baits) > 1 else None)
         for side in ("comp_a", "comp_b"):
@@ -2290,9 +2274,9 @@ def server(input: Inputs, output: Outputs, session: Session):
             return None
 
     @reactive.effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(active_baits)
     def update_cy_baits():
-        baits = sorted(dataset_baits(active_scored())) if active_scored() else []
+        baits = sorted(active_baits())
         ui.update_selectize("cy_baits", choices=baits, selected=[])
 
     @reactive.effect
