@@ -434,7 +434,7 @@ def test_neighboring_labels_keep_clear_space_at_the_card_width(css_width):
     assert clipped == []
 
 
-def test_a_few_baits_are_all_labelled():
+def test_a_few_baits_are_all_labeled():
     grid, renderer = _render(_results(baits=_baits(10)), 600)
     labels, _ = _labels(grid, renderer, "x")
     plt.close(grid.figure)

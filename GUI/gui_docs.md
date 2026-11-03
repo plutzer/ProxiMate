@@ -103,7 +103,7 @@ sequence features (motifs, regions, repeats, compositions, domains). *Run Featur
 Enrichment* computes the table under the progress modal and writes `Feature_enrichment.csv` into the dataset directory; the
 heatmap shows the top features of one feature type (feature names wrap onto two lines
 and end in "..." past that; the figure grows with the number of features; when the bait
-labels don't all fit the plot's width, every n-th bait is labelled), and the table can be downloaded with p-value
+labels don't all fit the plot's width, every n-th bait is labeled), and the table can be downloaded with p-value
 and enrichment cutoffs. The download carries each feature's full name and, for Gene
 Ontology terms, its GO id.
 
