@@ -483,9 +483,12 @@ def create_venn_diagram_matplotlib(set_a, set_b, label_a, label_b):
         Venn diagram visualization
     """
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
     from matplotlib_venn import venn2
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    # The tight layout engine reruns on every draw, so the legend keeps its room after
+    # shiny resizes the figure to the output's size.
+    fig, ax = plt.subplots(figsize=(8, 6), layout='tight')
 
     # venn2 cannot draw two empty sets
     if len(set_a) == 0 and len(set_b) == 0:
@@ -496,9 +499,8 @@ def create_venn_diagram_matplotlib(set_a, set_b, label_a, label_b):
         ax.axis('off')
         return fig
 
-    # Each set label sits under its own circle, which can be near the figure edge.
-    venn = venn2([set_a, set_b], set_labels=(wrap_label(label_a, 18), wrap_label(label_b, 18)),
-                 set_colors=('#ff7f0e', '#2ca02c'), alpha=0.35, ax=ax)
+    colors = ('#ff7f0e', '#2ca02c')
+    venn = venn2([set_a, set_b], set_labels=None, set_colors=colors, alpha=0.35, ax=ax)
 
     # Empty regions have no label
     for region_id in ('10', '01', '11'):
@@ -507,14 +509,16 @@ def create_venn_diagram_matplotlib(set_a, set_b, label_a, label_b):
             label.set_fontsize(16)
             label.set_fontweight('bold')
 
-    for label, color in zip(venn.set_labels, ('#ff7f0e', '#2ca02c')):
-        if label is not None:
-            label.set_fontsize(14)
-            label.set_fontweight('bold')
-            label.set_color(color)
-            label.set_multialignment('center')
+    # The bait names go in a legend centered below the diagram rather than under each
+    # circle: a circle can reach the figure edge, and the layout does not make room
+    # for text placed beside it.
+    legend = ax.legend(handles=[Patch(color=color, alpha=0.35) for color in colors],
+                       labels=[wrap_label(label_a, 22), wrap_label(label_b, 22)],
+                       loc='upper center', bbox_to_anchor=(0.5, 0), frameon=False,
+                       prop={'size': 13, 'weight': 'bold'})
+    for text, color in zip(legend.get_texts(), colors):
+        text.set_color(color)
 
-    plt.tight_layout()
     return fig
 
 
