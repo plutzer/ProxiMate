@@ -2305,8 +2305,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_checkbox("cy_corum", value=opts["corum"])
         ui.update_select("cy_layout", selected=opts["layout"])
 
+    # Probes once when the session starts and again on each Check Connection click.
+    # cy_status only reads cy_health: setting a value a render has read re-runs that
+    # render mid-flight, which the browser reports as Shiny state errors.
     @reactive.effect
-    @reactive.event(input.cy_probe)
+    @reactive.event(input.cy_probe, ignore_none=False)
     def cy_probe():
         cy_health.set(cytoscape_ctl.health())
 
@@ -2314,9 +2317,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def cy_status():
         cy_version()
         health = cy_health.get()
-        if health is None:
-            health = cytoscape_ctl.health()
-            cy_health.set(health)
+        req(health)
         snap = cytoscape_ctl.snapshot()
         if health['ok']:
             line = ui.p(ui.span("● ", class_="status-ok"),
