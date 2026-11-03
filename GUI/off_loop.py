@@ -16,19 +16,21 @@ def off_loop(fn, args):
     arguments drop the run in progress; only the latest arguments' result is delivered.
     """
     args = reactive.calc(args)
-    started = [None]
+    running_args = None
 
     @reactive.extended_task
-    async def task(*a):
-        return await asyncio.to_thread(fn, *a)
+    async def task(*fn_args):
+        return await asyncio.to_thread(fn, *fn_args)
 
     def compute():
-        a = args()
-        # The calc returns the same tuple until its inputs change; a new one is a new run.
-        if a is not started[0]:
-            started[0] = a
+        nonlocal running_args
+        fn_args = args()
+        # args() hands back the same tuple object until something it reads changes, so a
+        # different object means new arguments: stop the old run and start a new one.
+        if fn_args is not running_args:
+            running_args = fn_args
             task.cancel()
-            task.invoke(*a)
+            task.invoke(*fn_args)
         return task.result()
 
     return compute
