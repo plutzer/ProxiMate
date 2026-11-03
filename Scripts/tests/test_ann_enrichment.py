@@ -15,7 +15,7 @@ import pytest
 from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 
-from Ann_Enrichment import (LABEL_LINE_CHARS, enrich_foreground, fit_heatmap, go_term_ids,
+from Ann_Enrichment import (LABEL_LINE_CHARS, enrich_foreground, go_term_ids,
                             plot_results, process_refactored, split_and_clean)
 
 
@@ -241,11 +241,13 @@ def _results(features=FEATURES, baits=BAITS):
 def _render(results, css_width=750, num_features=30):
     """Build and draw the heatmap the way the app and Shiny's ``render.plot`` do, and
     return it with its renderer."""
-    grid = plot_results(results, "GO_CC", num_features=num_features)
+    # The card is as tall as the heatmap laid out at the default width.
+    default = plot_results(results, "GO_CC", num_features=num_features).figure
+    css_height = default.get_figheight() * PPI
+    plt.close(default)
+    grid = plot_results(results, "GO_CC", num_features=num_features, width=css_width / PPI)
     figure = grid.figure
-    css_height = figure.get_figheight() * PPI
     figure.set_dpi(PPI)
-    fit_heatmap(grid, css_width / PPI)
     figure.set_size_inches(css_width / PPI, css_height / PPI)
     figure.set_dpi(PPI * PIXEL_RATIO)
     figure.canvas.draw()

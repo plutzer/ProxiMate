@@ -20,7 +20,7 @@ import threading
 import time
 from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, prey_gene_names, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
 from off_loop import off_loop
-from Ann_Enrichment import plot_results, fit_heatmap, go_term_ids, GO_SOURCE_COLUMNS
+from Ann_Enrichment import plot_results, go_term_ids, GO_SOURCE_COLUMNS
 from network_comparison import (
     load_and_filter_bait_data,
     calculate_volcano_data,
@@ -1625,12 +1625,10 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.download_button(filename="heatmap.png")
     def download_heatmap():
-        if isinstance(feature_heatmap(), str):
-            notify(feature_heatmap(), type="error")
+        heatmap = feature_heatmap()
+        if isinstance(heatmap, str):
+            notify(heatmap, type="error")
             return None
-        # A fresh figure: the on-screen one has been resized to its card.
-        feature_data = pd.read_csv(os.path.join(out_dir, active_scored(), "Feature_enrichment.csv"))
-        heatmap = plot_results(feature_data, input.feature_type(), input.num_features() or 30)
         filepath = os.path.join(out_dir, "heatmap.png")
         heatmap.savefig(filepath, dpi=150, bbox_inches='tight')
         return filepath
@@ -1715,7 +1713,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @reactive.calc
     def feature_heatmap():
-        """The feature heatmap for the active dataset, or the message shown in its place."""
+        """The feature heatmap for the active dataset at plot_results' default width, as
+        the PNG download saves it, or the message shown in its place."""
         _ = feature_enrichment.get()
         dataset = active_scored()
         if not dataset or not os.path.exists(os.path.join(out_dir, dataset, "Feature_enrichment.csv")):
@@ -1740,13 +1739,14 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.plot
     def feature_enrichment_plot():
-        heatmap = feature_heatmap()
-        if isinstance(heatmap, str):
+        if isinstance(feature_heatmap(), str):
             return None
-        # Shiny draws the figure at the output's CSS width over the figure's dpi, and
-        # leaves the dpi it drew at on the figure; 96 matches the card height above.
+        # A figure of its own, laid out at the card's width.  Shiny draws it at the
+        # output's CSS size over the figure's dpi; 96 matches the card height above.
+        feature_data = pd.read_csv(os.path.join(out_dir, active_scored(), "Feature_enrichment.csv"))
+        heatmap = plot_results(feature_data, input.feature_type(), input.num_features() or 30,
+                               width=session.clientdata.output_width("feature_enrichment_plot") / 96)
         heatmap.figure.set_dpi(96)
-        fit_heatmap(heatmap, session.clientdata.output_width("feature_enrichment_plot") / 96)
         return heatmap
 
     @reactive.effect
