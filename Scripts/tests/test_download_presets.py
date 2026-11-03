@@ -100,6 +100,16 @@ def test_resolve_columns_df_order(human_scores):
                     'SaintScore', 'BFDR', 'FoldChange']
 
 
+def test_saint_group_offers_spectral_count_columns(human_scores):
+    """SAINTexpress's spectral-count build writes Spec, SpecSum, AvgSpec and
+    ctrlCounts where the intensity build writes the Intensity columns."""
+    spc = human_scores.rename(columns={'AvgIntensity': 'AvgSpec'}).assign(
+        Spec='3|4', SpecSum=7.0, ctrlCounts='0|1')
+    cols = resolve_columns(spc.columns, PRESETS['annotated'], ['saint'])
+    assert cols == ['AvgSpec', 'SaintScore', 'BFDR', 'FoldChange',
+                    'Spec', 'SpecSum', 'ctrlCounts']
+
+
 def test_resolve_columns_dedupes_overlap():
     preset = Preset(key='x', label='x', kind='table', required_files=(),
                     uses_thresholds=False,

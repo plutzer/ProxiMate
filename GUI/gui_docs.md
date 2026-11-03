@@ -131,8 +131,10 @@ thickened by publications; *Highlight knowns* draws black ellipse baits and grey
 preys, puts a red border on preys whose interaction with a drawn bait is
 BioGRID-multivalidated, and uses grey edges of one width with black complex edges.
 Picking a preset also sets the send options it is designed for, which the user can still
-change. The other style options are the node label policy, the layout algorithm and what
-bait-prey edge width encodes. *Edges*: whether to add prey-prey BioGRID edges, all pairs
+change. The other style options are the node label policy, *Bait labels* (a bait's
+experiment name, the default, or its gene symbol; a bait whose accession has no gene in
+the scores keeps its experiment name), the layout algorithm and what bait-prey edge width
+encodes. *Edges*: whether to add prey-prey BioGRID edges, all pairs
 or only multivalidated ones (the others are sent hidden), optionally thickened by
 publication count. *Complexes*: CORUM complex edges for human data, under two criteria.
 
@@ -143,7 +145,7 @@ passes). A send that would draw more than 5000 visible edges first asks for conf
 and suggests the *Multivalidated only* BioGRID scope or fewer baits. Each send replaces the
 previous ProxiMate network. With a network drawn, *Re-apply Thresholds* hides edges that
 fail tighter thresholds without redrawing, so a hand layout survives (loosening needs a
-new send), and *Apply Style* applies the preset and edge options in place.
+new send), and *Apply Style* applies the preset, bait labels and edge options in place.
 
 The *Cytoscape* card groups the tools on the drawn network in collapsible panels.
 *Status* says whether Cytoscape answers and which network is drawn; *Check Connection*
@@ -153,7 +155,9 @@ scores (SAINT, BFDR, WD and WDFDR to 3 decimals, fold change to 2); the panel he
 shows the row count and *Download selection CSV* saves the table. The hide/show buttons
 act on edges around the selection, and *Select Loners* / *Select Satellites* pick a
 bait's loners or satellites. *Select by relation* selects the nodes a relation names
-for a seed. *Cluster the selection*: *Cluster and Repack* runs Leiden over the selected
+for a seed, typed as a bait's experiment name, a gene symbol or a UniProt accession
+(case-insensitive, whichever bait labels are shown); a gene or accession shared by two
+drawn baits fails with a message naming both. *Cluster the selection*: *Cluster and Repack* runs Leiden over the selected
 preys and arranges them by community with the chosen cluster layout (circles, or a
 force-directed or Kamada-Kawai layout of each community inside its own disc), coloring
 communities of two or more nodes unless *Recolor communities* is off, and leaving

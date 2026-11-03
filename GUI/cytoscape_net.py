@@ -20,6 +20,7 @@ from download_presets import CYTOSCAPE_ATTRS
 
 THRESHOLD_COLUMNS = ('SaintScore', 'BFDR', 'WD', 'WDFDR')
 LABEL_POLICIES = ('all', 'baits', 'none')
+BAIT_LABELS = ('experiment', 'gene')
 EDGE_WIDTH_SOURCES = ('abundance', 'SaintScore', 'WD', 'FoldChange', 'uniform')
 BIOGRID_SCOPES = ('all', 'multivalidated')
 RELATIONS = ('interactors', 'singletons', 'partners', 'cocomplex')
@@ -296,27 +297,39 @@ def complex_pairs(node_ids, bait_preys, corum_path, min_members=3, min_fraction=
     return frame, {u: ';'.join(names) for u, names in membership.items()}
 
 
-def display_labels(nodes, policy):
+def bait_names(nodes, bait_labels):
+    """Each node's label text: a bait's experiment name or gene symbol, a prey's symbol."""
+    if bait_labels not in BAIT_LABELS:
+        raise ValueError(f"unknown bait labels {bait_labels!r}; expected one of {', '.join(BAIT_LABELS)}")
+    if bait_labels == 'gene':
+        return nodes['symbol']
+    return nodes['id'].where(nodes['role'] == 'bait', nodes['symbol'])
+
+
+def display_labels(nodes, policy, bait_labels='experiment'):
     if policy not in LABEL_POLICIES:
         raise ValueError(f"unknown label policy {policy!r}; expected one of {', '.join(LABEL_POLICIES)}")
+    names = bait_names(nodes, bait_labels)
     if policy == 'all':
-        return nodes['symbol']
+        return names
     if policy == 'none':
         return pd.Series([''] * len(nodes), index=nodes.index)
-    return nodes['symbol'].where(nodes['role'] == 'bait', '')
+    return names.where(nodes['role'] == 'bait', '')
 
 
 # --- build -----------------------------------------------------------------------------------
 
 def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_policy='all',
-          width_source='abundance', literature_weighted=False, corum_path=None,
+          bait_labels='experiment', width_source='abundance', literature_weighted=False, corum_path=None,
           corum_min_members=3, corum_min_fraction=0.5, preset='abundance_weighted'):
     """(nodes, edges) for the interactions passing ``thresholds``, styled by ``preset``.
 
     Prey nodes are keyed on UniProt accession and bait nodes on bait name (``id``), so
     two constructs of one protein stay separate baits; ``accession`` holds the protein
     of every node.  A prey that is also a bait keeps only its bait node(s) and a bait
-    never draws its own protein.  Bait-prey edges carry every score column present
+    never draws its own protein.  A bait's ``symbol`` is its accession's gene, or its
+    name when the scores give none; ``bait_labels`` (experiment or gene) picks which of
+    the two a bait label shows.  Bait-prey edges carry every score column present
     and their thresholds; literature edges are BioGRID pairs among the passing preys;
     complex edges are CORUM pairs among the drawn proteins when ``corum_path`` is given,
     and the node table then carries each protein's qualifying ``complexes``.
@@ -335,7 +348,8 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
 
     baits_tbl = (passing[['Experiment.ID', bait_col]].drop_duplicates()
                  .rename(columns={'Experiment.ID': 'id', bait_col: 'accession'}).astype(str))
-    baits_tbl['symbol'] = baits_tbl['id']
+    genes = df[['First_ID', symbol_col]].dropna().astype(str).drop_duplicates('First_ID')
+    baits_tbl['symbol'] = baits_tbl['accession'].map(genes.set_index('First_ID')[symbol_col])
     baits_tbl['role'] = 'bait'
     bait_accessions = set(baits_tbl['accession'])
     # accession -> the node ids carrying it: a prey is its own accession, a bait
@@ -354,7 +368,7 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
 
     nodes = pd.concat([baits_tbl, preys_tbl], ignore_index=True)
     nodes['symbol'] = nodes['symbol'].fillna(nodes['id']).astype(str)
-    nodes['display_label'] = display_labels(nodes, label_policy)
+    nodes['display_label'] = display_labels(nodes, label_policy, bait_labels)
     nodes['node_alpha'] = NODE_ALPHA['visible']
     if 'In.BioGRID' in nodes.columns:
         nodes['In.BioGRID'] = nodes['In.BioGRID'].eq(True)
@@ -516,9 +530,9 @@ def satellites(nodes, edges, bait, positions):
 
 
 def resolve_node(nodes, query):
-    """The drawn node ``query`` names, by accession or symbol, case-insensitively."""
+    """The drawn node ``query`` names, by id, accession or symbol, case-insensitively."""
     q = str(query).strip().lower()
-    hit = nodes[(nodes['id'].str.lower() == q) | (nodes['symbol'].str.lower() == q)]
+    hit = nodes[(nodes[['id', 'accession', 'symbol']].apply(lambda c: c.str.lower()) == q).any(axis=1)]
     if len(hit) == 0:
         raise ValueError(f"{query!r} is not in the drawn network")
     if len(hit) > 1:

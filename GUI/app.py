@@ -56,11 +56,14 @@ MCP_ADD_COMMANDS = {
 
 STYLESHEET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "www", "proximate.css")
 
-# The sidebar layout's main pane is the scroll container, so a tab opened while scrolled
-# down would start mid-page.  A clicked button keeps focus, which keeps its bslib tooltip
-# open; the click hides the tooltip and mutes it until the pointer or focus leaves.
+# The sidebar layout's main pane is the scroll container, so a page tab opened while
+# scrolled down would start mid-page.  Only the navbar's tabs reset it: a tab set inside
+# a card, such as Gene Lists, keeps the reader where they are.  A clicked button keeps
+# focus, which keeps its bslib tooltip open; the click hides the tooltip and mutes it
+# until the pointer or focus leaves.
 PAGE_SCRIPT = """
-document.addEventListener('shown.bs.tab', () => {
+document.addEventListener('shown.bs.tab', e => {
+  if (!e.target.closest('.navbar')) return;
   document.querySelectorAll('.bslib-sidebar-layout > .main').forEach(el => el.scrollTop = 0);
 });
 document.addEventListener('click', e => {
@@ -488,6 +491,8 @@ app_ui = ui.page_navbar(
                                 choices={key: preset["label"] for key, preset in STYLE_PRESETS.items()}),
                 ui.input_select("cy_labels", tip("Labels", "cy_labels"),
                                 choices={"all": "All nodes", "baits": "Baits only", "none": "None"}),
+                ui.input_select("cy_bait_labels", tip("Bait labels", "cy_bait_labels"),
+                                choices={"experiment": "Experiment name", "gene": "Gene symbol"}),
                 ui.input_select("cy_layout", tip("Layout", "cy_layout"),
                                 choices=["force-directed", "kamada-kawai", "circular", "grid",
                                          "hierarchical", "degree-circle"]),
@@ -2116,9 +2121,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not dataset or preset is None:
             return pd.DataFrame()
         dataset_dir = os.path.join(out_dir, dataset)
-        # Checkbox state can still belong to the previously shown preset while
-        # the update_dl_groups round-trip is in flight; sanitize it.
-        groups = dp.effective_selection(preset, input.dl_groups.get())
+        # dl_groups exists only after dl_groups_ui has drawn checkboxes, and
+        # reading an unset input would silently cancel this render. Its state
+        # can also still belong to the previously shown preset; sanitize it.
+        picked = input.dl_groups.get() if "dl_groups" in input else ()
+        groups = dp.effective_selection(preset, picked)
         try:
             if preset_key == 'ed':
                 ed_path = os.path.join(dataset_dir, "ED.csv")
@@ -2300,8 +2307,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_checkbox("cy_corum", value=opts["corum"])
         ui.update_select("cy_layout", selected=opts["layout"])
 
+    # Probes once when the session starts and again on each Check Connection click.
+    # cy_status only reads cy_health: setting a value a render has read re-runs that
+    # render mid-flight, which the browser reports as Shiny state errors.
     @reactive.effect
-    @reactive.event(input.cy_probe)
+    @reactive.event(input.cy_probe, ignore_none=False)
     def cy_probe():
         cy_health.set(cytoscape_ctl.health())
 
@@ -2309,9 +2319,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def cy_status():
         cy_version()
         health = cy_health.get()
-        if health is None:
-            health = cytoscape_ctl.health()
-            cy_health.set(health)
+        req(health)
         snap = cytoscape_ctl.snapshot()
         if health['ok']:
             line = ui.p(ui.span("● ", class_="status-ok"),
@@ -2419,6 +2427,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         cutoffs = thresholds()
         options = dict(baits=list(input.cy_baits.get() or []), prey_prey=input.cy_prey_prey.get(),
                        biogrid_path=biogrid_path, label_policy=input.cy_labels.get(),
+                       bait_labels=input.cy_bait_labels.get(),
                        layout=input.cy_layout.get(), width_source=input.cy_edge_width.get(),
                        literature_weighted=input.cy_lit_weighted.get(),
                        biogrid_scope=input.cy_biogrid_scope.get(), corum_path=corum_path,
@@ -2448,7 +2457,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def cy_restyle():
         changed = cy_call("apply the style", cytoscape_ctl.restyle, input.cy_style_preset.get(),
                           input.cy_edge_width.get(), input.cy_lit_weighted.get(),
-                          input.cy_biogrid_scope.get())
+                          input.cy_biogrid_scope.get(), input.cy_bait_labels.get())
         if changed is not None:
             notify(f"Style applied: {changed} edge(s) changed.")
 
