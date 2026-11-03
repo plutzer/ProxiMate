@@ -20,7 +20,7 @@ import threading
 import time
 from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, prey_gene_names, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
 from off_loop import off_loop
-from Ann_Enrichment import plot_results, go_term_ids, GO_SOURCE_COLUMNS
+from Ann_Enrichment import plot_results, fit_heatmap, go_term_ids, GO_SOURCE_COLUMNS
 from network_comparison import (
     load_and_filter_bait_data,
     calculate_volcano_data,
@@ -1740,7 +1740,13 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.plot
     def feature_enrichment_plot():
         heatmap = feature_heatmap()
-        return None if isinstance(heatmap, str) else heatmap
+        if isinstance(heatmap, str):
+            return None
+        # Shiny draws the figure at the output's CSS width over the figure's dpi, and
+        # leaves the dpi it drew at on the figure; 96 matches the card height above.
+        heatmap.figure.set_dpi(96)
+        fit_heatmap(heatmap, session.clientdata.output_width("feature_enrichment_plot") / 96)
+        return heatmap
 
     @reactive.effect
     @reactive.event(input.active_dataset, datasets, feature_enrichment)
