@@ -78,11 +78,23 @@ def build_mcp(host=MCP_HOST, port=MCP_PORT):
     return mcp
 
 
+def gui_config(app):
+    """The uvicorn config for the Shiny GUI.
+
+    A heavy render can hold the event loop for over 10 s, and with several sessions
+    those stalls run back to back; uvicorn's default 20 s ping timeout then closes
+    every session's websocket ("keepalive ping timeout").
+    """
+    import uvicorn
+
+    return uvicorn.Config(app, host=GUI_HOST, port=GUI_PORT, log_level='warning', ws_ping_timeout=120)
+
+
 def _run_gui():
     import uvicorn
 
     from app import app
-    uvicorn.run(app, host=GUI_HOST, port=GUI_PORT, log_level='warning')
+    uvicorn.Server(gui_config(app)).run()
 
 
 def main():
