@@ -22,24 +22,37 @@ from Ann_Enrichment import (MAX_LABEL_CHARS, enrich_foreground, go_term_ids, plo
 # --- split_and_clean -----------------------------------------------------------
 
 def test_splits_on_semicolons_and_strips_whitespace():
-    assert split_and_clean("Nucleus ; Cytoplasm;  Golgi ") == {
+    assert split_and_clean("Nucleus ; Cytoplasm;  Golgi ", "GO_CC") == {
         "Nucleus", "Cytoplasm", "Golgi"}
 
 
 @pytest.mark.parametrize("value", [np.nan, None, 3.5, ""])
 def test_non_string_or_empty_input_yields_an_empty_set(value):
-    assert split_and_clean(value) == set()
+    assert split_and_clean(value, "GO_CC") == set()
 
 
-def test_trailing_digits_are_stripped():
+@pytest.mark.parametrize("feature_type", ["Motifs", "Regions", "Repeats", "Domains"])
+def test_sequence_feature_copy_numbers_are_merged(feature_type):
     """UniProt numbers repeated features ("WD 1", "WD 2"); enrichment asks whether a
     protein has WD repeats at all, not which one."""
-    assert split_and_clean("WD 1;WD 2;WD 3") == {"WD"}
-    assert split_and_clean("Complex1") == {"Complex"}
+    assert split_and_clean("WD 1;WD 2;WD 3", feature_type) == {"WD"}
+    assert split_and_clean("ABC transporter 1", feature_type) == {"ABC transporter"}
 
 
-def test_annotations_beginning_with_a_digit_are_dropped():
-    assert split_and_clean("40S Ribosome;Nucleus") == {"Nucleus"}
+@pytest.mark.parametrize("feature_type", ["GO_CC", "GO_BP", "GO_MF"])
+def test_go_terms_are_kept_as_written(feature_type):
+    terms = ("cellular response to interleukin-1;cellular response to interleukin-6;"
+             "cellular response to interleukin-7;14-3-3 protein binding;7SK snRNP;"
+             "6-phosphofructokinase complex;2-oxoglutarate metabolic process")
+    assert split_and_clean(terms, feature_type) == {
+        "cellular response to interleukin-1", "cellular response to interleukin-6",
+        "cellular response to interleukin-7", "14-3-3 protein binding", "7SK snRNP",
+        "6-phosphofructokinase complex", "2-oxoglutarate metabolic process"}
+
+
+@pytest.mark.parametrize("feature_type", ["Motifs", "Compositions", "GO_CC"])
+def test_annotations_beginning_with_a_digit_are_kept(feature_type):
+    assert split_and_clean("9aaTAD;Nucleus", feature_type) == {"9aaTAD", "Nucleus"}
 
 
 # --- enrich_foreground ---------------------------------------------------------

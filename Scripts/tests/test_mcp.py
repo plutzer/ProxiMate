@@ -556,3 +556,11 @@ def test_cytoscape_activity_entries_name_the_relation_and_the_count(drawn):
     assert registry.activity(1)[0]['detail'] == 'seed=BA, relation=singletons -> 2 selected'
     registry.call('cytoscape_list_nodes', {'role': 'prey'})
     assert registry.activity(1)[0]['detail'] == 'role=prey -> 2 nodes'
+
+
+def test_gui_keepalive_outlasts_a_long_render():
+    import server
+
+    config = server.gui_config(app=None)
+    assert config.ws_ping_timeout >= 120
+    assert (config.host, config.port) == (server.GUI_HOST, server.GUI_PORT)

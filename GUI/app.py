@@ -56,11 +56,14 @@ MCP_ADD_COMMANDS = {
 
 STYLESHEET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "www", "proximate.css")
 
-# The sidebar layout's main pane is the scroll container, so a tab opened while scrolled
-# down would start mid-page.  A clicked button keeps focus, which keeps its bslib tooltip
-# open; the click hides the tooltip and mutes it until the pointer or focus leaves.
+# The sidebar layout's main pane is the scroll container, so a page tab opened while
+# scrolled down would start mid-page.  Only the navbar's tabs reset it: a tab set inside
+# a card, such as Gene Lists, keeps the reader where they are.  A clicked button keeps
+# focus, which keeps its bslib tooltip open; the click hides the tooltip and mutes it
+# until the pointer or focus leaves.
 PAGE_SCRIPT = """
-document.addEventListener('shown.bs.tab', () => {
+document.addEventListener('shown.bs.tab', e => {
+  if (!e.target.closest('.navbar')) return;
   document.querySelectorAll('.bslib-sidebar-layout > .main').forEach(el => el.scrollTop = 0);
 });
 document.addEventListener('click', e => {
