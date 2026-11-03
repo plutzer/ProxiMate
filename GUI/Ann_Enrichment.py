@@ -47,22 +47,19 @@ def enrich_foreground(foreground_ids, all_ids, feature_map):
     # df['adj_p'] = multipletests(df['p_value'], method='fdr_bh')[1]
     return df
 
-def split_and_clean(annotations):
-    if isinstance(annotations, str):
-        split_anns = annotations.split(';')
-        # Remove any leading or trailing whitespace from each annotation
-        split_anns = [x.strip() for x in split_anns]
-        # Remove any numbers that are at the end of the string
-        split_anns = [x.rstrip('0123456789') for x in split_anns]
-        # Remove trailing whitespace again
-        split_anns = [x.strip() for x in split_anns]
-        # Remove any empty strings
-        split_anns = [x for x in split_anns if x != '']
-        # Remove any annotations that begin with a number
-        split_anns = [x for x in split_anns if not x[0].isdigit()]
-        return set(split_anns)
-    else:
+# UniProt numbers each copy of a sequence feature ("WD 1", "WD 2"); the number is
+# stripped so copies count as one feature. Other names (GO terms) keep their digits.
+NUMBERED_FEATURE_TYPES = {'Motifs', 'Regions', 'Repeats', 'Domains'}
+
+
+def split_and_clean(annotations, feature_type):
+    """Split a ';'-separated annotation cell of ``feature_type`` into a set of names."""
+    if not isinstance(annotations, str):
         return set()
+    split_anns = [x.strip() for x in annotations.split(';')]
+    if feature_type in NUMBERED_FEATURE_TYPES:
+        split_anns = [x.rstrip('0123456789').strip() for x in split_anns]
+    return {x for x in split_anns if x != ''}
 
 RESULT_COLUMNS = ['Bait', 'Feature', 'Feature_type', 'k', 'n', 'K', 'M',
                   'p_value', 'enrichment', 'adj_p']
@@ -74,7 +71,7 @@ def _feature_map(data, column):
     A prey's annotation is a property of the protein and is repeated on every one of
     its experiment rows; rows that disagree are corrupt input and raise.
     """
-    features = data[column].apply(split_and_clean)
+    features = data[column].apply(split_and_clean, feature_type=column)
     feature_map = {}
     for prey, feats in zip(data['Prey.ID'], features):
         if prey in feature_map and feature_map[prey] != feats:
