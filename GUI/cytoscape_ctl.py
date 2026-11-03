@@ -43,7 +43,7 @@ STATE = {
     'nodes': None,        # DataFrame as drawn
     'edges': None,        # DataFrame as drawn, 'visible' kept current
     'thresholds': None,   # the thresholds the edges were drawn at
-    'style': None,        # {'preset', 'width_source', 'literature_weighted', 'biogrid_scope'} as drawn
+    'style': None,        # {'preset', 'width_source', 'literature_weighted', 'biogrid_scope', 'bait_labels'}
     'busy': '',
 }
 
@@ -127,7 +127,7 @@ def current_network():
 # --- operations ------------------------------------------------------------------------
 
 def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_path=None,
-         label_policy='all', layout='force-directed', width_source='abundance',
+         label_policy='all', bait_labels='experiment', layout='force-directed', width_source='abundance',
          literature_weighted=False, biogrid_scope='all', corum_path=None,
          corum_min_members=3, corum_min_fraction=0.5, preset='abundance_weighted', actor='gui',
          progress=None):
@@ -139,14 +139,15 @@ def draw(dataset, scores_path, thresholds, baits=None, prey_prey=True, biogrid_p
     report(SEND_STAGES[0], 0.1)
     df = pd.read_csv(scores_path)
     nodes, edges = net.build(df, thresholds, baits=baits, prey_prey=prey_prey,
-                             biogrid_path=biogrid_path, label_policy=label_policy,
+                             biogrid_path=biogrid_path, label_policy=label_policy, bait_labels=bait_labels,
                              width_source=width_source, literature_weighted=literature_weighted,
                              corum_path=corum_path, corum_min_members=corum_min_members,
                              corum_min_fraction=corum_min_fraction, preset=preset)
     edges['visible'] = net.edge_visibility(edges, thresholds, biogrid_scope).to_numpy()
     nodes['node_alpha'] = net.node_alpha(nodes, edges).to_numpy()
     style = {'preset': preset, 'width_source': width_source,
-             'literature_weighted': bool(literature_weighted), 'biogrid_scope': biogrid_scope}
+             'literature_weighted': bool(literature_weighted), 'biogrid_scope': biogrid_scope,
+             'bait_labels': bait_labels}
     title = cy.TITLE_PREFIX + dataset
     report(SEND_STAGES[1], 0.6)
     with _busy(f'drawing {title}'), STATE['cy_lock']:
@@ -185,14 +186,17 @@ def rename_dataset(old, new, actor='gui'):
         STATE.update(dataset=new, title=title)
 
 
-def restyle(preset, width_source, literature_weighted, biogrid_scope, actor='gui'):
-    """Apply a style preset, the edge widths and the BioGRID scope to the drawn network
-    in place: a column update, so nothing moves.  Nodes carrying a community color keep
-    it.  Returns the number of edges whose look or visibility changed."""
+def restyle(preset, width_source, literature_weighted, biogrid_scope, bait_labels='experiment',
+            actor='gui'):
+    """Apply a style preset, the edge widths, the BioGRID scope and the bait label text
+    to the drawn network in place: a column update, so nothing moves.  Nodes carrying a
+    community color keep it and hidden labels stay hidden.  Returns the number of edges
+    whose look or visibility changed."""
     suid = _net()
     nodes, edges = STATE['nodes'], STATE['edges']
     styled_nodes, styled_edges = net.style_tables(nodes.copy(), edges.copy(), preset,
                                                   width_source, literature_weighted)
+    names = net.bait_names(nodes, bait_labels)
     want = net.edge_visibility(edges, STATE['thresholds'], biogrid_scope)
     changed = edges.index[(want != edges['visible'].astype(bool))
                           | (styled_edges[net.EDGE_LOOK] != edges[net.EDGE_LOOK]).any(axis=1)]
@@ -201,14 +205,18 @@ def restyle(preset, width_source, literature_weighted, biogrid_scope, actor='gui
         colored = nodes['fill'].isin(net.COMMUNITY_FILL)
         styled_nodes.loc[colored, 'fill'] = nodes.loc[colored, 'fill']
         nodes[net.NODE_LOOK] = styled_nodes[net.NODE_LOOK]
+        nodes['display_label'] = names.where(nodes['display_label'] != '', '')
     _push_visibility(suid, want, changed, extra_columns=net.EDGE_LOOK)
     with STATE['cy_lock']:
-        cy.update_node_columns(suid, nodes[['id', *net.NODE_LOOK]].rename(columns={'id': 'name'}))
+        cy.update_node_columns(suid, nodes[['id', 'display_label', *net.NODE_LOOK]]
+                               .rename(columns={'id': 'name'}))
     with _mutate('restyle', f'{net.STYLE_PRESETS[preset]["label"]}, width by {width_source}, '
                  f'literature {"weighted" if literature_weighted else "unweighted"}, '
-                 f'BioGRID {biogrid_scope}: {len(changed)} edge(s) changed', actor=actor):
+                 f'BioGRID {biogrid_scope}, bait labels {bait_labels}: '
+                 f'{len(changed)} edge(s) changed', actor=actor):
         STATE['style'] = {'preset': preset, 'width_source': width_source,
-                          'literature_weighted': bool(literature_weighted), 'biogrid_scope': biogrid_scope}
+                          'literature_weighted': bool(literature_weighted),
+                          'biogrid_scope': biogrid_scope, 'bait_labels': bait_labels}
     return len(changed)
 
 
@@ -399,7 +407,7 @@ def _select(op, ids, detail, add=False, actor='gui'):
 
 
 def _resolve_ids(queries):
-    """Drawn node ids for a list of accessions or symbols; unknown names raise."""
+    """Drawn node ids for a list of ids, accessions or symbols; unknown names raise."""
     if not queries:
         raise ValueError("no nodes named; clear_selection deselects everything")
     nodes = STATE['nodes']
@@ -407,7 +415,7 @@ def _resolve_ids(queries):
 
 
 def select_nodes(ids, add=False, actor='gui'):
-    """Make these nodes (accessions or symbols) the Cytoscape selection; ``add`` keeps
+    """Make these nodes (ids, accessions or symbols) the Cytoscape selection; ``add`` keeps
     what is already selected.  Returns the resolved ids."""
     _net()
     chosen = _resolve_ids(ids)

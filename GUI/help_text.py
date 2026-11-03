@@ -75,6 +75,7 @@ TOOLTIPS = {
     "cy_baits": "Baits whose networks to draw. Leave empty to draw every bait in the dataset.",  # tooltip
     "cy_prey_prey": "Also draw grey edges between preys that BioGRID reports as interacting, so complexes show as clusters.",  # tooltip
     "cy_labels": "Which node names to draw. Baits only keeps large networks readable; click a node in Cytoscape to see its name.",  # tooltip
+    "cy_bait_labels": "What a bait label reads: its experiment name, which keeps two tagged constructs of one protein apart, or its gene symbol. Apply Style relabels the drawn network in place.",  # tooltip
     "cy_layout": "The Cytoscape layout algorithm applied when the network is sent. You can re-layout in Cytoscape afterward.",  # tooltip
     "cy_send": "Build the network passing the thresholds and draw it in Cytoscape, replacing the previous ProxiMate network.",  # tooltip
     "cy_rethreshold": "Hide edges that fail the current thresholds without redrawing, so your hand layout survives. Loosening needs a new send.",  # tooltip
@@ -96,10 +97,10 @@ TOOLTIPS = {
     "cy_corum_min_members": "A complex draws only when at least this many of its subunits are in the network.",  # tooltip
     "cy_corum_min_fraction": "A complex draws only when one bait, counted with its preys, covers at least this share of the complex's full membership. 0.5 means half the subunits.",  # tooltip
     "cy_style_preset": "A base look for the network. Picking one also sets the send options it is designed for (edges, width, layout); Send draws with both, Apply Style recolors the drawn network in place.",  # tooltip
-    "cy_restyle": "Apply the style preset, edge width, BioGRID scope and publication weighting to the drawn network as a style update. Nothing moves and clustered nodes keep their colors; adding prey-prey or complex edges needs a new send.",  # tooltip
+    "cy_restyle": "Apply the style preset, bait labels, edge width, BioGRID scope and publication weighting to the drawn network as a style update. Nothing moves and clustered nodes keep their colors; adding prey-prey or complex edges needs a new send.",  # tooltip
     "cy_select_loners": "With exactly one bait selected in Cytoscape, select it with the preys whose only visible neighbor of any kind it is, so the group drags as one.",  # tooltip
     "cy_select_satellites": "With exactly one bait selected, select it with its own preys and the two-bait preys that currently sit nearer to it than to their other bait.",  # tooltip
-    "cy_rel_seed": "The bait or protein the relation starts from, by name or UniProt accession, as drawn in Cytoscape.",  # tooltip
+    "cy_rel_seed": "The bait or protein the relation starts from, by experiment name, gene symbol or UniProt accession. A gene or accession shared by two drawn baits fails with both names; type the experiment name then.",  # tooltip
     "cy_rel_kind": "Interactors and singletons need a bait seed. Partners are BioGRID or complex neighbors of any node. Co-complex members need the CORUM layer drawn.",  # tooltip
     "cy_rel_cuts": "Optional cuts on the relation: SAINT, BFDR and abundance apply to interactors, publications to BioGRID partners. Leave blank for no cut.",  # tooltip
     "cy_rel_replace": "Make the related nodes the Cytoscape selection.",  # tooltip

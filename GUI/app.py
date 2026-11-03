@@ -488,6 +488,8 @@ app_ui = ui.page_navbar(
                                 choices={key: preset["label"] for key, preset in STYLE_PRESETS.items()}),
                 ui.input_select("cy_labels", tip("Labels", "cy_labels"),
                                 choices={"all": "All nodes", "baits": "Baits only", "none": "None"}),
+                ui.input_select("cy_bait_labels", tip("Bait labels", "cy_bait_labels"),
+                                choices={"experiment": "Experiment name", "gene": "Gene symbol"}),
                 ui.input_select("cy_layout", tip("Layout", "cy_layout"),
                                 choices=["force-directed", "kamada-kawai", "circular", "grid",
                                          "hierarchical", "degree-circle"]),
@@ -2419,6 +2421,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         cutoffs = thresholds()
         options = dict(baits=list(input.cy_baits.get() or []), prey_prey=input.cy_prey_prey.get(),
                        biogrid_path=biogrid_path, label_policy=input.cy_labels.get(),
+                       bait_labels=input.cy_bait_labels.get(),
                        layout=input.cy_layout.get(), width_source=input.cy_edge_width.get(),
                        literature_weighted=input.cy_lit_weighted.get(),
                        biogrid_scope=input.cy_biogrid_scope.get(), corum_path=corum_path,
@@ -2448,7 +2451,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def cy_restyle():
         changed = cy_call("apply the style", cytoscape_ctl.restyle, input.cy_style_preset.get(),
                           input.cy_edge_width.get(), input.cy_lit_weighted.get(),
-                          input.cy_biogrid_scope.get())
+                          input.cy_biogrid_scope.get(), input.cy_bait_labels.get())
         if changed is not None:
             notify(f"Style applied: {changed} edge(s) changed.")
 
