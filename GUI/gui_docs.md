@@ -102,8 +102,8 @@ Ontology terms (cellular component, biological process, molecular function) and 
 sequence features (motifs, regions, repeats, compositions, domains). *Run Feature
 Enrichment* computes the table under the progress modal and writes `Feature_enrichment.csv` into the dataset directory; the
 heatmap shows the top features of one feature type (feature names wrap onto two lines
-and end in "..." past that; the figure grows with the number of features; past 40 baits
-every n-th bait is labelled), and the table can be downloaded with p-value
+and end in "..." past that; the figure grows with the number of features; when the bait
+labels don't all fit the plot's width, every n-th bait is labelled), and the table can be downloaded with p-value
 and enrichment cutoffs. The download carries each feature's full name and, for Gene
 Ontology terms, its GO id.
 
