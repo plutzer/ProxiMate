@@ -297,11 +297,16 @@ def complex_pairs(node_ids, bait_preys, corum_path, min_members=3, min_fraction=
     return frame, {u: ';'.join(names) for u, names in membership.items()}
 
 
+def check_bait_labels(bait_labels):
+    """``bait_labels``, which must be one of BAIT_LABELS."""
+    if bait_labels not in BAIT_LABELS:
+        raise ValueError(f"unknown bait_labels {bait_labels!r}; expected one of {', '.join(BAIT_LABELS)}")
+    return bait_labels
+
+
 def bait_names(nodes, bait_labels):
     """Each node's label text: a bait's experiment name or gene symbol, a prey's symbol."""
-    if bait_labels not in BAIT_LABELS:
-        raise ValueError(f"unknown bait labels {bait_labels!r}; expected one of {', '.join(BAIT_LABELS)}")
-    if bait_labels == 'gene':
+    if check_bait_labels(bait_labels) == 'gene':
         return nodes['symbol']
     return nodes['id'].where(nodes['role'] == 'bait', nodes['symbol'])
 

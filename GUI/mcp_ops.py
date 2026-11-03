@@ -266,12 +266,6 @@ def _validate_preset(preset):
     return preset
 
 
-def _validate_bait_labels(bait_labels):
-    if bait_labels not in cytoscape_net.BAIT_LABELS:
-        raise ValueError(f"bait_labels must be one of {cytoscape_net.BAIT_LABELS}")
-    return bait_labels
-
-
 @register('read', "The style presets a network can be drawn or restyled with, and the send options each pairs with.",
           tags=('cytoscape', 'style', 'preset', 'look'))
 def cytoscape_list_style_presets() -> dict:
@@ -334,7 +328,7 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
         raise ValueError(f"width_source must be one of {cytoscape_net.EDGE_WIDTH_SOURCES}")
     if label_policy not in cytoscape_net.LABEL_POLICIES:
         raise ValueError(f"label_policy must be one of {cytoscape_net.LABEL_POLICIES}")
-    _validate_bait_labels(bait_labels)
+    cytoscape_net.check_bait_labels(bait_labels)
     if biogrid_scope not in cytoscape_net.BIOGRID_SCOPES:
         raise ValueError(f"biogrid_scope must be one of {cytoscape_net.BIOGRID_SCOPES}")
     dataset_path = backend.dataset_dir(dataset)
@@ -385,7 +379,7 @@ def cytoscape_restyle(preset: str = None, width_source: str = 'abundance',
     preset = style['preset'] if preset is None else preset
     bait_labels = style['bait_labels'] if bait_labels is None else bait_labels
     changed = ctl.restyle(_validate_preset(preset), width_source, literature_weighted,
-                          biogrid_scope, _validate_bait_labels(bait_labels), actor=ACTOR)
+                          biogrid_scope, bait_labels, actor=ACTOR)
     return {'changed': int(changed), 'network': _json(_network())}
 
 

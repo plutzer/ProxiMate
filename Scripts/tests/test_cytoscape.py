@@ -663,7 +663,7 @@ def test_bait_labels_switch_in_place_and_keep_hidden_labels_hidden(controlled, c
     ctl.STATE['nodes']['display_label'] = ''              # drawn with label_policy none
     ctl.restyle('abundance_weighted', 'abundance', False, 'all', bait_labels='experiment')
     assert set(_last(cytoscape['calls'], 'nodes')[0]['display_label']) == {''}
-    with pytest.raises(ValueError, match='bait labels'):
+    with pytest.raises(ValueError, match='bait_labels'):
         ctl.restyle('abundance_weighted', 'abundance', False, 'all', bait_labels='name')
 
 
