@@ -212,3 +212,10 @@
     top: 0;
     background: #fff;
 }
+
+/* shinywidgets hides a widget output with an inline visibility style while it has no
+   value, which hides Shiny's busy spinner with it; keep a recalculating one visible so
+   its spinner shows.  Shiny's own rule for htmlwidgets outputs does the same. */
+[data-shiny-busy-spinners] .recalculating.shiny-ipywidget-output {
+    visibility: inherit !important;
+}
