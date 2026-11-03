@@ -379,7 +379,7 @@ def build(df, thresholds, baits=None, prey_prey=True, biogrid_path=None, label_p
                           'target': passing['First_ID'].astype(str).to_numpy(),
                           'accession': passing[bait_col].astype(str).to_numpy()})
     edges['interaction'] = 'proximity'
-    for col in (*CYTOSCAPE_ATTRS, 'AvgSpec', 'Multivalidated'):
+    for col in (*CYTOSCAPE_ATTRS, 'Multivalidated'):
         if col in passing.columns:
             edges[col] = passing[col].to_numpy()
     edges = edges[edges['target'] != edges['accession']].drop(columns='accession')

@@ -167,6 +167,15 @@ def test_cytoscape_edges_preygene_fallback(human_scores):
     assert 'G1;G1b' in out['target'].values
 
 
+def test_cytoscape_edges_carry_spectral_count_abundance(human_scores):
+    """SAINTexpress's spectral-count build writes AvgSpec where the intensity build
+    writes AvgIntensity."""
+    spc = human_scores.rename(columns={'AvgIntensity': 'AvgSpec'})
+    out = build_cytoscape_edges(spc, THRESHOLDS)
+    assert list(out.columns) == ['source', 'target', 'SaintScore', 'BFDR', 'FoldChange',
+                                 'WD', 'WDFDR', 'AvgSpec', 'In.BioGRID']
+
+
 # --------------------------------------------------------- build_gene_list
 
 def test_gene_list_pooled(human_scores):

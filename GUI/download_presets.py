@@ -117,7 +117,7 @@ _SAINT_INPUT_FILES = (
 # Edge attributes offered to Cytoscape, in output order; limited to those
 # present in the dataset.
 CYTOSCAPE_ATTRS = ('SaintScore', 'BFDR', 'FoldChange', 'WD', 'WDFDR',
-                   'AvgIntensity', 'In.BioGRID')
+                   'AvgIntensity', 'AvgSpec', 'In.BioGRID')
 
 PRESETS = {p.key: p for p in (
     Preset('ed', 'Experimental Design', 'table', ('ED.csv',),
