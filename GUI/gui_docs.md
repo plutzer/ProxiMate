@@ -53,18 +53,24 @@ select says which file the format needs and which of its columns are read, and
 *Download ED template* writes an experimental design CSV with the expected header
 (Experiment Name, Type, Bait, Replicate, Bait ID, Group) and two example rows: one row
 per experiment, with T for a test bait or C for a control, the bait and replicate, and
-optionally the bait's UniProt ID and a control group. The design table is editable
-before parsing and the edited table is what gets parsed. *Parse Data* writes the SAINT
-and CompPASS inputs, adds the dataset to the table and makes it active. When it
-finishes, a summary strip under the button gives the experiment, control, prey and
-interaction counts and a *Score now* button that jumps to the Score card.
+optionally the bait's UniProt ID and a control group. *Download example dataset* saves a
+zip with a small Human Cell Map subset (Go et al. 2021) to try the workflow on: a MaxQuant
+proteinGroups.txt with Intensity, LFQ and MS/MS count columns and its ED.csv, covering
+eight baits from different compartments (COIL, LMNA, NUP50, SEC61B, LAMP1, PEX14,
+COX4I1, RAB5A) with two replicates each and twelve BirA-FLAG and GFP control runs. The
+design table is editable before parsing and the edited table is what gets parsed.
+*Parse Data* writes the SAINT and CompPASS inputs, adds the dataset to the table and
+makes it active. When it finishes, a summary strip under the button gives the
+experiment, control, prey and interaction counts.
 
-**Step 2 — Score** scores the active dataset (its name is in the card header) and picks
-the organism, the imputation method for missing control values (AFT imputation applies
-to intensity data; a spectral-count dataset offers Default only), how π is estimated
-(imputation 2 only), the sigma floor's minimum observation count (imputation 2 and 3;
-default 4, 0 disables it), the number of WDFDR permutations, and for human data whether
-Human Cell Map evidence is excluded from BioGRID. *Score Data* runs SAINTexpress and
+**Step 2 — Score** scores the dataset named in its *Dataset to score* select. The select
+follows the active dataset (and a newly parsed one); picking another dataset there changes
+only what gets scored, not the active dataset. The card also picks the organism, the
+imputation method for missing control values (AFT imputation applies to intensity data;
+a spectral-count dataset offers Default only), how π is estimated (imputation 2 only),
+the sigma floor's minimum observation count (imputation 2 and 3; default 4, 0 disables
+it), the number of WDFDR permutations, and for human data whether Human Cell Map
+evidence is excluded from BioGRID. *Score Data* runs SAINTexpress and
 CompPASS, then annotates the result; the row's State becomes `scored`.
 
 Parsing, scoring, feature enrichment and sending to Cytoscape each run under a progress

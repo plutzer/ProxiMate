@@ -13,6 +13,7 @@ from ed_exceptions import ProxiMateError
 import parse
 import subprocess
 import zipfile
+import io
 import tempfile
 import datetime
 import shutil
@@ -56,6 +57,7 @@ MCP_ADD_COMMANDS = {
 }
 
 STYLESHEET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "www", "proximate.css")
+EXAMPLE_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "example_data")
 
 # The sidebar layout's main pane is the scroll container, so a page tab opened while
 # scrolled down would start mid-page.  Only the navbar's tabs reset it: a tab set inside
@@ -142,9 +144,14 @@ app_ui = ui.page_navbar(
                             col_widths=[4, 8]
                         ),
                         ui.output_ui("format_note"),
-                        ui.tooltip(ui.download_button("ed_template", "Download ED template",
-                                                      class_="btn-sm btn-outline-secondary mb-3"),
-                                   TOOLTIPS["ed_template"]),
+                        ui.div(
+                            ui.tooltip(ui.download_button("ed_template", "Download ED template",
+                                                          class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["ed_template"]),
+                            ui.tooltip(ui.download_button("example_data", "Download example dataset",
+                                                          class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["example_data"]),
+                            class_="d-flex gap-2 mb-3"),
                         ui.panel_conditional(
                             "input.input_format === 'MaxQuant'",
                             ui.layout_columns(
@@ -231,7 +238,9 @@ app_ui = ui.page_navbar(
                     ui.card(
                         ui.card_header(
                             ui.span("Step 2 — Score", class_="step-title"),
-                            ui.span(ui.output_text("score_header", inline=True), class_="step-purpose")),
+                            ui.span("Scores a dataset with SAINT and CompPASS, then annotates it.",
+                                    class_="step-purpose")),
+                        ui.input_select("score_dataset", tip("Dataset to score", "score_dataset"), choices=[]),
                         # Organism selection for annotation databases.
                         # To add a new organism, add a choice here and sync with
                         # ORGANISMS config in Scripts/annotator.py and setup_datasets.py
@@ -838,6 +847,14 @@ def server(input: Inputs, output: Outputs, session: Session):
         yield "RUVBL1_1,T,RUVBL1,1,Q9Y265,\n"
         yield "GFP_1,C,GFP,1,None,\n"
 
+    @render.download(filename="proximate_example_HCM.zip")
+    def example_data():
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for name in ("proteinGroups.txt", "ED.csv"):
+                zf.write(os.path.join(EXAMPLE_DATA, name), name)
+        yield buffer.getvalue()
+
     @render.ui
     def parse_summary():
         row = last_parse.get()
@@ -848,10 +865,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         return ui.div(
             ui.span(f"Parsed '{row['Dataset Name']}':", class_="fw-semibold"),
             *[ui.span(f"{row[key]} {label}", class_="badge text-bg-light") for key, label in counts],
-            ui.tags.button("Score now", type="button", class_="btn btn-sm btn-primary ms-auto",
-                           onclick="document.getElementById('score_card').scrollIntoView("
-                                   "{behavior: 'smooth', block: 'start'}); "
-                                   "document.getElementById('score_data').focus();"),
             class_="parse-summary")
 
     @reactive.calc
@@ -901,6 +914,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         if current not in names:
             current = names[0] if names else None
         ui.update_select("active_dataset", choices=names, selected=current)
+        scoring = input.score_dataset()
+        ui.update_select("score_dataset", choices=names,
+                         selected=scoring if scoring in names else current)
 
     @reactive.effect
     @reactive.event(input.render_datasets_cell_selection)
@@ -1225,6 +1241,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             # Make the new dataset active. The choices are passed here too because the
             # polled refresh of the select has not run yet.
             ui.update_select("active_dataset", choices=dataset_store.names(), selected=dataset_name)
+            ui.update_select("score_dataset", choices=dataset_store.names(), selected=dataset_name)
             # A file input cannot be reset from the server; the name and grids can.
             ui.update_text("dataset_name", value="")
             saint_baits.set(EMPTY_BAITS)
@@ -1330,16 +1347,23 @@ def server(input: Inputs, output: Outputs, session: Session):
                    duration=None)
 
 
-    @render.text
-    def score_header():
-        if not active():
-            return "Scoring: no dataset in the session yet."
-        return f"Scoring: {active()} with SAINT and CompPASS, then annotating it."
+    # The Score card names its own dataset; it follows the active dataset until the
+    # user picks another one there.
+    @reactive.calc
+    def score_target():
+        """The Score card's dataset, or None while it names nothing in the store."""
+        name = input.score_dataset()
+        return name if name and name in available_datasets() else None
 
     @reactive.effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(input.active_dataset)
+    def follow_active_dataset():
+        ui.update_select("score_dataset", choices=available_datasets(), selected=active())
+
+    @reactive.effect
+    @reactive.event(input.score_dataset, datasets)
     def update_imputation_choices():
-        dataset = active()
+        dataset = score_target()
         if not dataset:
             return
         choices = backend.imputation_choices(dataset_store.row(dataset)['Quant Type'])
@@ -1349,15 +1373,15 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_radio_buttons("imputation_method", choices=choices, selected=selected)
 
     @reactive.effect
-    @reactive.event(input.active_dataset, input.imputation_method, input.pi_method)
+    @reactive.event(input.score_dataset, input.imputation_method, input.pi_method)
     def update_pi_bait_choices():
-        """Populate pi_bait dropdown from the active dataset's saved ED,
+        """Populate pi_bait dropdown from the Score card dataset's saved ED,
         filtered to control baits with >= 3 replicates."""
         if str(input.imputation_method.get()) != "2":
             return
         if input.pi_method.get() != "single_bait":
             return
-        dataset = active()
+        dataset = score_target()
         if not dataset:
             ui.update_select("pi_bait", choices=[])
             return
@@ -1382,7 +1406,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.score_data)
     def score_data():
-        dataset_name = active()
+        dataset_name = score_target()
         if not dataset_name:
             notify("Parse a dataset first.", type="error")
             return

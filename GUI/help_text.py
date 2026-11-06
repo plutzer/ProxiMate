@@ -30,11 +30,13 @@ TOOLTIPS = {
     "fragpipe_file": "The combined_protein.tsv table from a FragPipe output folder.",  # tooltip
     "msstats_file": "The ProteinLevelData.csv table exported by MSstats after summarization.",  # tooltip
     "ed_template": "A CSV with the experimental design header and two example rows to fill in.",  # tooltip
+    "example_data": "A zip with a small Human Cell Map subset (Go et al. 2021) in MaxQuant format: proteinGroups.txt and its ED.csv, 8 baits from different compartments and 12 control runs. Parse it as MaxQuant with any quant type, then score it.",  # tooltip
     "ed_file": "CSV describing your experiments. Columns: Experiment Name, Type (T = test, C = control), Bait, Replicate, Bait ID. Optional Group column pairs tests with controls; controls may list several groups or * for all.",  # tooltip
     "ed_file_msstats": "Same experimental design CSV, but each Experiment Name must match an originalRUN value in ProteinLevelData.csv.",  # tooltip
     "saint_bait": "SAINT bait.txt: one row per experiment - experiment name, bait name, and T (test) or C (control).",  # tooltip
     "saint_prey": "SAINT prey.txt: one row per protein - protein ID, sequence length, and gene name.",  # tooltip
     "saint_interaction": "SAINT interaction.txt: one row per protein per experiment - experiment name, bait, prey, and quantity.",  # tooltip
+    "score_dataset": "The dataset Score Data scores. It follows the active dataset; picking another one here changes only what gets scored.",  # tooltip
     "organism": "The species your samples came from. Chooses which annotation databases (BioGRID, UniProt, HPA, CORUM) are used for annotation and enrichment.",  # tooltip
     "exclude_hcm": "Annotate against a BioGRID copy with all Human Cell Map (Go et al. 2021) evidence removed. HCM is itself a BioID screen, so it makes proximity-labeling hits look more 'known' than they are. Interactions with other evidence are kept.",  # tooltip
     "imputation_method": "How missing control values are filled in before SAINT scoring. Default = no fill-in; the AFT options model the chance an intensity is missing because it fell below detection, so they apply to intensity data only. Use Default for MSstats input.",  # tooltip
@@ -154,10 +156,10 @@ SECTIONS = {
     "Data & Scoring": [
         "dataset_name", "input_format", "quant_type", "pg_file", "diann_matrix_file",
         "pioneer_matrix_file", "fragpipe_file", "msstats_file", "ed_file", "ed_file_msstats",
-        "saint_bait", "saint_prey", "saint_interaction", "organism", "exclude_hcm",
+        "saint_bait", "saint_prey", "saint_interaction", "score_dataset", "organism", "exclude_hcm",
         "imputation_method", "pi_method", "pi_bait", "aft_min_obs", "wdfdr_iterations",
         "delete_dataset", "rename_dataset", "clear_datasets", "download_session", "session_file",
-        "ed_template",
+        "ed_template", "example_data",
     ],
     "Quality Control": [
         "pca_imputation", "pca_normalization",
