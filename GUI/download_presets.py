@@ -11,6 +11,7 @@ varies by organism (HPA/CORUM are human-only) and by pipeline options.
 """
 
 import os
+import re
 import zipfile
 from dataclasses import dataclass
 from typing import Sequence
@@ -23,6 +24,13 @@ from log_config import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_CUSTOM_COLUMNS = ["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"]
+
+
+def safe_filename(*parts, ext):
+    """The non-empty ``parts`` joined by '_', with each run of characters other than
+    letters, digits, '.' and '-' made one '_': ('HCM', 'COIL (BirA-FLAG)') -> 'HCM_COIL_BirA-FLAG.ext'."""
+    stem = re.sub(r'[^A-Za-z0-9.-]+', '_', '_'.join(str(p) for p in parts if p not in (None, '')))
+    return f"{stem.strip('_')}.{ext}"
 
 
 @dataclass(frozen=True)

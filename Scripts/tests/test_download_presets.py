@@ -12,7 +12,7 @@ from download_presets import (DEFAULT_CUSTOM_COLUMNS, PRESETS, ColumnGroup,
                               build_custom_table, build_cytoscape_edges,
                               build_enrichment_table, build_gene_list,
                               build_prohits_table, effective_selection,
-                              resolve_columns, saint_input_files,
+                              resolve_columns, safe_filename, saint_input_files,
                               write_gene_list)
 
 # Thresholds where every score family participates; row 3 has WDFDR NaN.
@@ -270,3 +270,8 @@ def test_effective_selection_falls_back_to_defaults(preset, selected):
 
 def test_effective_selection_preset_without_groups():
     assert effective_selection(PRESETS['cytoscape'], ['identifiers']) == []
+
+
+def test_safe_filename_joins_parts_and_replaces_unsafe_characters():
+    assert safe_filename("HCM", "COIL (BirA-FLAG)", "volcano", ext="png") == "HCM_COIL_BirA-FLAG_volcano.png"
+    assert safe_filename("HCM", "", None, "det0.5", ext="png") == "HCM_det0.5.png"

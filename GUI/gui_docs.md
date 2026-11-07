@@ -20,14 +20,17 @@ scores (Quality Control's metrics and table, Feature Enrichment, Compare Baits,
 Cytoscape) show "'{name}' is parsed but not scored" instead of their controls while the
 active dataset is only parsed; with no dataset at all, every tab says to parse one.
 
-Below it, four sliders set the score thresholds every tab reads: SAINT score (higher is
-better), BFDR (lower is stricter), CompPASS WD score (higher is better; 0 disables), and
-WDFDR (lower is stricter; 1 disables). An interaction passes only when it clears all
-four. Three preset buttons set all four at once: *SAINT only* (SAINT ≥ 0.9, BFDR ≤ 0.05,
-WDFDR off), *WDFDR only* (WDFDR ≤ 0.05, SAINT off) and *Both* (SAINT ≥ 0.9, BFDR ≤ 0.05,
-WDFDR ≤ 0.05); WD stays at 0 in all three. The button whose values the sliders hold is
-highlighted. The sliders start at *SAINT only*. A warning appears when the active
-dataset was scored with 0 WDFDR iterations and the WDFDR slider is below 1, because such
+Below it, four number boxes set the score thresholds every tab reads: SAINT score (higher
+is better), BFDR (lower is stricter), CompPASS WD score (higher is better; 0 disables), and
+WDFDR (lower is stricter; 1 disables). Each box has a slider under it; a typed value applies
+on Enter or when the box loses focus, a dragged slider when released. While a box is empty
+or outside the threshold's range, a message under the boxes names it and the outputs that
+read the thresholds stay empty. An interaction passes only when it clears all four. Three
+preset buttons set all four at once: *SAINT only* (SAINT ≥ 0.9, BFDR ≤ 0.05, WDFDR
+off), *WDFDR only* (WDFDR ≤ 0.05, SAINT off) and *Both* (SAINT ≥ 0.9, BFDR ≤ 0.05, WDFDR
+≤ 0.05); WD stays at 0 in all three. The button whose values the thresholds hold is
+highlighted. The thresholds start at *SAINT only*. A warning appears when the active
+dataset was scored with 0 WDFDR iterations and the WDFDR threshold is below 1, because such
 a dataset has no WDFDR values and nothing would pass.
 
 Two collapsed panels hold the commands that connect an agent (Claude Code or Codex CLI)
@@ -98,7 +101,9 @@ interaction passing the sidebar thresholds for the selected bait (or all baits):
 prey gene and UniProt ID, SAINT, BFDR, WD, WDFDR, fold change, abundance (AvgSpec or
 AvgIntensity), and the BioGRID and multivalidated flags, rounded to 3 decimals. The
 table filters and sorts, and *Download CSV* saves the same rows. Plots can be exported
-as PNG.
+as PNG; every plot and table download is named after the dataset and what it shows (bait,
+plot settings and, where they shape it, the thresholds), for example
+`HCM_COIL_BirA-FLAG_SAINT_scatter_SAINT0.9.png`.
 
 ## Feature Enrichment
 

@@ -69,7 +69,7 @@ TOOLTIPS = {
     "download_enrichment_threshold": "Keep features at least this many times more frequent in the network than expected by chance.",  # tooltip
     # ---- Compare Baits tab ----
     "comp_bait": "The bait whose interaction network forms this side of the comparison.",  # tooltip
-    "comp_use_shared": "Copy the sidebar's four thresholds into this network's sliders.",  # tooltip
+    "comp_use_shared": "Copy the sidebar's four thresholds into this network's threshold boxes.",  # tooltip
     "volcano_plot": "Compares prey abundance between the two baits: x = fold change, y = statistical confidence. Points far up and to either side differ most reliably.",  # tooltip
     "venn": "Counts of preys passing thresholds in only network A, only network B, or both.",  # tooltip
     "gene_lists": "The gene names behind each region of the Venn diagram, ready to copy into other tools.",  # tooltip

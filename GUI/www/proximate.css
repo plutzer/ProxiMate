@@ -11,13 +11,19 @@
 .sidebar .form-group {
     margin-bottom: 0.75rem;
 }
-.sidebar .irs {
-    white-space: nowrap;
+/* A threshold's slider sits directly under its number box. */
+.threshold-range {
+    display: block;
+    margin: -0.5rem 0 0.75rem;
 }
 .mcp-command {
     white-space: pre-wrap;
     word-break: break-all;
     font-size: 0.75em;
+}
+.threshold-error {
+    color: #b00020;
+    font-size: 0.9em;
 }
 .wdfdr-warning {
     color: #b35900;

@@ -33,7 +33,7 @@ from plot_exports import pca_plot_matplotlib, prey_pca_matplotlib, saint_scatter
 import download_presets as dp
 from download_presets import DEFAULT_CUSTOM_COLUMNS
 from help_text import tip, TOOLTIPS, FORMAT_NOTES
-from thresholds import PRESETS, SLIDERS, DEFAULT, NO_FILTER, preset_id, active_preset, describe
+from thresholds import PRESETS, SLIDERS, DEFAULT, NO_FILTER, preset_id, active_preset, describe, filename_tag
 import session_archive
 import backend
 import dataset_store
@@ -79,6 +79,18 @@ document.addEventListener('click', e => {
 document.addEventListener('show.bs.tooltip', e => {
   if (e.target.dataset.tooltipMuted) e.preventDefault();
 });
+document.addEventListener('input', e => {
+  if (e.target.matches('.threshold-range'))
+    document.getElementById(e.target.dataset.target).value = e.target.value;
+});
+document.addEventListener('change', e => {
+  if (e.target.matches('.threshold-range'))
+    document.getElementById(e.target.dataset.target).dispatchEvent(new Event('change', {bubbles: true}));
+});
+$(document).on('input change', 'input[type=number]', e => {
+  const range = document.querySelector(`.threshold-range[data-target="${e.target.id}"]`);
+  if (range && e.target.value !== '') range.value = e.target.value;
+});
 for (const event of ['mouseleave', 'focusout']) {
   document.addEventListener(event, e => {
     if (e.target.dataset) delete e.target.dataset.tooltipMuted;
@@ -92,11 +104,19 @@ EMPTY_BAITS = pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"
 EMPTY_ED = pd.DataFrame(columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID", "Group"])
 
 
-def threshold_sliders(prefix, values):
-    """The four cutoff sliders, with ids ``{prefix}_{suffix}``, starting at ``values``."""
-    return [ui.input_slider(f"{prefix}_{suffix}", tip(label, suffix), min=0.0, max=high,
-                            value=values[key], step=step)
-            for suffix, key, label, high, step in SLIDERS]
+def threshold_inputs(prefix, values):
+    """The four cutoffs, each a number box with id ``{prefix}_{suffix}`` and a slider
+    under it, starting at ``values``.  The slider is not a Shiny input: PAGE_SCRIPT
+    copies it into its box, which Shiny reads when the slider is released."""
+    controls = []
+    for suffix, key, label, high, step in SLIDERS:
+        box_id = f"{prefix}_{suffix}"
+        controls += [ui.input_numeric(box_id, tip(label, suffix), value=values[key],
+                                      min=0.0, max=high, step=step),
+                     ui.tags.input(type="range", class_="form-range threshold-range",
+                                   min=0.0, max=high, step=step, value=values[key],
+                                   data_target=box_id)]
+    return controls + [ui.output_ui(f"{prefix}_threshold_error")]
 
 
 app_ui = ui.page_navbar(
@@ -428,7 +448,7 @@ app_ui = ui.page_navbar(
             ui.card(
                 ui.card_header("Network A"),
                 ui.input_select("comp_bait_a", tip("Bait A", "comp_bait"), choices=[]),
-                *threshold_sliders("comp_a", DEFAULT),
+                *threshold_inputs("comp_a", DEFAULT),
                 ui.tooltip(ui.input_action_button("comp_use_shared_a", "Use shared thresholds",
                                                   class_="btn-sm btn-outline-secondary"),
                            TOOLTIPS["comp_use_shared"]),
@@ -436,7 +456,7 @@ app_ui = ui.page_navbar(
             ui.card(
                 ui.card_header("Network B"),
                 ui.input_select("comp_bait_b", tip("Bait B", "comp_bait"), choices=[]),
-                *threshold_sliders("comp_b", DEFAULT),
+                *threshold_inputs("comp_b", DEFAULT),
                 ui.tooltip(ui.input_action_button("comp_use_shared_b", "Use shared thresholds",
                                                   class_="btn-sm btn-outline-secondary"),
                            TOOLTIPS["comp_use_shared"]),
@@ -708,7 +728,7 @@ app_ui = ui.page_navbar(
                         ui.span(tip("Active dataset", "active_dataset"), " ",
                                 ui.output_ui("active_dataset_badge", inline=True)),
                         choices=[]),
-        *threshold_sliders("threshold", DEFAULT),
+        *threshold_inputs("threshold", DEFAULT),
         ui.output_ui("preset_buttons"),
         ui.output_ui("wdfdr_warning"),
         ui.accordion(
@@ -925,14 +945,34 @@ def server(input: Inputs, output: Outputs, session: Session):
         if rows:
             ui.update_select("active_dataset", selected=str(datasets().iloc[rows[0]]['Dataset Name']))
 
-    # The shared thresholds.  Sliders are addressed by prefix so the Compare Baits
-    # tab's two private sets reuse the same helpers.
+    # The shared thresholds.  Inputs are addressed by prefix so the Compare Baits
+    # tab's two private sets reuse the same helpers.  The number boxes accept any
+    # typed value: while a set holds an empty or out-of-range box, everything that
+    # reads it stops and the message under the set says why.
+    def threshold_problem(prefix):
+        values = {key: getattr(input, f"{prefix}_{suffix}")() for suffix, key, *_ in SLIDERS}
+        try:
+            return backend.validate_thresholds(values), None
+        except ValueError as e:
+            return None, str(e)
+
     def read_thresholds(prefix):
-        return {key: getattr(input, f"{prefix}_{suffix}")() for suffix, key, *_ in SLIDERS}
+        values, problem = threshold_problem(prefix)
+        req(problem is None)
+        return values
+
+    for _prefix in ("threshold", "comp_a", "comp_b"):
+        def _make_threshold_error(prefix):
+            @output(id=f"{prefix}_threshold_error")
+            @render.ui
+            def _error():
+                problem = threshold_problem(prefix)[1]
+                return ui.div(f"⚠ {problem}", class_="threshold-error") if problem else None
+        _make_threshold_error(_prefix)
 
     def set_thresholds(prefix, values):
         for suffix, key, *_ in SLIDERS:
-            ui.update_slider(f"{prefix}_{suffix}", value=values[key])
+            ui.update_numeric(f"{prefix}_{suffix}", value=values[key])
 
     @reactive.calc
     def thresholds():
@@ -944,7 +984,9 @@ def server(input: Inputs, output: Outputs, session: Session):
     # click would repeat a value the server has already seen and be dropped.
     @render.ui
     def preset_buttons():
-        current = active_preset(thresholds())
+        # Shown while a box is invalid too, so a preset can repair it.
+        values = threshold_problem("threshold")[0]
+        current = active_preset(values) if values else None
         return ui.div(
             *[ui.tooltip(ui.tags.button(
                   name, id=preset_id(name), type="button",
@@ -1591,7 +1633,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             return None
         return render.DataGrid(qc_results_frame(), filters=True, width="100%", height="400px")
 
-    @render.download_button(filename=lambda: f"{active_scored()}_passing_interactions.csv")
+    @render.download_button(filename=lambda: dp.safe_filename(
+        active_scored(), input.qc_bait(), "passing", filename_tag(thresholds()), ext="csv"))
     def download_qc_results():
         if not active_scored():
             notify("Score a dataset first.", type="error")
@@ -1600,8 +1643,19 @@ def server(input: Inputs, output: Outputs, session: Session):
         qc_results_frame().to_csv(path, index=False)
         return path
 
-    # Plot export download handlers (using matplotlib for PNG export)
-    @render.download_button(filename="pca_plot.png")
+    # Plot export download handlers (using matplotlib for PNG export).  Each filename
+    # names the dataset and the settings the plot was drawn with.
+    def pca_settings():
+        return (input.pca_imputation(), input.pca_normalization(),
+                f"det{input.pca_min_detection():g}")
+
+    def comparison_filename(kind, *extra):
+        return dp.safe_filename(active_scored(), input.comp_bait_a(), "vs", input.comp_bait_b(),
+                                kind, "A-" + filename_tag(read_thresholds("comp_a")),
+                                "B-" + filename_tag(read_thresholds("comp_b")), *extra, ext="png")
+
+    @render.download_button(filename=lambda: dp.safe_filename(
+        active(), "experiment_PCA", *pca_settings(), ext="png"))
     def download_pca_plot():
         dataset_name = active()
         if not dataset_name:
@@ -1617,7 +1671,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download_button(filename="prey_pca_plot.png")
+    @render.download_button(filename=lambda: dp.safe_filename(
+        active(), "prey_PCA", *pca_settings(), input.prey_pca_color(),
+        input.prey_pca_bait() if input.prey_pca_color() == "saint" else None, ext="png"))
     def download_prey_pca_plot():
         dataset_name = active()
         if not dataset_name:
@@ -1634,7 +1690,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download_button(filename="scatter_plot.png")
+    @render.download_button(filename=lambda: dp.safe_filename(
+        active_scored(), input.qc_bait(), "SAINT_scatter",
+        f"SAINT{thresholds()['SaintScore']:g}", ext="png"))
     def download_scatter_plot():
         dataset_name = active_scored()
         bait_selection = input.qc_bait.get()
@@ -1647,7 +1705,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download_button(filename="heatmap.png")
+    # Feature_enrichment.csv does not record the thresholds it was run at, so the
+    # heatmap's name leaves them out.
+    @render.download_button(filename=lambda: dp.safe_filename(
+        active_scored(), input.feature_type(), f"top{input.num_features() or 30}", "heatmap",
+        ext="png"))
     def download_heatmap():
         heatmap = feature_heatmap()
         if isinstance(heatmap, str):
@@ -1657,7 +1719,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         heatmap.savefig(filepath, dpi=150, bbox_inches='tight')
         return filepath
 
-    @render.download_button(filename="volcano_plot.png")
+    @render.download_button(filename=lambda: comparison_filename("volcano"))
     def download_volcano_plot():
         bait_a = input.comp_bait_a.get()
         bait_b = input.comp_bait_b.get()
@@ -1675,7 +1737,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download_button(filename="venn_diagram.png")
+    @render.download_button(filename=lambda: comparison_filename("venn"))
     def download_venn_diagram():
         bait_a = input.comp_bait_a.get()
         bait_b = input.comp_bait_b.get()
