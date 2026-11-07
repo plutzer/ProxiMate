@@ -128,12 +128,12 @@ TOOLTIPS = {
 # What each input format needs, shown under the format select and served with the
 # documentation.  Every format but SAINT also takes the experimental design CSV.
 FORMAT_NOTES = {
-    "MaxQuant": "Upload proteinGroups.txt from the combined/txt folder plus the experimental design CSV. Read: Majority protein IDs, Gene names, Reverse, Potential contaminant, and the Intensity, LFQ intensity or MS/MS count column of each experiment named in the design.",
-    "DIA-NN": "Upload report.pg_matrix.tsv plus the experimental design CSV. Read: Protein.Group, Protein.Names, Genes and one quantity column per run; the design's Experiment Name values must match the run column headers exactly. Intensity only.",
-    "Pioneer": "Upload protein_groups_wide.tsv from SearchDIA plus the experimental design CSV. Read: the protein group, gene and one quantity column per run, named by the MS file without its extension. Intensity only.",
-    "FragPipe": "Upload combined_protein.tsv plus the experimental design CSV. Read: Protein ID, Gene and each experiment's Intensity, MaxLFQ Intensity or Spectral Count column.",
-    "MSstats": "Upload ProteinLevelData.csv as exported by MSstats plus the experimental design CSV. Read: Protein, originalRUN and LogIntensities; each Experiment Name must match an originalRUN value. Already log2, normalized and imputed, so score with Imputation = Default.",
-    "SAINT": "Upload bait.txt, prey.txt and interaction.txt as SAINTexpress takes them (tab-separated, no header). The design is derived from bait.txt; bait protein IDs can be typed into the table before parsing.",
+    "MaxQuant": "Upload proteinGroups.txt from the combined/txt folder plus the experimental design CSV.",
+    "DIA-NN": "Upload report.pg_matrix.tsv plus the experimental design CSV.",
+    "Pioneer": "Upload protein_groups_wide.tsv from SearchDIA plus the experimental design CSV.",
+    "FragPipe": "Upload combined_protein.tsv plus the experimental design CSV.",
+    "MSstats": "Upload ProteinLevelData.csv as exported by MSstats plus the experimental design CSV. Score it with Imputation = Default: MSstats output is already imputed.",
+    "SAINT": "Upload bait.txt, prey.txt and interaction.txt as SAINTexpress takes them.",
 }
 
 

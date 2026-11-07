@@ -124,7 +124,7 @@ app_ui = ui.page_navbar(
     ui.nav_panel("Data & Scoring",
                  ui.layout_columns(
                     ui.card(
-                        ui.card_header("Datasets in this Session"),
+                        ui.card_header("Datasets"),
                         ui.output_data_frame("render_datasets"),
                         ui.div(
                             ui.tooltip(ui.input_action_button("delete_dataset", "Delete selected",
@@ -731,6 +731,9 @@ app_ui = ui.page_navbar(
                         ui.span(tip("Active dataset", "active_dataset"), " ",
                                 ui.output_ui("active_dataset_badge", inline=True)),
                         choices=[]),
+        ui.div(ui.strong("Score thresholds"),
+               ui.p("Set the cutoffs an interaction must pass. Every tab uses them.",
+                    class_="help-text mb-0")),
         *threshold_inputs("threshold", DEFAULT),
         ui.output_ui("preset_buttons"),
         ui.output_ui("wdfdr_warning"),
@@ -745,7 +748,7 @@ app_ui = ui.page_navbar(
                 "About and feedback",
                 ui.p("Your feedback is invaluable in helping us improve the tool.", class_="small"),
                 ui.tags.ul(
-                    ui.tags.li(ui.a("Report a bug", href="https://github.com/plutzer/ProxiMate/issues",
+                    ui.tags.li(ui.a("Report a bug or request a new feature", href="https://github.com/plutzer/ProxiMate/issues",
                                     target="_blank")),
                     ui.tags.li(ui.a("GitHub repository", href="https://github.com/plutzer/ProxiMate",
                                     target="_blank")),

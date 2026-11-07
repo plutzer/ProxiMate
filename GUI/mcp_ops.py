@@ -48,7 +48,7 @@ def _records(frame, limit=None):
 @register('read', "The datasets in the session with their input type, quant type and scored state.",
           tags=('list', 'session'))
 def list_datasets() -> dict:
-    """Every row of the "Datasets in this Session" table."""
+    """Every row of the "Datasets" table."""
     return {'datasets': _json(store.table().to_dict('records'))}
 
 

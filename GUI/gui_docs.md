@@ -6,7 +6,7 @@ then explore the scored network in the remaining tabs: *Data & Scoring*, *Qualit
 Control*, *Feature Enrichment*, *Compare Baits*, *Cytoscape* and *Export*. Every dataset is a directory
 under the output directory holding the SAINT inputs, `merged.csv` (SAINT and CompPASS
 scores), `annotated_scores.csv` (with BioGRID, UniProt, HPA and CORUM annotation),
-`proximate.log` and `run.json` (the run manifest). The "Datasets in this Session"
+`proximate.log` and `run.json` (the run manifest). The "Datasets"
 table on the Data & Scoring tab lists every dataset and its state. The sidebar names
 the **active dataset**, which every tab works on, and holds the four score thresholds
 every tab reads.
@@ -39,7 +39,7 @@ label sits at the bottom.
 
 ## Data & Scoring
 
-Four cards. The **Datasets in this Session** table lists every dataset with its input
+Four cards. The **Datasets** table lists every dataset with its input
 and quant type, experiment and control counts, its *State* (`parsed`, `scored`, or
 `enriched` once Feature Enrichment has been run), when it was scored and against which
 organism, and its imputation and WDFDR settings. Clicking a row makes that dataset
