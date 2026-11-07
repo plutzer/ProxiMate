@@ -46,6 +46,7 @@ TOOLTIPS = {
     "wdfdr_iterations": "Number of data shuffles used to estimate the WD score's false discovery rate (WDFDR). More iterations are slower but more stable; 0 skips WDFDR entirely.",  # tooltip
     "delete_dataset": "Removes the active dataset and every result in its directory, after a confirmation. A network drawn from it stays in Cytoscape.",  # tooltip
     "rename_dataset": "Gives the active dataset a new name everywhere: its directory, the session table, its run manifest and the drawn Cytoscape network.",  # tooltip
+    "duplicate_dataset": "Copies the active dataset under a new name, parsed again from its stored input. In the dialog you can leave out experiments (an outlier control, say) and edit Type, Bait, Replicate, Bait ID and Group. The copy starts unscored; the original is unchanged.",  # tooltip
     "clear_datasets": "Removes every dataset in this session, including results stored on the server. Download a session zip first if you want to keep them.",  # tooltip
     "download_session": "Saves every dataset in this session, with its results, as one zip you can restore later with Upload Session Zip.",  # tooltip
     "session_file": "A session zip downloaded earlier. Loading it replaces the current session with all of its datasets and results.",  # tooltip
@@ -158,7 +159,7 @@ SECTIONS = {
         "pioneer_matrix_file", "fragpipe_file", "msstats_file", "ed_file", "ed_file_msstats",
         "saint_bait", "saint_prey", "saint_interaction", "score_dataset", "organism", "exclude_hcm",
         "imputation_method", "pi_method", "pi_bait", "aft_min_obs", "wdfdr_iterations",
-        "delete_dataset", "rename_dataset", "clear_datasets", "download_session", "session_file",
+        "delete_dataset", "rename_dataset", "duplicate_dataset", "clear_datasets", "download_session", "session_file",
         "ed_template", "example_data",
     ],
     "Quality Control": [

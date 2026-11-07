@@ -9,6 +9,7 @@ import math
 import os
 
 import numpy as np
+import pandas as pd
 
 import backend
 import cytoscape_ctl as ctl
@@ -236,6 +237,28 @@ def rename_dataset(dataset: str, new_name: str) -> dict:
     """``new_name`` must be unused and use letters, digits and underscores only.
     Refused while a job runs on the dataset.  Returns the renamed row."""
     return _json(backend.rename_dataset(dataset, new_name, actor=ACTOR))
+
+
+@register('read', "A dataset's experimental design (ED.csv): one row per experiment with Type, Bait, Replicate, Bait ID.",
+          tags=('design', 'experimental design', 'ED', 'experiments', 'controls'))
+def dataset_design(dataset: str) -> dict:
+    """The rows of the dataset's ED.csv as written; edit them and pass them to
+    duplicate_dataset to parse a copy with a changed design."""
+    return _records(backend.dataset_design(dataset))
+
+
+@register('dataset', "Copy a parsed dataset under a new name, optionally leaving out experiments or editing its experimental design.",
+          tags=('duplicate', 'copy', 'experimental design', 'outlier', 'rescore'))
+def duplicate_dataset(dataset: str, new_name: str, design: list = None, leave_out: list = None) -> dict:
+    """Parses a new dataset from the input stored in ``dataset``'s directory.  ``design``
+    (rows as dataset_design returns them) replaces its experimental design; Type, Bait,
+    Replicate, Bait ID and Group may change, but experiment names must be the source's.
+    ``leave_out`` names experiments to drop, e.g. an outlier control.  The copy starts
+    unscored and the source is unchanged.  ``new_name`` must be unused and use letters,
+    digits and underscores only.  Returns the new row."""
+    frame = None if design is None else pd.DataFrame(design)
+    return _json(backend.duplicate_dataset(dataset, new_name, design=frame,
+                                           leave_out=leave_out or (), actor=ACTOR))
 
 
 @register('dataset', "Replace the whole session with the datasets in a session zip. Destructive; needs confirm=true.",

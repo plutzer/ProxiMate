@@ -133,6 +133,9 @@ app_ui = ui.page_navbar(
                             ui.tooltip(ui.input_action_button("rename_dataset", "Rename selected",
                                                               class_="btn-sm btn-outline-secondary"),
                                        TOOLTIPS["rename_dataset"]),
+                            ui.tooltip(ui.input_action_button("duplicate_dataset", "Duplicate selected",
+                                                              class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["duplicate_dataset"]),
                             ui.tooltip(ui.input_action_button("clear_datasets", "Clear All Datasets",
                                                               class_="btn-sm btn-outline-danger"),
                                        TOOLTIPS["clear_datasets"]),
@@ -1345,6 +1348,59 @@ def server(input: Inputs, output: Outputs, session: Session):
             notify(f"Renamed '{old}' to '{new}'.")
         except Exception as e:
             notify(f"Could not rename '{old}': {e}", type="error", duration=None, exc_info=True)
+
+    duplicate_source_design = reactive.Value(EMPTY_ED)
+
+    @render.data_frame
+    def duplicate_design():
+        return render.DataGrid(duplicate_source_design.get(), editable=True)
+
+    @reactive.effect
+    @reactive.event(input.duplicate_dataset)
+    def ask_duplicate():
+        name = active()
+        if not name:
+            notify("No dataset is active.", type="error")
+            return
+        try:
+            design = backend.dataset_design(name)
+        except Exception as e:
+            notify(f"Could not read the design of '{name}': {e}", type="error", duration=None,
+                   exc_info=True)
+            return
+        duplicate_source_design.set(design)
+        ui.modal_show(ui.modal(
+            ui.input_text("duplicate_to", "Name of the copy", value=f"{name}_copy"),
+            ui.input_selectize("duplicate_leave_out", "Leave out experiments",
+                               choices=design['Experiment Name'].astype(str).tolist(), multiple=True,
+                               width="100%"),
+            ui.p("Edit Type, Bait, Replicate, Bait ID or Group by double-clicking a cell. "
+                 "Experiment names must stay as they are.", class_="text-muted small"),
+            ui.output_data_frame("duplicate_design"),
+            title=f"Duplicate '{name}'", size="xl", easy_close=True,
+            footer=ui.div(
+                ui.modal_button("Cancel"),
+                ui.tags.button("Duplicate", type="button", class_="btn btn-primary ms-2",
+                               onclick="Shiny.setInputValue('confirm_duplicate', 1, {priority: 'event'})"))))
+
+    @reactive.effect
+    @reactive.event(input.confirm_duplicate)
+    def confirm_duplicate():
+        source, new = active(), input.duplicate_to.get().strip()
+        design, leave_out = duplicate_design.data_view(), list(input.duplicate_leave_out.get())
+        ui.modal_remove()
+
+        def work(progress):
+            return backend.duplicate_dataset(source, new, design=design, leave_out=leave_out,
+                                             actor='gui', progress=progress)
+
+        def done(row):
+            notify(f"Duplicated '{source}' as '{new}': {row['Experiments']} experiments, "
+                   f"{row['Controls']} controls.")
+            ui.update_select("active_dataset", choices=dataset_store.names(), selected=new)
+            ui.update_select("score_dataset", choices=dataset_store.names(), selected=new)
+
+        start_job(f"Duplicating {source}", new, backend.PARSE_STAGES, work, done)
 
     @reactive.effect
     @reactive.event(input.clear_datasets)

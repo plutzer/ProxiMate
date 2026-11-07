@@ -266,6 +266,23 @@ def test_delete_and_rename_are_dataset_ops_and_delete_needs_confirmation(scored)
     assert not scored.exists() and not (scored.parent / 'ds_b').exists()
 
 
+def test_duplicate_dataset_copies_with_a_changed_design(out_dir):
+    (out_dir / 'bait.txt').write_text("t1\tBaitA\tT\nt2\tBaitA\tT\nc1\tCtrl\tC\n")
+    (out_dir / 'prey.txt').write_text("P1\tG1\nP2\tG2\n")
+    (out_dir / 'interaction.txt').write_text("t1\tBaitA\tP1\t10\nt2\tBaitA\tP1\t12\nc1\tCtrl\tP2\t4\n")
+    backend.run_parse('src', 'SAINT', {k: str(out_dir / f'{k}.txt') for k in ('bait', 'prey', 'interaction')},
+                      'Spectral Counts')
+    assert {h['name'] for h in registry.search('duplicate')} >= {'duplicate_dataset'}
+    assert registry.OPS['duplicate_dataset'].mode == 'dataset'
+    assert registry.OPS['dataset_design'].mode == 'read'
+    design = registry.call('dataset_design', {'dataset': 'src'})['rows']
+    design[1]['Bait'] = 'BaitB'
+    row = registry.call('duplicate_dataset', {'dataset': 'src', 'new_name': 'src_b', 'design': design,
+                                              'leave_out': ['c1']})
+    assert (row['Experiments'], row['Controls']) == (2, 0) and store.names() == ['src', 'src_b']
+    assert "t2\tBaitB" in (out_dir / 'src_b' / 'interaction.txt').read_text()
+
+
 # --- cytoscape ops reach the controller with actor mcp ---------------------------------------
 
 @pytest.fixture

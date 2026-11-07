@@ -263,6 +263,54 @@ def test_delete_and_rename_refuse_a_busy_dataset(parsed):
     assert parsed.is_dir() and store.names() == ['ds1']
 
 
+# --- duplicate ----------------------------------------------------------------------
+
+def test_duplicate_leaves_out_experiments_and_leaves_the_source_alone(parsed):
+    before = _tree(parsed)
+    row = backend.duplicate_dataset('ds1', 'ds1_copy', leave_out=['t2'])
+    assert row['Experiments'] == 1 and row['Controls'] == 1 and row['Input Type'] == 'SAINT'
+    assert store.row('ds1_copy')['Scored'] == '' and _tree(parsed) == before
+    copy = parsed.parent / 'ds1_copy'
+    assert pd.read_csv(copy / 'ED.csv')['Experiment Name'].tolist() == ['t1', 'c1']
+    assert 't2' not in (copy / 'interaction.txt').read_text()
+
+
+def test_duplicate_applies_an_edited_design(parsed):
+    design = backend.dataset_design('ds1')
+    design.loc[design['Experiment Name'] == 't2', ['Type', 'Bait']] = ['C', 'Ctrl']
+    row = backend.duplicate_dataset('ds1', 'ds1_copy', design=design)
+    assert (row['Experiments'], row['Controls']) == (1, 2)
+    assert "t2\tCtrl\tP1\t12" in (parsed.parent / 'ds1_copy' / 'interaction.txt').read_text()
+
+
+@pytest.mark.parametrize("new, leave_out, message", [
+    ('ds1_copy', ['nope'], 'no experiment named nope'),
+    ('ds1_copy', ['t1', 't2', 'c1'], 'no experiments left'),
+    ('ds1', [], 'already'), ('bad name', [], 'spaces')])
+def test_duplicate_refuses_a_bad_name_or_leave_out(parsed, new, leave_out, message):
+    with pytest.raises(ValueError, match=message):
+        backend.duplicate_dataset('ds1', new, leave_out=leave_out)
+    assert store.names() == ['ds1']
+
+
+def test_duplicate_refuses_a_busy_source(parsed):
+    with backend._job('ds1', 'gui', 'score'):
+        with pytest.raises(backend.BusyError, match='score'):
+            backend.duplicate_dataset('ds1', 'ds1_copy')
+    assert store.names() == ['ds1']
+
+
+def test_duplicate_reparses_a_maxquant_dataset_from_its_stored_table(out_dir):
+    example = os.path.join(os.path.dirname(__file__), '..', '..', 'GUI', 'example_data')
+    files = {'pg': os.path.join(example, 'proteinGroups.txt'), 'ed': os.path.join(example, 'ED.csv')}
+    backend.run_parse('hcm', 'MaxQuant', files, 'Intensity')
+    store.update('hcm', **{'Input Type': 'DIA-NN'})
+    control = backend.dataset_design('hcm').query("Type == 'C'")['Experiment Name'].iloc[0]
+    row = backend.duplicate_dataset('hcm', 'hcm_copy', leave_out=[control])
+    assert (row['Experiments'], row['Controls']) == (16, 11)
+    assert store.row('hcm_copy')['Input Type'] == 'DIA-NN'
+
+
 def test_parse_returns_the_counts_it_wrote(out_dir):
     row = backend.run_parse('ds1', 'SAINT', _saint_files(out_dir), 'Spectral Counts')
     assert (row['n_preys'], row['n_interactions']) == (2, 4)
