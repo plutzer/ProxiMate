@@ -17,6 +17,8 @@ All-in-one GUI and scripts for analyzing proximity labeling data.
    session too; see [Agent access (MCP)](#agent-access-mcp).
 3. Access the GUI through a web browser at localhost:3838
 
+Step-by-step walkthroughs of the GUI are in the [tutorials](docs/tutorials/README.md).
+
 ### Running the docker container interactively (experienced users)
 The backend of the application can be accessed interactively by overriding the command to start the shiny app:
 1. Start the docker container interactively. In order to analyze files, you'll need to mount a directory to the container:
