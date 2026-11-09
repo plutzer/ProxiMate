@@ -30,11 +30,13 @@ TOOLTIPS = {
     "fragpipe_file": "The combined_protein.tsv table from a FragPipe output folder.",  # tooltip
     "msstats_file": "The ProteinLevelData.csv table exported by MSstats after summarization.",  # tooltip
     "ed_template": "A CSV with the experimental design header and two example rows to fill in.",  # tooltip
+    "example_data": "A zip with a small Human Cell Map subset (Go et al. 2021) in MaxQuant format: proteinGroups.txt and its ED.csv, 8 baits from different compartments and 12 control runs. Parse it as MaxQuant with any quant type, then score it.",  # tooltip
     "ed_file": "CSV describing your experiments. Columns: Experiment Name, Type (T = test, C = control), Bait, Replicate, Bait ID. Optional Group column pairs tests with controls; controls may list several groups or * for all.",  # tooltip
     "ed_file_msstats": "Same experimental design CSV, but each Experiment Name must match an originalRUN value in ProteinLevelData.csv.",  # tooltip
     "saint_bait": "SAINT bait.txt: one row per experiment - experiment name, bait name, and T (test) or C (control).",  # tooltip
     "saint_prey": "SAINT prey.txt: one row per protein - protein ID, sequence length, and gene name.",  # tooltip
     "saint_interaction": "SAINT interaction.txt: one row per protein per experiment - experiment name, bait, prey, and quantity.",  # tooltip
+    "score_dataset": "The dataset Score Data scores. It follows the active dataset; picking another one here changes only what gets scored.",  # tooltip
     "organism": "The species your samples came from. Chooses which annotation databases (BioGRID, UniProt, HPA, CORUM) are used for annotation and enrichment.",  # tooltip
     "exclude_hcm": "Annotate against a BioGRID copy with all Human Cell Map (Go et al. 2021) evidence removed. HCM is itself a BioID screen, so it makes proximity-labeling hits look more 'known' than they are. Interactions with other evidence are kept.",  # tooltip
     "imputation_method": "How missing control values are filled in before SAINT scoring. Default = no fill-in; the AFT options model the chance an intensity is missing because it fell below detection, so they apply to intensity data only. Use Default for MSstats input.",  # tooltip
@@ -44,6 +46,7 @@ TOOLTIPS = {
     "wdfdr_iterations": "Number of data shuffles used to estimate the WD score's false discovery rate (WDFDR). More iterations are slower but more stable; 0 skips WDFDR entirely.",  # tooltip
     "delete_dataset": "Removes the active dataset and every result in its directory, after a confirmation. A network drawn from it stays in Cytoscape.",  # tooltip
     "rename_dataset": "Gives the active dataset a new name everywhere: its directory, the session table, its run manifest and the drawn Cytoscape network.",  # tooltip
+    "duplicate_dataset": "Copies the active dataset under a new name, parsed again from its stored input. In the dialog you can leave out experiments (an outlier control, say) and edit Type, Bait, Replicate, Bait ID and Group. The copy starts unscored; the original is unchanged.",  # tooltip
     "clear_datasets": "Removes every dataset in this session, including results stored on the server. Download a session zip first if you want to keep them.",  # tooltip
     "download_session": "Saves every dataset in this session, with its results, as one zip you can restore later with Upload Session Zip.",  # tooltip
     "session_file": "A session zip downloaded earlier. Loading it replaces the current session with all of its datasets and results.",  # tooltip
@@ -67,7 +70,7 @@ TOOLTIPS = {
     "download_enrichment_threshold": "Keep features at least this many times more frequent in the network than expected by chance.",  # tooltip
     # ---- Compare Baits tab ----
     "comp_bait": "The bait whose interaction network forms this side of the comparison.",  # tooltip
-    "comp_use_shared": "Copy the sidebar's four thresholds into this network's sliders.",  # tooltip
+    "comp_use_shared": "Copy the sidebar's four thresholds into this network's threshold boxes.",  # tooltip
     "volcano_plot": "Compares prey abundance between the two baits: x = fold change, y = statistical confidence. Points far up and to either side differ most reliably.",  # tooltip
     "venn": "Counts of preys passing thresholds in only network A, only network B, or both.",  # tooltip
     "gene_lists": "The gene names behind each region of the Venn diagram, ready to copy into other tools.",  # tooltip
@@ -75,6 +78,7 @@ TOOLTIPS = {
     "cy_baits": "Baits whose networks to draw. Leave empty to draw every bait in the dataset.",  # tooltip
     "cy_prey_prey": "Also draw grey edges between preys that BioGRID reports as interacting, so complexes show as clusters.",  # tooltip
     "cy_labels": "Which node names to draw. Baits only keeps large networks readable; click a node in Cytoscape to see its name.",  # tooltip
+    "cy_bait_labels": "What a bait label reads: its experiment name, which keeps two tagged constructs of one protein apart, or its gene symbol. Apply Style relabels the drawn network in place.",  # tooltip
     "cy_layout": "The Cytoscape layout algorithm applied when the network is sent. You can re-layout in Cytoscape afterward.",  # tooltip
     "cy_send": "Build the network passing the thresholds and draw it in Cytoscape, replacing the previous ProxiMate network.",  # tooltip
     "cy_rethreshold": "Hide edges that fail the current thresholds without redrawing, so your hand layout survives. Loosening needs a new send.",  # tooltip
@@ -96,10 +100,10 @@ TOOLTIPS = {
     "cy_corum_min_members": "A complex draws only when at least this many of its subunits are in the network.",  # tooltip
     "cy_corum_min_fraction": "A complex draws only when one bait, counted with its preys, covers at least this share of the complex's full membership. 0.5 means half the subunits.",  # tooltip
     "cy_style_preset": "A base look for the network. Picking one also sets the send options it is designed for (edges, width, layout); Send draws with both, Apply Style recolors the drawn network in place.",  # tooltip
-    "cy_restyle": "Apply the style preset, edge width, BioGRID scope and publication weighting to the drawn network as a style update. Nothing moves and clustered nodes keep their colors; adding prey-prey or complex edges needs a new send.",  # tooltip
+    "cy_restyle": "Apply the style preset, bait labels, edge width, BioGRID scope and publication weighting to the drawn network as a style update. Nothing moves and clustered nodes keep their colors; adding prey-prey or complex edges needs a new send.",  # tooltip
     "cy_select_loners": "With exactly one bait selected in Cytoscape, select it with the preys whose only visible neighbor of any kind it is, so the group drags as one.",  # tooltip
     "cy_select_satellites": "With exactly one bait selected, select it with its own preys and the two-bait preys that currently sit nearer to it than to their other bait.",  # tooltip
-    "cy_rel_seed": "The bait or protein the relation starts from, by name or UniProt accession, as drawn in Cytoscape.",  # tooltip
+    "cy_rel_seed": "The bait or protein the relation starts from, by experiment name, gene symbol or UniProt accession. A gene or accession shared by two drawn baits fails with both names; type the experiment name then.",  # tooltip
     "cy_rel_kind": "Interactors and singletons need a bait seed. Partners are BioGRID or complex neighbors of any node. Co-complex members need the CORUM layer drawn.",  # tooltip
     "cy_rel_cuts": "Optional cuts on the relation: SAINT, BFDR and abundance apply to interactors, publications to BioGRID partners. Leave blank for no cut.",  # tooltip
     "cy_rel_replace": "Make the related nodes the Cytoscape selection.",  # tooltip
@@ -124,12 +128,12 @@ TOOLTIPS = {
 # What each input format needs, shown under the format select and served with the
 # documentation.  Every format but SAINT also takes the experimental design CSV.
 FORMAT_NOTES = {
-    "MaxQuant": "Upload proteinGroups.txt from the combined/txt folder plus the experimental design CSV. Read: Majority protein IDs, Gene names, Reverse, Potential contaminant, and the Intensity, LFQ intensity or MS/MS count column of each experiment named in the design.",
-    "DIA-NN": "Upload report.pg_matrix.tsv plus the experimental design CSV. Read: Protein.Group, Protein.Names, Genes and one quantity column per run; the design's Experiment Name values must match the run column headers exactly. Intensity only.",
-    "Pioneer": "Upload protein_groups_wide.tsv from SearchDIA plus the experimental design CSV. Read: the protein group, gene and one quantity column per run, named by the MS file without its extension. Intensity only.",
-    "FragPipe": "Upload combined_protein.tsv plus the experimental design CSV. Read: Protein ID, Gene and each experiment's Intensity, MaxLFQ Intensity or Spectral Count column.",
-    "MSstats": "Upload ProteinLevelData.csv as exported by MSstats plus the experimental design CSV. Read: Protein, originalRUN and LogIntensities; each Experiment Name must match an originalRUN value. Already log2, normalized and imputed, so score with Imputation = Default.",
-    "SAINT": "Upload bait.txt, prey.txt and interaction.txt as SAINTexpress takes them (tab-separated, no header). The design is derived from bait.txt; bait protein IDs can be typed into the table before parsing.",
+    "MaxQuant": "Upload proteinGroups.txt from the combined/txt folder plus the experimental design CSV.",
+    "DIA-NN": "Upload report.pg_matrix.tsv plus the experimental design CSV.",
+    "Pioneer": "Upload protein_groups_wide.tsv from SearchDIA plus the experimental design CSV.",
+    "FragPipe": "Upload combined_protein.tsv plus the experimental design CSV.",
+    "MSstats": "Upload ProteinLevelData.csv as exported by MSstats plus the experimental design CSV. Score it with Imputation = Default: MSstats output is already imputed.",
+    "SAINT": "Upload bait.txt, prey.txt and interaction.txt as SAINTexpress takes them.",
 }
 
 
@@ -153,10 +157,10 @@ SECTIONS = {
     "Data & Scoring": [
         "dataset_name", "input_format", "quant_type", "pg_file", "diann_matrix_file",
         "pioneer_matrix_file", "fragpipe_file", "msstats_file", "ed_file", "ed_file_msstats",
-        "saint_bait", "saint_prey", "saint_interaction", "organism", "exclude_hcm",
+        "saint_bait", "saint_prey", "saint_interaction", "score_dataset", "organism", "exclude_hcm",
         "imputation_method", "pi_method", "pi_bait", "aft_min_obs", "wdfdr_iterations",
-        "delete_dataset", "rename_dataset", "clear_datasets", "download_session", "session_file",
-        "ed_template",
+        "delete_dataset", "rename_dataset", "duplicate_dataset", "clear_datasets", "download_session", "session_file",
+        "ed_template", "example_data",
     ],
     "Quality Control": [
         "pca_imputation", "pca_normalization",

@@ -90,7 +90,9 @@ def test_a_prey_that_is_also_a_bait_keeps_one_bait_node(scores):
     nodes, _ = cn.build(scores, PASSING, prey_prey=False)
 
     assert (nodes['accession'] == 'PA').sum() == 1
-    assert nodes.set_index('id').loc['BaitA', 'symbol'] == 'BaitA'
+    by_id = nodes.set_index('id')
+    assert by_id.loc['BaitA', 'symbol'] == 'GA'
+    assert by_id.loc['BaitB', 'symbol'] == 'BaitB'      # PB has no gene in the scores
 
 
 def test_two_constructs_of_one_protein_stay_separate_baits(scores):
@@ -130,8 +132,17 @@ def test_label_policies(scores, policy, expected):
     assert set(nodes['display_label']) == expected
 
 
+@pytest.mark.parametrize('policy, expected', [
+    ('all', {'GA', 'G1', 'G2'}), ('baits', {'GA', ''}), ('none', {''})])
+def test_gene_bait_labels_show_the_bait_gene(scores, policy, expected):
+    nodes, _ = cn.build(scores, PASSING, baits=['BaitA'], prey_prey=False, label_policy=policy,
+                        bait_labels='gene')
+
+    assert set(nodes['display_label']) == expected
+
+
 @pytest.mark.parametrize('kwargs', [
-    {'label_policy': 'some'}, {'width_source': 'Entropy'}, {'preset': 'neon'}])
+    {'label_policy': 'some'}, {'width_source': 'Entropy'}, {'preset': 'neon'}, {'bait_labels': 'name'}])
 def test_an_unknown_option_raises(scores, kwargs):
     with pytest.raises(ValueError):
         cn.build(scores, PASSING, prey_prey=False, **kwargs)
@@ -403,7 +414,7 @@ def test_the_selection_table_names_targets_and_rounds_scores(drawn):
     table = cn.selection_table(detail, nodes)
 
     assert list(table.columns[:3]) == ['source', 'target', 'Target gene']
-    assert table.set_index('target')['Target gene'].to_dict() == {'P1': 'G1', 'P2': 'G2', 'BaitA': 'BaitA'}
+    assert table.set_index('target')['Target gene'].to_dict() == {'P1': 'G1', 'P2': 'G2', 'BaitA': 'GA'}
     assert set(table['SaintScore']) == {0.123} and set(table['FoldChange']) == {2.72}
 
 
@@ -441,6 +452,24 @@ def test_a_seed_resolves_by_symbol_or_accession_case_insensitively(drawn):
     assert cn.resolve_node(nodes, 'p1')['symbol'] == 'G1'
     with pytest.raises(ValueError):
         cn.resolve_node(nodes, 'nobody')
+
+
+def test_a_bait_resolves_by_experiment_name_accession_or_gene_symbol(drawn):
+    nodes, _ = drawn
+
+    assert nodes.set_index('id').loc['BaitA', 'symbol'] == 'GA'
+    for seed in ('BaitA', 'pa', 'GA'):
+        assert cn.resolve_node(nodes, seed)['id'] == 'BaitA'
+
+
+def test_a_gene_shared_by_two_drawn_baits_names_both(scores):
+    scores['Bait_Accession'] = 'PA'                     # BaitB is a second tag on the same protein
+    nodes, _ = cn.build(scores, PASSING, prey_prey=False)
+
+    for seed in ('GA', 'PA'):
+        with pytest.raises(ValueError, match='BaitA, BaitB'):
+            cn.resolve_node(nodes, seed)
+    assert cn.resolve_node(nodes, 'BaitB')['id'] == 'BaitB'
 
 
 def test_interactors_honour_the_cuts(drawn):
@@ -577,7 +606,7 @@ def controlled(scores, tmp_path, cytoscape):
     ctl.STATE.update(dataset='d', title='ProxiMate: d', net_suid=1, nodes=nodes, edges=edges,
                      thresholds=dict(PASSING),
                      style={'preset': 'abundance_weighted', 'width_source': 'abundance',
-                            'literature_weighted': False, 'biogrid_scope': 'all'})
+                            'literature_weighted': False, 'biogrid_scope': 'all', 'bait_labels': 'experiment'})
     yield nodes, edges
     ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
                      thresholds=None, style=None)
@@ -596,9 +625,10 @@ def test_restyling_pushes_width_and_visibility_without_moving_anything(controlle
     assert not frame.loc[frame['name'] == 'P1 (literature) P2', 'visible'].item()
     assert ctl.STATE['edges']['width'][ctl.STATE['edges']['interaction'] == 'proximity'].nunique() == 1
     nodes = _last(cytoscape['calls'], 'nodes')[0]
-    assert set(nodes.columns) == {'name', *cn.NODE_LOOK} and len(nodes) == len(ctl.STATE['nodes'])
+    assert set(nodes.columns) == {'name', 'display_label', *cn.NODE_LOOK} and len(nodes) == len(ctl.STATE['nodes'])
     assert ctl.snapshot()['style'] == {'preset': 'abundance_weighted', 'width_source': 'uniform',
-                                       'literature_weighted': False, 'biogrid_scope': 'multivalidated'}
+                                       'literature_weighted': False, 'biogrid_scope': 'multivalidated',
+                                       'bait_labels': 'experiment'}
     assert not any(name == 'positions' for name, *_ in cytoscape['calls'])
 
 
@@ -620,6 +650,21 @@ def test_restyle_switches_the_preset_in_place_and_keeps_community_fills(controll
     assert ctl.snapshot()['style']['preset'] == 'highlight_knowns'
     assert ctl.snapshot()['log'][-1]['op'] == 'restyle'
     assert not any(name == 'positions' for name, *_ in cytoscape['calls'])
+
+
+def test_bait_labels_switch_in_place_and_keep_hidden_labels_hidden(controlled, cytoscape):
+    ctl.restyle('abundance_weighted', 'abundance', False, 'all', bait_labels='gene')
+
+    pushed = _last(cytoscape['calls'], 'nodes')[0].set_index('name')['display_label']
+    assert pushed.to_dict() == {'BaitA': 'GA', 'BaitB': 'BaitB', 'P1': 'G1', 'P2': 'G2', 'P4': 'G4'}
+    assert ctl.snapshot()['style']['bait_labels'] == 'gene'
+    assert not any(name == 'positions' for name, *_ in cytoscape['calls'])
+
+    ctl.STATE['nodes']['display_label'] = ''              # drawn with label_policy none
+    ctl.restyle('abundance_weighted', 'abundance', False, 'all', bait_labels='experiment')
+    assert set(_last(cytoscape['calls'], 'nodes')[0]['display_label']) == {''}
+    with pytest.raises(ValueError, match='bait_labels'):
+        ctl.restyle('abundance_weighted', 'abundance', False, 'all', bait_labels='name')
 
 
 def test_rethresholding_keeps_the_drawn_biogrid_scope(controlled, cytoscape):

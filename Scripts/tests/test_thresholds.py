@@ -37,3 +37,7 @@ def test_every_preset_button_has_a_tooltip_naming_its_values():
         tooltip = help_text.TOOLTIPS[thresholds.preset_id(name)]
         assert thresholds.describe(values) in tooltip
     assert {s[0] for s in thresholds.SLIDERS} <= set(help_text.TOOLTIPS)
+
+
+def test_filename_tag_names_the_four_cutoffs():
+    assert thresholds.filename_tag(thresholds.DEFAULT) == 'SAINT0.9_BFDR0.05_WD0_WDFDR1'

@@ -12,7 +12,7 @@ from download_presets import (DEFAULT_CUSTOM_COLUMNS, PRESETS, ColumnGroup,
                               build_custom_table, build_cytoscape_edges,
                               build_enrichment_table, build_gene_list,
                               build_prohits_table, effective_selection,
-                              resolve_columns, saint_input_files,
+                              resolve_columns, safe_filename, saint_input_files,
                               write_gene_list)
 
 # Thresholds where every score family participates; row 3 has WDFDR NaN.
@@ -100,6 +100,16 @@ def test_resolve_columns_df_order(human_scores):
                     'SaintScore', 'BFDR', 'FoldChange']
 
 
+def test_saint_group_offers_spectral_count_columns(human_scores):
+    """SAINTexpress's spectral-count build writes Spec, SpecSum, AvgSpec and
+    ctrlCounts where the intensity build writes the Intensity columns."""
+    spc = human_scores.rename(columns={'AvgIntensity': 'AvgSpec'}).assign(
+        Spec='3|4', SpecSum=7.0, ctrlCounts='0|1')
+    cols = resolve_columns(spc.columns, PRESETS['annotated'], ['saint'])
+    assert cols == ['AvgSpec', 'SaintScore', 'BFDR', 'FoldChange',
+                    'Spec', 'SpecSum', 'ctrlCounts']
+
+
 def test_resolve_columns_dedupes_overlap():
     preset = Preset(key='x', label='x', kind='table', required_files=(),
                     uses_thresholds=False,
@@ -155,6 +165,15 @@ def test_cytoscape_edges_preygene_fallback(human_scores):
     df = human_scores.drop(columns=['First_Prey_Gene'])
     out = build_cytoscape_edges(df, THRESHOLDS)
     assert 'G1;G1b' in out['target'].values
+
+
+def test_cytoscape_edges_carry_spectral_count_abundance(human_scores):
+    """SAINTexpress's spectral-count build writes AvgSpec where the intensity build
+    writes AvgIntensity."""
+    spc = human_scores.rename(columns={'AvgIntensity': 'AvgSpec'})
+    out = build_cytoscape_edges(spc, THRESHOLDS)
+    assert list(out.columns) == ['source', 'target', 'SaintScore', 'BFDR', 'FoldChange',
+                                 'WD', 'WDFDR', 'AvgSpec', 'In.BioGRID']
 
 
 # --------------------------------------------------------- build_gene_list
@@ -251,3 +270,8 @@ def test_effective_selection_falls_back_to_defaults(preset, selected):
 
 def test_effective_selection_preset_without_groups():
     assert effective_selection(PRESETS['cytoscape'], ['identifiers']) == []
+
+
+def test_safe_filename_joins_parts_and_replaces_unsafe_characters():
+    assert safe_filename("HCM", "COIL (BirA-FLAG)", "volcano", ext="png") == "HCM_COIL_BirA-FLAG_volcano.png"
+    assert safe_filename("HCM", "", None, "det0.5", ext="png") == "HCM_det0.5.png"

@@ -11,6 +11,7 @@ varies by organism (HPA/CORUM are human-only) and by pipeline options.
 """
 
 import os
+import re
 import zipfile
 from dataclasses import dataclass
 from typing import Sequence
@@ -23,6 +24,13 @@ from log_config import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_CUSTOM_COLUMNS = ["Experiment.ID", "Prey.ID", "SaintScore", "BFDR"]
+
+
+def safe_filename(*parts, ext):
+    """The non-empty ``parts`` joined by '_', with each run of characters other than
+    letters, digits, '.' and '-' made one '_': ('HCM', 'COIL (BirA-FLAG)') -> 'HCM_COIL_BirA-FLAG.ext'."""
+    stem = re.sub(r'[^A-Za-z0-9.-]+', '_', '_'.join(str(p) for p in parts if p not in (None, '')))
+    return f"{stem.strip('_')}.{ext}"
 
 
 @dataclass(frozen=True)
@@ -61,7 +69,8 @@ _ANNOTATED_GROUPS = (
                  'source_group')),
     ColumnGroup('saint', 'SAINT scores',
                 ('Intensity', 'IntensitySum', 'AvgIntensity', 'NumReplicates',
-                 'ctrlIntensity', 'AvgP', 'MaxP', 'TopoAvgP', 'TopoMaxP',
+                 'ctrlIntensity', 'Spec', 'SpecSum', 'AvgSpec', 'ctrlCounts',
+                 'AvgP', 'MaxP', 'TopoAvgP', 'TopoMaxP',
                  'SaintScore', 'OddsScore', 'FoldChange', 'BFDR')),
     ColumnGroup('comppass', 'CompPASS scores',
                 ('AvePSM', 'N_Saw', 'Entropy', 'Mean', 'SD', 'Z', 'WD',
@@ -116,7 +125,7 @@ _SAINT_INPUT_FILES = (
 # Edge attributes offered to Cytoscape, in output order; limited to those
 # present in the dataset.
 CYTOSCAPE_ATTRS = ('SaintScore', 'BFDR', 'FoldChange', 'WD', 'WDFDR',
-                   'AvgIntensity', 'In.BioGRID')
+                   'AvgIntensity', 'AvgSpec', 'In.BioGRID')
 
 PRESETS = {p.key: p for p in (
     Preset('ed', 'Experimental Design', 'table', ('ED.csv',),

@@ -9,6 +9,7 @@ import math
 import os
 
 import numpy as np
+import pandas as pd
 
 import backend
 import cytoscape_ctl as ctl
@@ -47,7 +48,7 @@ def _records(frame, limit=None):
 @register('read', "The datasets in the session with their input type, quant type and scored state.",
           tags=('list', 'session'))
 def list_datasets() -> dict:
-    """Every row of the "Datasets in this Session" table."""
+    """Every row of the "Datasets" table."""
     return {'datasets': _json(store.table().to_dict('records'))}
 
 
@@ -238,6 +239,28 @@ def rename_dataset(dataset: str, new_name: str) -> dict:
     return _json(backend.rename_dataset(dataset, new_name, actor=ACTOR))
 
 
+@register('read', "A dataset's experimental design (ED.csv): one row per experiment with Type, Bait, Replicate, Bait ID.",
+          tags=('design', 'experimental design', 'ED', 'experiments', 'controls'))
+def dataset_design(dataset: str) -> dict:
+    """The rows of the dataset's ED.csv as written; edit them and pass them to
+    duplicate_dataset to parse a copy with a changed design."""
+    return _records(backend.dataset_design(dataset))
+
+
+@register('dataset', "Copy a parsed dataset under a new name, optionally leaving out experiments or editing its experimental design.",
+          tags=('duplicate', 'copy', 'experimental design', 'outlier', 'rescore'))
+def duplicate_dataset(dataset: str, new_name: str, design: list = None, leave_out: list = None) -> dict:
+    """Parses a new dataset from the input stored in ``dataset``'s directory.  ``design``
+    (rows as dataset_design returns them) replaces its experimental design; Type, Bait,
+    Replicate, Bait ID and Group may change, but experiment names must be the source's.
+    ``leave_out`` names experiments to drop, e.g. an outlier control.  The copy starts
+    unscored and the source is unchanged.  ``new_name`` must be unused and use letters,
+    digits and underscores only.  Returns the new row."""
+    frame = None if design is None else pd.DataFrame(design)
+    return _json(backend.duplicate_dataset(dataset, new_name, design=frame,
+                                           leave_out=leave_out or (), actor=ACTOR))
+
+
 @register('dataset', "Replace the whole session with the datasets in a session zip. Destructive; needs confirm=true.",
           tags=('session', 'restore', 'load', 'zip'))
 def load_session(zip_path: str, confirm: bool = False) -> dict:
@@ -298,7 +321,7 @@ def cytoscape_estimate(dataset: str, thresholds: dict, baits: list = None, prey_
 @register('cytoscape', "Draw a dataset's thresholded network in Cytoscape; replace=true when one is already drawn.",
           tags=('cytoscape', 'send', 'draw', 'network', 'layout', 'biogrid', 'corum', 'preset'))
 def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey: bool = True,
-                   label_policy: str = 'all', layout: str = 'force-directed',
+                   label_policy: str = 'all', bait_labels: str = 'experiment', layout: str = 'force-directed',
                    width_source: str = 'abundance', literature_weighted: bool = False,
                    biogrid_scope: str = 'all', corum: bool = False, corum_min_members: int = 3,
                    corum_min_fraction: float = 0.5, preset: str = 'abundance_weighted',
@@ -310,7 +333,8 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
     BioGRID prey-prey edges; ``biogrid_scope`` all or multivalidated;
     ``literature_weighted`` thickens them by publications.  ``corum`` adds complex
     edges (human datasets only) under the two criteria.  ``label_policy`` all, baits
-    or none.  ``width_source`` abundance, SaintScore, WD, FoldChange or uniform.
+    or none.  ``bait_labels`` experiment (the experiment name) or gene (the bait's gene
+    symbol) is the text of bait labels.  ``width_source`` abundance, SaintScore, WD, FoldChange or uniform.
     ``layout`` is a Cytoscape layout name (force-directed, grid, circular, ...).
     ``preset`` is the look: abundance_weighted or highlight_knowns (red border on preys
     whose bait interaction is BioGRID-multivalidated); ``cytoscape_list_style_presets``
@@ -327,6 +351,7 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
         raise ValueError(f"width_source must be one of {cytoscape_net.EDGE_WIDTH_SOURCES}")
     if label_policy not in cytoscape_net.LABEL_POLICIES:
         raise ValueError(f"label_policy must be one of {cytoscape_net.LABEL_POLICIES}")
+    cytoscape_net.check_bait_labels(bait_labels)
     if biogrid_scope not in cytoscape_net.BIOGRID_SCOPES:
         raise ValueError(f"biogrid_scope must be one of {cytoscape_net.BIOGRID_SCOPES}")
     dataset_path = backend.dataset_dir(dataset)
@@ -335,7 +360,7 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
         raise FileNotFoundError(f"dataset {dataset!r} has no annotated_scores.csv; score it first")
     biogrid_path, corum_path = backend.network_sources(dataset, corum)
     params = {'thresholds': thresholds, 'baits': baits, 'prey_prey': prey_prey,
-              'label_policy': label_policy, 'layout': layout, 'width_source': width_source,
+              'label_policy': label_policy, 'bait_labels': bait_labels, 'layout': layout, 'width_source': width_source,
               'literature_weighted': literature_weighted, 'biogrid_scope': biogrid_scope,
               'corum': corum, 'corum_min_members': corum_min_members,
               'corum_min_fraction': corum_min_fraction, 'preset': preset, 'actor': ACTOR}
@@ -343,7 +368,7 @@ def cytoscape_send(dataset: str, thresholds: dict, baits: list = None, prey_prey
                           params=params) as record:
         record.add_input(scores_path, role='scores')
         ctl.draw(dataset, scores_path, thresholds, baits=list(baits or []), prey_prey=prey_prey,
-                 biogrid_path=biogrid_path, label_policy=label_policy, layout=layout,
+                 biogrid_path=biogrid_path, label_policy=label_policy, bait_labels=bait_labels, layout=layout,
                  width_source=width_source, literature_weighted=literature_weighted,
                  biogrid_scope=biogrid_scope, corum_path=corum_path,
                  corum_min_members=int(corum_min_members),
@@ -363,18 +388,21 @@ def cytoscape_apply_thresholds(thresholds: dict) -> dict:
     return {'hidden': int(hidden), 'network': _json(_network())}
 
 
-@register('cytoscape', "Restyle the drawn network in place: style preset, edge width source, BioGRID scope, publication weighting.",
-          tags=('cytoscape', 'style', 'preset', 'edge width', 'biogrid'))
+@register('cytoscape', "Restyle the drawn network in place: style preset, edge width source, BioGRID scope, publication weighting, bait label text.",
+          tags=('cytoscape', 'style', 'preset', 'edge width', 'biogrid', 'labels'))
 def cytoscape_restyle(preset: str = None, width_source: str = 'abundance',
-                      literature_weighted: bool = False, biogrid_scope: str = 'all') -> dict:
+                      literature_weighted: bool = False, biogrid_scope: str = 'all',
+                      bait_labels: str = None) -> dict:
     """A style update in place; nothing moves and clustered nodes keep their community
-    colors.  ``preset`` defaults to the drawn one (see ``cytoscape_list_style_presets``).
+    colors.  ``preset`` and ``bait_labels`` (experiment or gene) default to the drawn
+    ones (see ``cytoscape_list_style_presets``); hidden labels stay hidden.
     Adding prey-prey or complex edges needs ``cytoscape_send``.  Returns how many edges
     changed and the network's style."""
-    if preset is None:
-        preset = ctl.snapshot()['style']['preset']
+    style = ctl.snapshot()['style']
+    preset = style['preset'] if preset is None else preset
+    bait_labels = style['bait_labels'] if bait_labels is None else bait_labels
     changed = ctl.restyle(_validate_preset(preset), width_source, literature_weighted,
-                          biogrid_scope, actor=ACTOR)
+                          biogrid_scope, bait_labels, actor=ACTOR)
     return {'changed': int(changed), 'network': _json(_network())}
 
 
@@ -386,10 +414,12 @@ def cytoscape_read_selection() -> dict:
     return _json({'nodes': nodes.to_dict('records'), 'edges': edges.to_dict('records')})
 
 
-@register('cytoscape', "Select nodes by accession or gene symbol, replacing or adding to the selection.",
+@register('cytoscape', "Select nodes by id, accession or gene symbol, replacing or adding to the selection.",
           tags=('cytoscape', 'select', 'nodes'))
 def cytoscape_select_nodes(ids: list, add: bool = False) -> dict:
-    """``ids`` are UniProt accessions or gene symbols as drawn; unknown names fail."""
+    """``ids`` are node ids (a bait's experiment name), UniProt accessions or gene
+    symbols, case-insensitive; unknown names fail, and so does a name matching several
+    nodes (two constructs of one bait share accession and gene)."""
     return {'selected': ctl.select_nodes(ids, add=add, actor=ACTOR), 'added': bool(add)}
 
 
@@ -412,7 +442,8 @@ def cytoscape_select_related(seed: str, relation: str, add: bool = False, includ
     plus the two-bait preys lying nearer to it than to the other bait in the current
     layout) need a bait seed; ``partners`` are BioGRID or complex neighbors of any
     node (``min_publications`` applies); ``cocomplex`` needs the CORUM layer drawn.
-    ``include_seed`` selects the seed too, so the group moves as one."""
+    ``seed`` resolves as in ``cytoscape_select_nodes``.  ``include_seed`` selects the
+    seed too, so the group moves as one."""
     ids = ctl.select_related(seed, relation, add=add, include_seed=include_seed, actor=ACTOR,
                              min_saint=min_saint, max_bfdr=max_bfdr, min_abundance=min_abundance,
                              min_publications=min_publications)
@@ -430,8 +461,9 @@ def cytoscape_set_edge_visibility(action: str) -> dict:
           tags=('cytoscape', 'nodes', 'symbols', 'accessions', 'baits', 'preys', 'read'))
 def cytoscape_list_nodes(role: str = None) -> dict:
     """Bait nodes are keyed on the bait name and carry the bait's accession; prey nodes
-    are keyed on the accession.  ``role`` restricts to bait or prey.  The ids and
-    symbols are what every other cytoscape operation accepts."""
+    are keyed on the accession.  A bait's symbol is its accession's gene, or its name
+    when the scores give none.  ``role`` restricts to bait or prey.  The ids, accessions
+    and symbols are what every other cytoscape operation accepts."""
     return _json({'nodes': ctl.list_nodes(role)})
 
 

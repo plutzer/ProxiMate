@@ -266,6 +266,23 @@ def test_delete_and_rename_are_dataset_ops_and_delete_needs_confirmation(scored)
     assert not scored.exists() and not (scored.parent / 'ds_b').exists()
 
 
+def test_duplicate_dataset_copies_with_a_changed_design(out_dir):
+    (out_dir / 'bait.txt').write_text("t1\tBaitA\tT\nt2\tBaitA\tT\nc1\tCtrl\tC\n")
+    (out_dir / 'prey.txt').write_text("P1\tG1\nP2\tG2\n")
+    (out_dir / 'interaction.txt').write_text("t1\tBaitA\tP1\t10\nt2\tBaitA\tP1\t12\nc1\tCtrl\tP2\t4\n")
+    backend.run_parse('src', 'SAINT', {k: str(out_dir / f'{k}.txt') for k in ('bait', 'prey', 'interaction')},
+                      'Spectral Counts')
+    assert {h['name'] for h in registry.search('duplicate')} >= {'duplicate_dataset'}
+    assert registry.OPS['duplicate_dataset'].mode == 'dataset'
+    assert registry.OPS['dataset_design'].mode == 'read'
+    design = registry.call('dataset_design', {'dataset': 'src'})['rows']
+    design[1]['Bait'] = 'BaitB'
+    row = registry.call('duplicate_dataset', {'dataset': 'src', 'new_name': 'src_b', 'design': design,
+                                              'leave_out': ['c1']})
+    assert (row['Experiments'], row['Controls']) == (2, 0) and store.names() == ['src', 'src_b']
+    assert "t2\tBaitB" in (out_dir / 'src_b' / 'interaction.txt').read_text()
+
+
 # --- cytoscape ops reach the controller with actor mcp ---------------------------------------
 
 @pytest.fixture
@@ -282,7 +299,7 @@ def drawn(monkeypatch):
     monkeypatch.setattr(ctl.cy, 'update_node_columns', lambda net, frame: calls.append(('nodes', frame)))
     monkeypatch.setattr(ctl.p4c, 'fit_content', lambda **k: calls.append('fit'))
     nodes = pd.DataFrame({'id': ['BA', 'P1', 'P2'], 'symbol': ['GA', 'G1', 'G2'], 'accession': ['QA', 'P1', 'P2'],
-                          'role': ['bait', 'prey', 'prey'], 'fill': ['#E69F00', '#B8C4D6', '#B8C4D6'],
+                          'display_label': ['BA', 'G1', 'G2'], 'role': ['bait', 'prey', 'prey'], 'fill': ['#E69F00', '#B8C4D6', '#B8C4D6'],
                           'x': [0.0] * 3, 'y': [0.0] * 3})
     edges = pd.DataFrame({'name': ['e1', 'e2'], 'source': ['BA', 'BA'], 'target': ['P1', 'P2'],
                           'interaction': ['proximity'] * 2, 'visible': [True, True],
@@ -292,7 +309,7 @@ def drawn(monkeypatch):
     ctl.STATE.update(dataset='ds', title='ProxiMate: ds', net_suid=1, nodes=nodes, edges=edges,
                      thresholds=dict(THRESHOLDS),
                      style={'preset': 'abundance_weighted', 'width_source': 'abundance',
-                            'literature_weighted': False, 'biogrid_scope': 'all'})
+                            'literature_weighted': False, 'biogrid_scope': 'all', 'bait_labels': 'experiment'})
     stub['calls'] = calls
     yield stub
     ctl.STATE.update(dataset=None, title=None, net_suid=None, nodes=None, edges=None,
@@ -318,7 +335,9 @@ def test_cytoscape_ops_act_on_the_drawn_network_as_mcp(drawn):
     drawn['positions'].update(P2=(1.0, 1.0), BA=(0.0, 0.0))
     related = registry.call('cytoscape_select_related', {'seed': 'GA', 'relation': 'satellites', 'include_seed': True})
     assert related == {'selected': ['BA', 'P1', 'P2'], 'added': False}
-    assert registry.call('cytoscape_select_related', {'seed': 'BA', 'relation': 'singletons'})['selected'] == ['P1', 'P2']
+    for seed in ('BA', 'qa'):
+        assert registry.call('cytoscape_select_related', {'seed': seed, 'relation': 'singletons'})['selected'] == ['P1', 'P2']
+    assert registry.call('cytoscape_select_nodes', {'ids': ['QA']})['selected'] == ['BA']
     with pytest.raises(ValueError, match='needs a bait'):
         registry.call('cytoscape_select_related', {'seed': 'P1', 'relation': 'satellites'})
     with pytest.raises(ValueError, match='clear_selection'):
@@ -347,8 +366,9 @@ def test_cytoscape_send_records_its_settings_in_the_manifest(scored, drawn, monk
     assert not seen
     result = registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'baits': ['BaitA'],
                                               'layout': 'grid', 'width_source': 'SaintScore',
-                                              'preset': 'highlight_knowns', 'replace': True})
-    assert seen['actor'] == 'mcp' and seen['baits'] == ['BaitA'] and seen['layout'] == 'grid'
+                                              'preset': 'highlight_knowns', 'bait_labels': 'gene',
+                                              'replace': True})
+    assert seen['bait_labels'] == 'gene' and seen['actor'] == 'mcp' and seen['baits'] == ['BaitA'] and seen['layout'] == 'grid'
     assert seen['preset'] == 'highlight_knowns'
     assert result['network']['dataset'] == 'ds'
     manifest = json.load(open(scored / 'run.json'))
@@ -361,6 +381,9 @@ def test_cytoscape_send_records_its_settings_in_the_manifest(scored, drawn, monk
                                          'replace': True})
     with pytest.raises(ValueError, match='preset'):
         registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'preset': 'neon',
+                                         'replace': True})
+    with pytest.raises(ValueError, match='bait_labels'):
+        registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS, 'bait_labels': 'name',
                                          'replace': True})
 
 
@@ -377,6 +400,16 @@ def test_style_preset_ops_through_the_registry(drawn):
     assert ctl.snapshot()['log'][-1]['actor'] == 'mcp' and ctl.snapshot()['log'][-1]['op'] == 'restyle'
     with pytest.raises(ValueError, match='preset'):
         registry.call('cytoscape_restyle', {'preset': 'neon'})
+    result = registry.call('cytoscape_restyle', {'bait_labels': 'gene'})
+    assert result['network']['style']['bait_labels'] == 'gene'
+    assert _last_nodes(drawn).set_index('name')['display_label'].to_dict() == {'BA': 'GA', 'P1': 'G1', 'P2': 'G2'}
+    assert 'positions' not in [c[0] for c in drawn['calls']]
+    with pytest.raises(ValueError, match='bait_labels'):
+        registry.call('cytoscape_restyle', {'bait_labels': 'name'})
+
+
+def _last_nodes(drawn):
+    return [c[1] for c in drawn['calls'] if c[0] == 'nodes'][-1]
 
 
 def test_cluster_selection_takes_a_layout_and_a_recolor_flag(drawn):
@@ -540,3 +573,11 @@ def test_cytoscape_activity_entries_name_the_relation_and_the_count(drawn):
     assert registry.activity(1)[0]['detail'] == 'seed=BA, relation=singletons -> 2 selected'
     registry.call('cytoscape_list_nodes', {'role': 'prey'})
     assert registry.activity(1)[0]['detail'] == 'role=prey -> 2 nodes'
+
+
+def test_gui_keepalive_outlasts_a_long_render():
+    import server
+
+    config = server.gui_config(app=None)
+    assert config.ws_ping_timeout >= 120
+    assert (config.host, config.port) == (server.GUI_HOST, server.GUI_PORT)

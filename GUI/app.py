@@ -13,12 +13,14 @@ from ed_exceptions import ProxiMateError
 import parse
 import subprocess
 import zipfile
+import io
 import tempfile
 import datetime
 import shutil
 import threading
 import time
 from QC_plots import pca_plot, prepare_pca_matrix, prey_pca_plot as plot_prey_pca, prey_gene_names, detection_counts, reduce_categorical, saint_known_retention, roc_plot, saint_scatter_plot as plot_saint_scatter, calculate_threshold_metrics
+from off_loop import off_loop
 from Ann_Enrichment import plot_results, go_term_ids, GO_SOURCE_COLUMNS
 from network_comparison import (
     load_and_filter_bait_data,
@@ -31,7 +33,7 @@ from plot_exports import pca_plot_matplotlib, prey_pca_matplotlib, saint_scatter
 import download_presets as dp
 from download_presets import DEFAULT_CUSTOM_COLUMNS
 from help_text import tip, TOOLTIPS, FORMAT_NOTES
-from thresholds import PRESETS, SLIDERS, DEFAULT, NO_FILTER, preset_id, active_preset, describe
+from thresholds import PRESETS, SLIDERS, DEFAULT, NO_FILTER, preset_id, active_preset, describe, filename_tag
 import session_archive
 import backend
 import dataset_store
@@ -55,12 +57,16 @@ MCP_ADD_COMMANDS = {
 }
 
 STYLESHEET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "www", "proximate.css")
+EXAMPLE_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "example_data")
 
-# The sidebar layout's main pane is the scroll container, so a tab opened while scrolled
-# down would start mid-page.  A clicked button keeps focus, which keeps its bslib tooltip
-# open; the click hides the tooltip and mutes it until the pointer or focus leaves.
+# The sidebar layout's main pane is the scroll container, so a page tab opened while
+# scrolled down would start mid-page.  Only the navbar's tabs reset it: a tab set inside
+# a card, such as Gene Lists, keeps the reader where they are.  A clicked button keeps
+# focus, which keeps its bslib tooltip open; the click hides the tooltip and mutes it
+# until the pointer or focus leaves.
 PAGE_SCRIPT = """
-document.addEventListener('shown.bs.tab', () => {
+document.addEventListener('shown.bs.tab', e => {
+  if (!e.target.closest('.navbar')) return;
   document.querySelectorAll('.bslib-sidebar-layout > .main').forEach(el => el.scrollTop = 0);
 });
 document.addEventListener('click', e => {
@@ -72,6 +78,18 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('show.bs.tooltip', e => {
   if (e.target.dataset.tooltipMuted) e.preventDefault();
+});
+document.addEventListener('input', e => {
+  if (e.target.matches('.threshold-range'))
+    document.getElementById(e.target.dataset.target).value = e.target.value;
+});
+document.addEventListener('change', e => {
+  if (e.target.matches('.threshold-range'))
+    document.getElementById(e.target.dataset.target).dispatchEvent(new Event('change', {bubbles: true}));
+});
+$(document).on('input change', 'input[type=number]', e => {
+  const range = document.querySelector(`.threshold-range[data-target="${e.target.id}"]`);
+  if (range && e.target.value !== '') range.value = e.target.value;
 });
 for (const event of ['mouseleave', 'focusout']) {
   document.addEventListener(event, e => {
@@ -86,11 +104,19 @@ EMPTY_BAITS = pd.DataFrame(columns=["Experiment Name", "Bait", "Type", "Bait ID"
 EMPTY_ED = pd.DataFrame(columns=["Experiment Name", "Type", "Bait", "Replicate", "Bait ID", "Group"])
 
 
-def threshold_sliders(prefix, values):
-    """The four cutoff sliders, with ids ``{prefix}_{suffix}``, starting at ``values``."""
-    return [ui.input_slider(f"{prefix}_{suffix}", tip(label, suffix), min=0.0, max=high,
-                            value=values[key], step=step)
-            for suffix, key, label, high, step in SLIDERS]
+def threshold_inputs(prefix, values):
+    """The four cutoffs, each a number box with id ``{prefix}_{suffix}`` and a slider
+    under it, starting at ``values``.  The slider is not a Shiny input: PAGE_SCRIPT
+    copies it into its box, which Shiny reads when the slider is released."""
+    controls = []
+    for suffix, key, label, high, step in SLIDERS:
+        box_id = f"{prefix}_{suffix}"
+        controls += [ui.input_numeric(box_id, tip(label, suffix), value=values[key],
+                                      min=0.0, max=high, step=step),
+                     ui.tags.input(type="range", class_="form-range threshold-range",
+                                   min=0.0, max=high, step=step, value=values[key],
+                                   data_target=box_id)]
+    return controls + [ui.output_ui(f"{prefix}_threshold_error")]
 
 
 app_ui = ui.page_navbar(
@@ -98,7 +124,7 @@ app_ui = ui.page_navbar(
     ui.nav_panel("Data & Scoring",
                  ui.layout_columns(
                     ui.card(
-                        ui.card_header("Datasets in this Session"),
+                        ui.card_header("Datasets"),
                         ui.output_data_frame("render_datasets"),
                         ui.div(
                             ui.tooltip(ui.input_action_button("delete_dataset", "Delete selected",
@@ -107,6 +133,9 @@ app_ui = ui.page_navbar(
                             ui.tooltip(ui.input_action_button("rename_dataset", "Rename selected",
                                                               class_="btn-sm btn-outline-secondary"),
                                        TOOLTIPS["rename_dataset"]),
+                            ui.tooltip(ui.input_action_button("duplicate_dataset", "Duplicate selected",
+                                                              class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["duplicate_dataset"]),
                             ui.tooltip(ui.input_action_button("clear_datasets", "Clear All Datasets",
                                                               class_="btn-sm btn-outline-danger"),
                                        TOOLTIPS["clear_datasets"]),
@@ -138,9 +167,14 @@ app_ui = ui.page_navbar(
                             col_widths=[4, 8]
                         ),
                         ui.output_ui("format_note"),
-                        ui.tooltip(ui.download_button("ed_template", "Download ED template",
-                                                      class_="btn-sm btn-outline-secondary mb-3"),
-                                   TOOLTIPS["ed_template"]),
+                        ui.div(
+                            ui.tooltip(ui.download_button("ed_template", "Download ED template",
+                                                          class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["ed_template"]),
+                            ui.tooltip(ui.download_button("example_data", "Download example dataset",
+                                                          class_="btn-sm btn-outline-secondary"),
+                                       TOOLTIPS["example_data"]),
+                            class_="d-flex gap-2 mb-3"),
                         ui.panel_conditional(
                             "input.input_format === 'MaxQuant'",
                             ui.layout_columns(
@@ -227,7 +261,9 @@ app_ui = ui.page_navbar(
                     ui.card(
                         ui.card_header(
                             ui.span("Step 2 — Score", class_="step-title"),
-                            ui.span(ui.output_text("score_header", inline=True), class_="step-purpose")),
+                            ui.span("Scores a dataset with SAINT and CompPASS, then annotates it.",
+                                    class_="step-purpose")),
+                        ui.input_select("score_dataset", tip("Dataset to score", "score_dataset"), choices=[]),
                         # Organism selection for annotation databases.
                         # To add a new organism, add a choice here and sync with
                         # ORGANISMS config in Scripts/annotator.py and setup_datasets.py
@@ -415,7 +451,7 @@ app_ui = ui.page_navbar(
             ui.card(
                 ui.card_header("Network A"),
                 ui.input_select("comp_bait_a", tip("Bait A", "comp_bait"), choices=[]),
-                *threshold_sliders("comp_a", DEFAULT),
+                *threshold_inputs("comp_a", DEFAULT),
                 ui.tooltip(ui.input_action_button("comp_use_shared_a", "Use shared thresholds",
                                                   class_="btn-sm btn-outline-secondary"),
                            TOOLTIPS["comp_use_shared"]),
@@ -423,7 +459,7 @@ app_ui = ui.page_navbar(
             ui.card(
                 ui.card_header("Network B"),
                 ui.input_select("comp_bait_b", tip("Bait B", "comp_bait"), choices=[]),
-                *threshold_sliders("comp_b", DEFAULT),
+                *threshold_inputs("comp_b", DEFAULT),
                 ui.tooltip(ui.input_action_button("comp_use_shared_b", "Use shared thresholds",
                                                   class_="btn-sm btn-outline-secondary"),
                            TOOLTIPS["comp_use_shared"]),
@@ -488,6 +524,8 @@ app_ui = ui.page_navbar(
                                 choices={key: preset["label"] for key, preset in STYLE_PRESETS.items()}),
                 ui.input_select("cy_labels", tip("Labels", "cy_labels"),
                                 choices={"all": "All nodes", "baits": "Baits only", "none": "None"}),
+                ui.input_select("cy_bait_labels", tip("Bait labels", "cy_bait_labels"),
+                                choices={"experiment": "Experiment name", "gene": "Gene symbol"}),
                 ui.input_select("cy_layout", tip("Layout", "cy_layout"),
                                 choices=["force-directed", "kamada-kawai", "circular", "grid",
                                          "hierarchical", "degree-circle"]),
@@ -693,7 +731,10 @@ app_ui = ui.page_navbar(
                         ui.span(tip("Active dataset", "active_dataset"), " ",
                                 ui.output_ui("active_dataset_badge", inline=True)),
                         choices=[]),
-        *threshold_sliders("threshold", DEFAULT),
+        ui.div(ui.strong("Score thresholds"),
+               ui.p("Set the cutoffs an interaction must pass. Every tab uses them.",
+                    class_="help-text mb-0")),
+        *threshold_inputs("threshold", DEFAULT),
         ui.output_ui("preset_buttons"),
         ui.output_ui("wdfdr_warning"),
         ui.accordion(
@@ -707,7 +748,7 @@ app_ui = ui.page_navbar(
                 "About and feedback",
                 ui.p("Your feedback is invaluable in helping us improve the tool.", class_="small"),
                 ui.tags.ul(
-                    ui.tags.li(ui.a("Report a bug", href="https://github.com/plutzer/ProxiMate/issues",
+                    ui.tags.li(ui.a("Report a bug or request a new feature", href="https://github.com/plutzer/ProxiMate/issues",
                                     target="_blank")),
                     ui.tags.li(ui.a("GitHub repository", href="https://github.com/plutzer/ProxiMate",
                                     target="_blank")),
@@ -832,6 +873,14 @@ def server(input: Inputs, output: Outputs, session: Session):
         yield "RUVBL1_1,T,RUVBL1,1,Q9Y265,\n"
         yield "GFP_1,C,GFP,1,None,\n"
 
+    @render.download(filename="proximate_example_HCM.zip")
+    def example_data():
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for name in ("proteinGroups.txt", "ED.csv"):
+                zf.write(os.path.join(EXAMPLE_DATA, name), name)
+        yield buffer.getvalue()
+
     @render.ui
     def parse_summary():
         row = last_parse.get()
@@ -842,10 +891,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         return ui.div(
             ui.span(f"Parsed '{row['Dataset Name']}':", class_="fw-semibold"),
             *[ui.span(f"{row[key]} {label}", class_="badge text-bg-light") for key, label in counts],
-            ui.tags.button("Score now", type="button", class_="btn btn-sm btn-primary ms-auto",
-                           onclick="document.getElementById('score_card').scrollIntoView("
-                                   "{behavior: 'smooth', block: 'start'}); "
-                                   "document.getElementById('score_data').focus();"),
             class_="parse-summary")
 
     @reactive.calc
@@ -895,6 +940,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         if current not in names:
             current = names[0] if names else None
         ui.update_select("active_dataset", choices=names, selected=current)
+        scoring = input.score_dataset()
+        ui.update_select("score_dataset", choices=names,
+                         selected=scoring if scoring in names else current)
 
     @reactive.effect
     @reactive.event(input.render_datasets_cell_selection)
@@ -903,14 +951,34 @@ def server(input: Inputs, output: Outputs, session: Session):
         if rows:
             ui.update_select("active_dataset", selected=str(datasets().iloc[rows[0]]['Dataset Name']))
 
-    # The shared thresholds.  Sliders are addressed by prefix so the Compare Baits
-    # tab's two private sets reuse the same helpers.
+    # The shared thresholds.  Inputs are addressed by prefix so the Compare Baits
+    # tab's two private sets reuse the same helpers.  The number boxes accept any
+    # typed value: while a set holds an empty or out-of-range box, everything that
+    # reads it stops and the message under the set says why.
+    def threshold_problem(prefix):
+        values = {key: getattr(input, f"{prefix}_{suffix}")() for suffix, key, *_ in SLIDERS}
+        try:
+            return backend.validate_thresholds(values), None
+        except ValueError as e:
+            return None, str(e)
+
     def read_thresholds(prefix):
-        return {key: getattr(input, f"{prefix}_{suffix}")() for suffix, key, *_ in SLIDERS}
+        values, problem = threshold_problem(prefix)
+        req(problem is None)
+        return values
+
+    for _prefix in ("threshold", "comp_a", "comp_b"):
+        def _make_threshold_error(prefix):
+            @output(id=f"{prefix}_threshold_error")
+            @render.ui
+            def _error():
+                problem = threshold_problem(prefix)[1]
+                return ui.div(f"⚠ {problem}", class_="threshold-error") if problem else None
+        _make_threshold_error(_prefix)
 
     def set_thresholds(prefix, values):
         for suffix, key, *_ in SLIDERS:
-            ui.update_slider(f"{prefix}_{suffix}", value=values[key])
+            ui.update_numeric(f"{prefix}_{suffix}", value=values[key])
 
     @reactive.calc
     def thresholds():
@@ -922,7 +990,9 @@ def server(input: Inputs, output: Outputs, session: Session):
     # click would repeat a value the server has already seen and be dropped.
     @render.ui
     def preset_buttons():
-        current = active_preset(thresholds())
+        # Shown while a box is invalid too, so a preset can repair it.
+        values = threshold_problem("threshold")[0]
+        current = active_preset(values) if values else None
         return ui.div(
             *[ui.tooltip(ui.tags.button(
                   name, id=preset_id(name), type="button",
@@ -983,9 +1053,15 @@ def server(input: Inputs, output: Outputs, session: Session):
         return ui.p(text, class_="plot-placeholder")
 
     def dataset_baits(name):
-        """The baits of a scored dataset, in file order."""
+        """The baits of a scored dataset, in file order; none for no dataset."""
+        if name is None:
+            return []
         scores = pd.read_csv(backend.results_path(name), usecols=['Experiment.ID'])
         return scores['Experiment.ID'].astype(str).unique().tolist()
+
+    # The bait lists of several tabs, read once per dataset: the read takes seconds on
+    # a large dataset.  Effects take it as their event so they run once it is read.
+    active_baits = off_loop(dataset_baits, lambda: (active_scored(),))
 
     saint_baits = reactive.Value(EMPTY_BAITS)
     ed_dataframe = reactive.Value(EMPTY_ED)
@@ -1213,6 +1289,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             # Make the new dataset active. The choices are passed here too because the
             # polled refresh of the select has not run yet.
             ui.update_select("active_dataset", choices=dataset_store.names(), selected=dataset_name)
+            ui.update_select("score_dataset", choices=dataset_store.names(), selected=dataset_name)
             # A file input cannot be reset from the server; the name and grids can.
             ui.update_text("dataset_name", value="")
             saint_baits.set(EMPTY_BAITS)
@@ -1275,6 +1352,59 @@ def server(input: Inputs, output: Outputs, session: Session):
         except Exception as e:
             notify(f"Could not rename '{old}': {e}", type="error", duration=None, exc_info=True)
 
+    duplicate_source_design = reactive.Value(EMPTY_ED)
+
+    @render.data_frame
+    def duplicate_design():
+        return render.DataGrid(duplicate_source_design.get(), editable=True)
+
+    @reactive.effect
+    @reactive.event(input.duplicate_dataset)
+    def ask_duplicate():
+        name = active()
+        if not name:
+            notify("No dataset is active.", type="error")
+            return
+        try:
+            design = backend.dataset_design(name)
+        except Exception as e:
+            notify(f"Could not read the design of '{name}': {e}", type="error", duration=None,
+                   exc_info=True)
+            return
+        duplicate_source_design.set(design)
+        ui.modal_show(ui.modal(
+            ui.input_text("duplicate_to", "Name of the copy", value=f"{name}_copy"),
+            ui.input_selectize("duplicate_leave_out", "Leave out experiments",
+                               choices=design['Experiment Name'].astype(str).tolist(), multiple=True,
+                               width="100%"),
+            ui.p("Edit Type, Bait, Replicate, Bait ID or Group by double-clicking a cell. "
+                 "Experiment names must stay as they are.", class_="text-muted small"),
+            ui.output_data_frame("duplicate_design"),
+            title=f"Duplicate '{name}'", size="xl", easy_close=True,
+            footer=ui.div(
+                ui.modal_button("Cancel"),
+                ui.tags.button("Duplicate", type="button", class_="btn btn-primary ms-2",
+                               onclick="Shiny.setInputValue('confirm_duplicate', 1, {priority: 'event'})"))))
+
+    @reactive.effect
+    @reactive.event(input.confirm_duplicate)
+    def confirm_duplicate():
+        source, new = active(), input.duplicate_to.get().strip()
+        design, leave_out = duplicate_design.data_view(), list(input.duplicate_leave_out.get())
+        ui.modal_remove()
+
+        def work(progress):
+            return backend.duplicate_dataset(source, new, design=design, leave_out=leave_out,
+                                             actor='gui', progress=progress)
+
+        def done(row):
+            notify(f"Duplicated '{source}' as '{new}': {row['Experiments']} experiments, "
+                   f"{row['Controls']} controls.")
+            ui.update_select("active_dataset", choices=dataset_store.names(), selected=new)
+            ui.update_select("score_dataset", choices=dataset_store.names(), selected=new)
+
+        start_job(f"Duplicating {source}", new, backend.PARSE_STAGES, work, done)
+
     @reactive.effect
     @reactive.event(input.clear_datasets)
     def clear_datasets():
@@ -1318,16 +1448,23 @@ def server(input: Inputs, output: Outputs, session: Session):
                    duration=None)
 
 
-    @render.text
-    def score_header():
-        if not active():
-            return "Scoring: no dataset in the session yet."
-        return f"Scoring: {active()} with SAINT and CompPASS, then annotating it."
+    # The Score card names its own dataset; it follows the active dataset until the
+    # user picks another one there.
+    @reactive.calc
+    def score_target():
+        """The Score card's dataset, or None while it names nothing in the store."""
+        name = input.score_dataset()
+        return name if name and name in available_datasets() else None
 
     @reactive.effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(input.active_dataset)
+    def follow_active_dataset():
+        ui.update_select("score_dataset", choices=available_datasets(), selected=active())
+
+    @reactive.effect
+    @reactive.event(input.score_dataset, datasets)
     def update_imputation_choices():
-        dataset = active()
+        dataset = score_target()
         if not dataset:
             return
         choices = backend.imputation_choices(dataset_store.row(dataset)['Quant Type'])
@@ -1337,15 +1474,15 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_radio_buttons("imputation_method", choices=choices, selected=selected)
 
     @reactive.effect
-    @reactive.event(input.active_dataset, input.imputation_method, input.pi_method)
+    @reactive.event(input.score_dataset, input.imputation_method, input.pi_method)
     def update_pi_bait_choices():
-        """Populate pi_bait dropdown from the active dataset's saved ED,
+        """Populate pi_bait dropdown from the Score card dataset's saved ED,
         filtered to control baits with >= 3 replicates."""
         if str(input.imputation_method.get()) != "2":
             return
         if input.pi_method.get() != "single_bait":
             return
-        dataset = active()
+        dataset = score_target()
         if not dataset:
             ui.update_select("pi_bait", choices=[])
             return
@@ -1370,7 +1507,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.score_data)
     def score_data():
-        dataset_name = active()
+        dataset_name = score_target()
         if not dataset_name:
             notify("Parse a dataset first.", type="error")
             return
@@ -1391,23 +1528,24 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         start_job(f"Scoring {dataset_name}", dataset_name, backend.SCORE_STAGES, work, done)
 
-    # Quality Control tab
-    @reactive.Calc
-    def pca_matrix_cached():
-        # Shared by the experiment and prey PCA plots and their PNG exports, so
-        # the preprocessing runs once per settings change and all four agree.
-        dataset_name = active()
-        if not dataset_name:
-            return None
+    # Quality Control tab.  Its computations read the dataset's largest files and take
+    # seconds on a large dataset, so they run in worker threads (see off_loop).
+    def experiment_pca(dataset_name, min_detection, imputation, normalization):
+        """The PCA matrix and the experiment PCA figure drawn from it."""
         interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
-        if not os.path.exists(interaction_path):
-            return None
-        return prepare_pca_matrix(
-            interaction_path,
-            min_detection_frac=input.pca_min_detection(),
-            imputation=input.pca_imputation(),
-            normalization=input.pca_normalization(),
-        )
+        matrix = prepare_pca_matrix(interaction_path, min_detection_frac=min_detection,
+                                    imputation=imputation, normalization=normalization)
+        figure = pca_plot(interaction_path, os.path.join(out_dir, dataset_name, "ED.csv"), matrix=matrix)
+        return matrix, figure
+
+    def pca_args():
+        dataset_name = req(active())
+        req(all(os.path.exists(os.path.join(out_dir, dataset_name, f)) for f in ("interaction.txt", "ED.csv")))
+        return dataset_name, input.pca_min_detection(), input.pca_imputation(), input.pca_normalization()
+
+    # Shared by the experiment and prey PCA plots and their PNG exports, so the
+    # preprocessing runs once per settings change and all four agree.
+    pca_result = off_loop(experiment_pca, pca_args)
 
     def _prey_pca_color_data(dataset_name, mode, bait, prey_index):
         """Color data for the prey PCA: (values, label, mode, threshold) as
@@ -1442,22 +1580,9 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render_plotly
     def raw_pca_plot():
-        with ui.Progress(min=0, max=100) as progress:
-            progress.set(message="Generating Plots...", value=25)
-            dataset_name = active()
-            if not dataset_name:
-                return None
-
-            interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
-            ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
-            if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
-                return None
-
-            matrix = pca_matrix_cached()
-            if matrix is None:
-                return None
-            show_legend = input.pca_show_legend() if many_pca_baits() else True
-            return pca_plot(interaction_path, ed_path, matrix=matrix, show_legend=show_legend)
+        # A copy, so the legend setting stays out of the cached figure.
+        figure = go.Figure(pca_result()[1])
+        return figure.update_layout(showlegend=input.pca_show_legend() if many_pca_baits() else True)
 
     @reactive.calc
     def many_pca_baits():
@@ -1471,23 +1596,19 @@ def server(input: Inputs, output: Outputs, session: Session):
             return None
         return ui.input_checkbox("pca_show_legend", "Show legend", value=False)
 
+    def prey_pca_figure(dataset_name, matrix, color, bait):
+        values, label, mode, threshold = _prey_pca_color_data(dataset_name, color, bait, matrix.index)
+        gene_names = prey_gene_names(os.path.join(out_dir, dataset_name, "prey.txt"))
+        return plot_prey_pca(matrix, color_values=values,
+                             color_label=label, color_mode=mode,
+                             color_threshold=threshold, gene_names=gene_names)
+
+    prey_pca_result = off_loop(prey_pca_figure, lambda: (active(), pca_result()[0], input.prey_pca_color(),
+                                                         input.prey_pca_bait()))
+
     @render_plotly
     def prey_pca_plot():
-        with ui.Progress(min=0, max=100) as progress:
-            progress.set(message="Generating Plots...", value=25)
-            dataset_name = active()
-            if not dataset_name:
-                return None
-            matrix = pca_matrix_cached()
-            if matrix is None:
-                return None
-            values, label, mode, threshold = _prey_pca_color_data(
-                dataset_name, input.prey_pca_color(), input.prey_pca_bait(),
-                matrix.index)
-            gene_names = prey_gene_names(os.path.join(out_dir, dataset_name, "prey.txt"))
-            return plot_prey_pca(matrix, color_values=values,
-                                 color_label=label, color_mode=mode,
-                                 color_threshold=threshold, gene_names=gene_names)
+        return prey_pca_result()
 
 
     def qc_experiments():
@@ -1516,35 +1637,32 @@ def server(input: Inputs, output: Outputs, session: Session):
             label_text = f"Metrics for {bait_selection}"
         return ui.p(label_text, class_="section-heading")
 
-    @reactive.calc
-    def qc_metrics():
-        """The three threshold metrics for the active scored dataset, or None."""
-        if not active_scored():
-            return None
-        return calculate_threshold_metrics(backend.results_path(active_scored()), thresholds(),
-                                           ctrl_experiments=qc_experiments())
+    def qc_scores_args():
+        return req(active_scored()), thresholds(), qc_experiments()
+
+    # The three threshold metrics for the active scored dataset.
+    qc_metrics = off_loop(lambda name, cutoffs, experiments: calculate_threshold_metrics(
+        backend.results_path(name), cutoffs, ctrl_experiments=experiments), qc_scores_args)
 
     @render.ui
     def metric_network_size():
-        metrics = qc_metrics()
-        if metrics is None:
+        if not active_scored():
             return ui.value_box(tip("Median Network Size", "metric_network_size"), "No data", showcase=None)
-        return ui.value_box("Median Network Size", f"{metrics['median_network_size']:.1f}",
+        return ui.value_box("Median Network Size", f"{qc_metrics()['median_network_size']:.1f}",
                             showcase=None, theme="primary")
 
     @render.ui
     def metric_enrichment():
-        metrics = qc_metrics()
-        if metrics is None:
+        if not active_scored():
             return ui.value_box(tip("Known Enrichment", "metric_enrichment"), "No data", showcase=None)
-        return ui.value_box("Known Enrichment", f"{metrics['enrichment_ratio']:.2f}x",
+        return ui.value_box("Known Enrichment", f"{qc_metrics()['enrichment_ratio']:.2f}x",
                             showcase=None, theme="success")
 
     @render.ui
     def metric_degree():
-        metrics = qc_metrics()
-        if metrics is None:
+        if not active_scored():
             return ui.value_box(tip("Mean Prey-Prey Degree", "metric_degree"), "No data", showcase=None)
+        metrics = qc_metrics()
         # A degree of zero is a real result, so an unreadable BioGRID summary is named
         # rather than averaged into one.
         if metrics['mean_degree'] is None:
@@ -1558,11 +1676,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         return ui.value_box("Mean Prey-Prey Degree", f"{metrics['mean_degree']:.1f}",
                             showcase=None, theme="info")
 
-    @reactive.calc
-    def qc_results_frame():
-        """The QC tab's passing interactions for the QC bait selection, as displayed."""
-        rows = backend.passing_scores(active_scored(), thresholds(), qc_experiments())
-        return backend.results_table(rows)
+    # The QC tab's passing interactions for the QC bait selection, as displayed.
+    qc_results_frame = off_loop(lambda name, cutoffs, experiments: backend.results_table(
+        backend.passing_scores(name, cutoffs, experiments)), qc_scores_args)
 
     @render.text
     def qc_results_count():
@@ -1576,7 +1692,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             return None
         return render.DataGrid(qc_results_frame(), filters=True, width="100%", height="400px")
 
-    @render.download_button(filename=lambda: f"{active_scored()}_passing_interactions.csv")
+    @render.download_button(filename=lambda: dp.safe_filename(
+        active_scored(), input.qc_bait(), "passing", filename_tag(thresholds()), ext="csv"))
     def download_qc_results():
         if not active_scored():
             notify("Score a dataset first.", type="error")
@@ -1585,8 +1702,19 @@ def server(input: Inputs, output: Outputs, session: Session):
         qc_results_frame().to_csv(path, index=False)
         return path
 
-    # Plot export download handlers (using matplotlib for PNG export)
-    @render.download_button(filename="pca_plot.png")
+    # Plot export download handlers (using matplotlib for PNG export).  Each filename
+    # names the dataset and the settings the plot was drawn with.
+    def pca_settings():
+        return (input.pca_imputation(), input.pca_normalization(),
+                f"det{input.pca_min_detection():g}")
+
+    def comparison_filename(kind, *extra):
+        return dp.safe_filename(active_scored(), input.comp_bait_a(), "vs", input.comp_bait_b(),
+                                kind, "A-" + filename_tag(read_thresholds("comp_a")),
+                                "B-" + filename_tag(read_thresholds("comp_b")), *extra, ext="png")
+
+    @render.download_button(filename=lambda: dp.safe_filename(
+        active(), "experiment_PCA", *pca_settings(), ext="png"))
     def download_pca_plot():
         dataset_name = active()
         if not dataset_name:
@@ -1597,21 +1725,20 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not (os.path.exists(interaction_path) and os.path.exists(ed_path)):
             notify("Required files not found.", type="error")
             return None
-        fig = pca_plot_matplotlib(interaction_path, ed_path, matrix=pca_matrix_cached())
+        fig = pca_plot_matplotlib(interaction_path, ed_path, matrix=pca_result()[0])
         filepath = os.path.join(out_dir, "pca_plot.png")
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download_button(filename="prey_pca_plot.png")
+    @render.download_button(filename=lambda: dp.safe_filename(
+        active(), "prey_PCA", *pca_settings(), input.prey_pca_color(),
+        input.prey_pca_bait() if input.prey_pca_color() == "saint" else None, ext="png"))
     def download_prey_pca_plot():
         dataset_name = active()
         if not dataset_name:
             notify("No dataset selected.", type="error")
             return None
-        matrix = pca_matrix_cached()
-        if matrix is None:
-            notify("Required files not found.", type="error")
-            return None
+        matrix = pca_result()[0]
         values, label, mode, threshold = _prey_pca_color_data(
             dataset_name, input.prey_pca_color(), input.prey_pca_bait(),
             matrix.index)
@@ -1622,7 +1749,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download_button(filename="scatter_plot.png")
+    @render.download_button(filename=lambda: dp.safe_filename(
+        active_scored(), input.qc_bait(), "SAINT_scatter",
+        f"SAINT{thresholds()['SaintScore']:g}", ext="png"))
     def download_scatter_plot():
         dataset_name = active_scored()
         bait_selection = input.qc_bait.get()
@@ -1635,19 +1764,21 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download_button(filename="heatmap.png")
+    # Feature_enrichment.csv does not record the thresholds it was run at, so the
+    # heatmap's name leaves them out.
+    @render.download_button(filename=lambda: dp.safe_filename(
+        active_scored(), input.feature_type(), f"top{input.num_features() or 30}", "heatmap",
+        ext="png"))
     def download_heatmap():
-        if isinstance(feature_heatmap(), str):
-            notify(feature_heatmap(), type="error")
+        heatmap = feature_heatmap()
+        if isinstance(heatmap, str):
+            notify(heatmap, type="error")
             return None
-        # A fresh figure: the on-screen one has been resized to its card.
-        feature_data = pd.read_csv(os.path.join(out_dir, active_scored(), "Feature_enrichment.csv"))
-        heatmap = plot_results(feature_data, input.feature_type(), input.num_features() or 30)
         filepath = os.path.join(out_dir, "heatmap.png")
         heatmap.savefig(filepath, dpi=150, bbox_inches='tight')
         return filepath
 
-    @render.download_button(filename="volcano_plot.png")
+    @render.download_button(filename=lambda: comparison_filename("volcano"))
     def download_volcano_plot():
         bait_a = input.comp_bait_a.get()
         bait_b = input.comp_bait_b.get()
@@ -1665,7 +1796,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         return filepath
 
-    @render.download_button(filename="venn_diagram.png")
+    @render.download_button(filename=lambda: comparison_filename("venn"))
     def download_venn_diagram():
         bait_a = input.comp_bait_a.get()
         bait_b = input.comp_bait_b.get()
@@ -1693,14 +1824,16 @@ def server(input: Inputs, output: Outputs, session: Session):
         return ui.div(output_widget("saint_scatter_plot"),
                       ui.p("Dashed line: SAINT threshold from the sidebar.", class_="help-text"))
 
+    def scatter_args():
+        bait_selection = input.qc_bait()
+        req(active_scored(), bait_selection != "All")
+        return backend.results_path(active_scored()), bait_selection, thresholds()['SaintScore']
+
+    saint_scatter = off_loop(plot_saint_scatter, scatter_args)
+
     @render_widget
     def saint_scatter_plot():
-        dataset_name = active_scored()
-        bait_selection = input.qc_bait()
-        if not dataset_name or bait_selection == "All":
-            return None
-        return plot_saint_scatter(backend.results_path(dataset_name), bait_selection,
-                                  thresholds()['SaintScore'])
+        return saint_scatter()
 
     # Feature Enrichment tab
     @reactive.effect
@@ -1725,7 +1858,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @reactive.calc
     def feature_heatmap():
-        """The feature heatmap for the active dataset, or the message shown in its place."""
+        """The feature heatmap for the active dataset at plot_results' default width, as
+        the PNG download saves it, or the message shown in its place."""
         _ = feature_enrichment.get()
         dataset = active_scored()
         if not dataset or not os.path.exists(os.path.join(out_dir, dataset, "Feature_enrichment.csv")):
@@ -1750,8 +1884,15 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.plot
     def feature_enrichment_plot():
-        heatmap = feature_heatmap()
-        return None if isinstance(heatmap, str) else heatmap
+        if isinstance(feature_heatmap(), str):
+            return None
+        # A figure of its own, laid out at the card's width.  Shiny draws it at the
+        # output's CSS size over the figure's dpi; 96 matches the card height above.
+        feature_data = pd.read_csv(os.path.join(out_dir, active_scored(), "Feature_enrichment.csv"))
+        heatmap = plot_results(feature_data, input.feature_type(), input.num_features() or 30,
+                               width=session.clientdata.output_width("feature_enrichment_plot") / 96)
+        heatmap.figure.set_dpi(96)
+        return heatmap
 
     @reactive.effect
     @reactive.event(input.active_dataset, datasets, feature_enrichment)
@@ -1829,13 +1970,13 @@ def server(input: Inputs, output: Outputs, session: Session):
         return savepath
 
     @reactive.effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(active_baits)
     def update_qc_bait():
-        baits = dataset_baits(active_scored()) if active_scored() else []
+        baits = active_baits()
         ui.update_select("qc_bait", choices=["All"] + baits)
 
     @reactive.effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(active_baits)
     def update_prey_pca_color_choices():
         # Annotation-based color options exist only once the dataset is scored;
         # HPA localization only when the organism has HPA data (human).
@@ -1849,7 +1990,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 choices["hpa"] = "HPA Main location"
             if "first_SCL" in cols:
                 choices["scl"] = "UniProt localization"
-            baits = dataset_baits(active_scored())
+            baits = active_baits()
         ui.update_select("prey_pca_color", choices=choices)
         ui.update_select("prey_pca_bait", choices=baits)
 
@@ -1892,11 +2033,11 @@ def server(input: Inputs, output: Outputs, session: Session):
                                          read_thresholds("comp_b"), out_dir)
 
     @reactive.effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(active_baits)
     def update_comp_baits():
         """Bait lists for the active dataset, B starting on the second bait, and both
         threshold sets starting from the shared one."""
-        baits = dataset_baits(active_scored()) if active_scored() else []
+        baits = active_baits()
         ui.update_select("comp_bait_a", choices=baits)
         ui.update_select("comp_bait_b", choices=baits, selected=baits[1] if len(baits) > 1 else None)
         for side in ("comp_a", "comp_b"):
@@ -2116,9 +2257,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not dataset or preset is None:
             return pd.DataFrame()
         dataset_dir = os.path.join(out_dir, dataset)
-        # Checkbox state can still belong to the previously shown preset while
-        # the update_dl_groups round-trip is in flight; sanitize it.
-        groups = dp.effective_selection(preset, input.dl_groups.get())
+        # dl_groups exists only after dl_groups_ui has drawn checkboxes, and
+        # reading an unset input would silently cancel this render. Its state
+        # can also still belong to the previously shown preset; sanitize it.
+        picked = input.dl_groups.get() if "dl_groups" in input else ()
+        groups = dp.effective_selection(preset, picked)
         try:
             if preset_key == 'ed':
                 ed_path = os.path.join(dataset_dir, "ED.csv")
@@ -2283,9 +2426,9 @@ def server(input: Inputs, output: Outputs, session: Session):
             return None
 
     @reactive.effect
-    @reactive.event(input.active_dataset, datasets)
+    @reactive.event(active_baits)
     def update_cy_baits():
-        baits = sorted(dataset_baits(active_scored())) if active_scored() else []
+        baits = sorted(active_baits())
         ui.update_selectize("cy_baits", choices=baits, selected=[])
 
     @reactive.effect
@@ -2300,8 +2443,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.update_checkbox("cy_corum", value=opts["corum"])
         ui.update_select("cy_layout", selected=opts["layout"])
 
+    # Probes once when the session starts and again on each Check Connection click.
+    # cy_status only reads cy_health: setting a value a render has read re-runs that
+    # render mid-flight, which the browser reports as Shiny state errors.
     @reactive.effect
-    @reactive.event(input.cy_probe)
+    @reactive.event(input.cy_probe, ignore_none=False)
     def cy_probe():
         cy_health.set(cytoscape_ctl.health())
 
@@ -2309,9 +2455,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def cy_status():
         cy_version()
         health = cy_health.get()
-        if health is None:
-            health = cytoscape_ctl.health()
-            cy_health.set(health)
+        req(health)
         snap = cytoscape_ctl.snapshot()
         if health['ok']:
             line = ui.p(ui.span("● ", class_="status-ok"),
@@ -2419,6 +2563,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         cutoffs = thresholds()
         options = dict(baits=list(input.cy_baits.get() or []), prey_prey=input.cy_prey_prey.get(),
                        biogrid_path=biogrid_path, label_policy=input.cy_labels.get(),
+                       bait_labels=input.cy_bait_labels.get(),
                        layout=input.cy_layout.get(), width_source=input.cy_edge_width.get(),
                        literature_weighted=input.cy_lit_weighted.get(),
                        biogrid_scope=input.cy_biogrid_scope.get(), corum_path=corum_path,
@@ -2448,7 +2593,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def cy_restyle():
         changed = cy_call("apply the style", cytoscape_ctl.restyle, input.cy_style_preset.get(),
                           input.cy_edge_width.get(), input.cy_lit_weighted.get(),
-                          input.cy_biogrid_scope.get())
+                          input.cy_biogrid_scope.get(), input.cy_bait_labels.get())
         if changed is not None:
             notify(f"Style applied: {changed} edge(s) changed.")
 

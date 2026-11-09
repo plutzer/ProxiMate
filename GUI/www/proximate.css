@@ -11,13 +11,19 @@
 .sidebar .form-group {
     margin-bottom: 0.75rem;
 }
-.sidebar .irs {
-    white-space: nowrap;
+/* A threshold's slider sits directly under its number box. */
+.threshold-range {
+    display: block;
+    margin: -0.5rem 0 0.75rem;
 }
 .mcp-command {
     white-space: pre-wrap;
     word-break: break-all;
     font-size: 0.75em;
+}
+.threshold-error {
+    color: #b00020;
+    font-size: 0.9em;
 }
 .wdfdr-warning {
     color: #b35900;
@@ -211,4 +217,11 @@
     position: sticky;
     top: 0;
     background: #fff;
+}
+
+/* shinywidgets hides a widget output with an inline visibility style while it has no
+   value, which hides Shiny's busy spinner with it; keep a recalculating one visible so
+   its spinner shows.  Shiny's own rule for htmlwidgets outputs does the same. */
+[data-shiny-busy-spinners] .recalculating.shiny-ipywidget-output {
+    visibility: inherit !important;
 }
