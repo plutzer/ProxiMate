@@ -17,11 +17,12 @@ elsewhere.
 Open the **Cytoscape** tab. The *Status* panel on the right says whether Cytoscape
 answers; click **Check Connection** if it does not show a green dot.
 
-In the *Network* card, add the five baits to **Baits**: CTNNA1, CTNNB1, MLLT4 (afadin),
-OCLN and PARD3. Type a gene name and pick the bait from the list; names carry the tag
-suffix, for example `CTNNB1 (BirA-FLAG)`. Leaving the field empty draws every bait.
+In the *Network* card, add the five baits to **Baits**: `CTNNA1 (C-BirA-FLAG)`,
+`CTNNB1 (BirA-FLAG)`, `MLLT4 (BirA-FLAG)` (afadin), `OCLN (C-BirA-FLAG)` and
+`PARD3 (C-BirA-FLAG)`. Type a gene name and pick the bait from the list; names carry the
+tag suffix. Leaving the field empty draws every bait.
 
-![Baits picked, style options and the Cytoscape status panel](img/5-cy-setup.png)
+![Baits picked and the Cytoscape status panel](img/5-cy-setup.png)
 
 Below the baits, the card repeats the sidebar thresholds (read-only) and holds the style
 options. Scroll down to the edge options:
@@ -35,8 +36,8 @@ options. Scroll down to the edge options:
   *Min subunits drawn* of its members are drawn and at least *Min share by one bait* of
   them come from one bait.
 - The **Will draw** line counts what a send will produce and updates as you change the
-  baits, thresholds or edge options. Here: 5 baits, 92 nodes and 396 edges (181
-  bait-prey, 215 BioGRID).
+  baits, thresholds or edge options. Here: 5 baits, 92 nodes and 347 edges (181
+  bait-prey, 166 BioGRID, 0 complex).
 
 Click **Send to Cytoscape**. A progress modal runs while the network is built and drawn,
 and the *Activity* table at the bottom of the tab logs the draw.
@@ -62,26 +63,44 @@ Here, send again to get the new layout:
 ![The same baits with the Highlight knowns style](img/5-cy-highlight-knowns.png)
 
 Baits are black ellipses and preys grey boxes. A red border marks a prey whose
-interaction with a drawn bait is BioGRID-multivalidated. OCLN (lower left) has its
-own large neighborhood, while CTNNA1, CTNNB1, MLLT4 and PARD3 share many preys and sit
-together (upper right).
+interaction with a drawn bait is BioGRID-multivalidated. OCLN (bottom) has its own
+large neighborhood, while CTNNA1, CTNNB1, MLLT4 and PARD3 share many preys and sit
+together above it.
+
+## Labels
+
+![Style section with Bait labels set to Experiment name](img/5-cy-bait-labels.png)
+
+In the *Style* section, **Labels** sets which nodes carry a label and **Bait labels**
+what a bait's label says: its *Experiment name* (the default, `CTNNB1 (BirA-FLAG)`) or
+its *Gene symbol* (`CTNNB1`). The symbol comes from the scores, so MLLT4 is labeled
+AFDN, its current gene symbol; a bait whose accession has no gene in the scores keeps
+its experiment name. Set *Gene symbol* and click **Apply Style**: the labels of the
+drawn network change in place and the layout stays.
+
+![The network with gene-symbol bait labels](img/5-cy-gene-labels.png)
+
+Gene symbols read better on a poster; experiment names tell two constructs of one gene
+apart. Set *Bait labels* back to *Experiment name* and apply the style again; the rest
+of this tutorial uses the experiment names.
 
 **Re-apply Thresholds** hides edges that fail tighter sidebar thresholds without
 redrawing, so a hand-made layout survives. Loosening the thresholds needs a new send.
 
 ## Select
 
-Expand **Select by relation** in the *Cytoscape* card. Enter the seed as it appears in the
-network, `OCLN (C-BirA-FLAG)` (the gene name alone is not found), keep *Relation* at
-*Interactors of a bait*, and click **Replace Selection**. Cytoscape selects OCLN's 66
-interactors. The optional *Min SAINT*, *Max BFDR*, *Min abundance* and *Min
-publications* boxes narrow the relation.
+Expand **Select by relation** in the *Cytoscape* card. Enter the seed `OCLN (C-BirA-FLAG)`
+(a bait's experiment name, its gene symbol or its UniProt accession all work, whichever
+label the network shows), keep *Relation* at *Interactors of a bait*, and click
+**Replace Selection**. Cytoscape selects OCLN's 66 interactors. The optional *Min
+SAINT*, *Max BFDR*, *Min abundance* and *Min publications* boxes narrow the relation.
 
 In the *Selection* panel, click **Read Selection**:
 
 ![Selection table for OCLN's interactors](img/5-cy-selection.png)
 
-The table lists every edge touching the selected nodes with its scores (346 rows here),
+The table lists every edge touching the selected nodes with its scores (297 rows here;
+the BioGRID edges the *Highlight knowns* preset hides are not among them),
 and **Download selection CSV** saves it as `HCM_LFQ_Default_selection.csv`. The other
 buttons act on the selection in Cytoscape: hide or show the edges around it, hide
 everything else, and, with exactly one bait selected, *Select Loners* (that bait's
@@ -98,12 +117,13 @@ colors every community of two or more, and lays each out as a circle (*Cluster l
 Selected baits stay in place. *Resolution* sets community size (higher gives more,
 smaller communities) and *Seed* makes the result repeatable.
 
-![OCLN's interactors clustered into colored communities](img/5-cy-clustered.png)
+![OCLN's interactors after Cluster and Repack: colored communities above, single preys in a grid below](img/5-cy-clustered.png)
 
-Here the 65 preys fall into 42 communities. Seven have two or more members, for example
-APC with the desmosome proteins JUP, DSG2 and PKP2, and spectrin and adducins (SPTBN1,
-ADD1, ADD3). The rest are single preys with no drawn edge to another selected prey,
-packed in a grid below.
+Here the 65 preys fall into 50 communities. Seven have two or more members, for example
+APC with JUP, DSG2 and PKP2, SPTBN1 with SPTAN1, and ADD1 with ADD3; the other 43 are
+single preys with no drawn edge to another selected prey, packed in a grid below. The
+preys stay selected after clustering, and Cytoscape's yellow selection highlight hides
+the community colors until you click an empty spot of the canvas.
 
 *Saved layouts* stores and restores node positions by name, and *Export* writes a PNG of
 the network into the dataset's `cytoscape/` folder.

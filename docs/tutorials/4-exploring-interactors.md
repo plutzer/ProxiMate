@@ -15,9 +15,9 @@ function *GO_MF*) and UniProt sequence features (motifs, regions, repeats,
 compositions, domains).
 
 1. Open **Feature Enrichment** and click **Run Feature Enrichment** in the *Foreground*
-   card. The job runs under a progress modal for under a minute on this dataset and
-   writes `Feature_enrichment.csv` into the dataset's directory; the dataset's State in
-   the session table becomes `enriched`.
+   card. The job runs under a progress modal for about half a minute on this dataset
+   and writes `Feature_enrichment.csv` into the dataset's directory; the dataset's
+   State in the *Datasets* table becomes `enriched`.
 2. In the *Top features* card, *Select Feature Type* picks the feature family for the
    heatmap (`GO_CC` here) and *Number of Features to Display* how many rows it shows
    (15 here; the default is 30).
@@ -25,10 +25,11 @@ compositions, domains).
 ![Heatmap of the top 15 GO cellular-component features across baits](img/4-enrichment-heatmap.png)
 
 Rows are features, columns are baits, and color is log2 enrichment; both are clustered,
-so baits with similar localization sit together. With all 192 HCM baits the column
-labels overlap, so read the heatmap for its blocks (a group of baits sharing
+so baits with similar localization sit together. With all 192 HCM baits only some column
+labels are shown, so read the heatmap for its blocks (a group of baits sharing
 *nuclear envelope*, another sharing *adherens junction*) and use the download below for
-single baits. *Export Heatmap PNG* saves the figure.
+single baits. *Export Heatmap PNG* saves the figure as
+`HCM_LFQ_Default_GO_CC_top15_heatmap.png`.
 
 ### Download the results for one bait
 
@@ -49,8 +50,9 @@ preys are where β-catenin is expected to be.
 ## Compare Baits
 
 Open **Compare Baits**. The *Network A* and *Network B* cards each pick a bait and
-carry their own copy of the four thresholds, which start from the sidebar values;
-*Use shared thresholds* copies the sidebar's current values into that card.
+carry the same number boxes and sliders as the sidebar, so each network has its own
+four thresholds. They start from the sidebar values, and *Use shared thresholds* copies
+the sidebar's current values into that card.
 
 ![Network A set to CTNNB1 and Network B to CTNNA1](img/4-compare-setup.png)
 
@@ -70,14 +72,19 @@ click **Compare**.
   only*, *Both* (purple) or *Neither* (grey). Here no prey passes for CTNNA1 alone, so
   that category does not appear in the legend.
 
+*Export PNG* under the plot saves it, named after the dataset, both baits and both
+threshold sets:
+`HCM_LFQ_Default_CTNNB1_BirA-FLAG_vs_CTNNA1_C-BirA-FLAG_volcano_A-SAINT0.9_BFDR0.05_WD0_WDFDR1_B-SAINT0.9_BFDR0.05_WD0_WDFDR1.png`.
+The Venn diagram's *Export PNG* uses the same pattern with `venn` in place of `volcano`.
+
 ### Overlap and gene lists
 
 ![Venn diagram of passing preys and the shared gene list](img/4-compare-venn.png)
 
-The Venn diagram counts preys passing in A only, in both, and in B only. CTNNB1 has 31
-passing preys and CTNNA1 has 13, and every CTNNA1 prey is shared with CTNNB1. The *Gene
-Lists* tabs hold the genes behind each region as plain text to copy; *Both Networks*
-lists the 13 shared ones, among them CTNND1, JUP, APC, PARD3 and TJP1.
+The Venn diagram counts preys passing in A only, in both, and in B only: 18, 13 and 0.
+CTNNB1 has 31 passing preys and CTNNA1 has 13, and every CTNNA1 prey is shared with
+CTNNB1. The *Gene Lists* tabs hold the genes behind each region as plain text to copy;
+*Both Networks* lists the 13 shared ones, among them CTNND1, JUP, APC, PARD3 and TJP1.
 
 ## What to look for
 

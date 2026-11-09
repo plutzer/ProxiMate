@@ -32,7 +32,7 @@ are the first check to run after parsing.
 **Select QC Bait** restricts the metrics, scatter and table to one bait. With *All*
 selected, the metric tiles summarize every bait; for `HCM_LFQ_Default` at the defaults
 they read a median network size of 31 preys, a known enrichment of 3.13x, and a mean
-prey-prey degree of 41.3.
+prey-prey degree of 36.6.
 
 Pick **CTNNB1 (BirA-FLAG)**:
 
@@ -49,10 +49,14 @@ Pick **CTNNB1 (BirA-FLAG)**:
   BioGRID than all scored interactions are. CTNNB1's 2.64x means its passing preys are
   2.6 times richer in known interactions than chance.
 - **Mean Prey-Prey Degree**: on average, how many known BioGRID partners each passing
-  prey has among the other passing preys. A high value means the preys form complexes
-  rather than a random set.
+  prey has among the other passing preys (4.6 for CTNNB1). A high value means the preys
+  form complexes rather than a random set.
 
-Move the SAINT slider in the sidebar and watch the tiles and the dashed line follow.
+Change the SAINT cutoff in the sidebar and watch the tiles and the dashed line follow.
+*Export PNG* under the plot saves it as
+`HCM_LFQ_Default_CTNNB1_BirA-FLAG_SAINT_scatter_SAINT0.9.png` (it needs one bait
+selected; with *All* it shows an error); every download on this tab is named after the
+dataset, the bait and the settings that shaped it.
 
 ## Passing interactions
 
@@ -62,8 +66,9 @@ The *Passing interactions* table lists every interaction that passes the sidebar
 thresholds for the selected bait, here 31 rows for CTNNB1 (7,023 rows for *All*). Each
 column has a filter box (two boxes, minimum and maximum, for numeric columns), and
 clicking a header sorts by it. *Abundance* is the prey's average quantity across the
-bait's replicates (the `AvgIntensity` column of the scores). *Download CSV* saves the same rows; for this example it writes
-`HCM_LFQ_Default_passing_interactions.csv`.
+bait's replicates (the `AvgIntensity` column of the scores). *Download CSV* saves the
+same rows; for this example it writes
+`HCM_LFQ_Default_CTNNB1_BirA-FLAG_passing_SAINT0.9_BFDR0.05_WD0_WDFDR1.csv`.
 
 For CTNNB1 the list opens with the core of the cadherin-catenin complex: CTNND1
 (p120-catenin), APC, CTNNA1 (α-catenin), JUP (plakoglobin) and CTNNB1 itself, all
