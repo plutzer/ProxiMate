@@ -475,7 +475,7 @@ def test_gui_documentation_covers_every_tab_and_every_tooltip():
         covered |= set(page['controls'])
     assert covered == set(help_text.TOOLTIPS)
     cy = mcp_tools.get_gui_documentation('Cytoscape')
-    assert 'Select Loners' in cy['text']            # the README section rides along
+    assert 'Select Loners' in cy['text']
     scoring = mcp_tools.get_gui_documentation('Data & Scoring')
     assert set(scoring['format_notes']) == set(backend.INPUT_FORMATS)
     with pytest.raises(KeyError):

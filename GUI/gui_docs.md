@@ -80,6 +80,17 @@ it), the number of WDFDR permutations, and for human data whether Human Cell Map
 evidence is excluded from BioGRID. *Score Data* runs SAINTexpress and
 CompPASS, then annotates the result; the row's State becomes `scored`.
 
+Excluding Human Cell Map evidence annotates against a copy of the human BioGRID summary
+with every evidence line from Go et al. 2021 removed. HCM is itself a BioID screen, so
+its evidence makes proximity-labeling hits look more "known" than they are. Interactions
+with other evidence are kept, `run.json` records the choice, and the Quality Control
+metrics use the same file the run was annotated against.
+
+Each dataset directory holds `run.json` (parameters, input checksums, row counts,
+package versions, pass/fail per stage) and `proximate.log` (timestamped log from
+parsing, scoring and annotation). Both carry a run ID shared by the GUI and the jobs it
+launches. `run.json` is the file to attach to a bug report.
+
 Parsing, scoring, feature enrichment and sending to Cytoscape each run under a progress
 modal that lists the job's stages with the current one marked, the elapsed time and the
 last lines of the dataset's `proximate.log`. On success the modal closes and a
@@ -136,7 +147,8 @@ only B, or both, and the gene lists behind each region are shown as text to copy
 ## Cytoscape
 
 Sends the active dataset's interactions passing the sidebar thresholds into a Cytoscape
-desktop on the same machine and keeps a link to it.
+desktop on the same machine and keeps a link to it. The server reaches Cytoscape's
+CyREST at `PROXIMATE_CYTOSCAPE_URL` (port 1234 on the host by default).
 
 The left *Network* card holds the send options under four headings. *Network* picks the
 baits to draw (empty draws all) and repeats the sidebar thresholds read-only. *Style*: the
@@ -149,9 +161,14 @@ Picking a preset also sets the send options it is designed for, which the user c
 change. The other style options are the node label policy, *Bait labels* (a bait's
 experiment name, the default, or its gene symbol; a bait whose accession has no gene in
 the scores keeps its experiment name), the layout algorithm and what bait-prey edge width
-encodes. *Edges*: whether to add prey-prey BioGRID edges, all pairs
+encodes (abundance, SAINT score, WD score, fold change, or one uniform width). *Edges*:
+whether to add prey-prey BioGRID edges, all pairs
 or only multivalidated ones (the others are sent hidden), optionally thickened by
-publication count. *Complexes*: CORUM complex edges for human data, under two criteria.
+publication count. *Complexes*: for human data, *CORUM complex edges* draws black edges
+between drawn subunits of a complex the screen recovered: at least *Min subunits drawn*
+of its members are in the network, and one bait, counted with its preys, covers at least
+*Min share by one bait* of the full membership. The criteria apply when the network is
+sent.
 
 Under the options a line reads "Will draw: N baits, X nodes, Y edges" with the edges by
 kind; it follows the thresholds, baits and edge options half a second after they stop
@@ -160,7 +177,9 @@ passes). A send that would draw more than 5000 visible edges first asks for conf
 and suggests the *Multivalidated only* BioGRID scope or fewer baits. Each send replaces the
 previous ProxiMate network. With a network drawn, *Re-apply Thresholds* hides edges that
 fail tighter thresholds without redrawing, so a hand layout survives (loosening needs a
-new send), and *Apply Style* applies the preset, bait labels and edge options in place.
+new send), and *Apply Style* applies the preset, bait labels and edge options in place:
+nothing moves and community colors survive, but adding prey-prey or complex edges needs a
+new send.
 
 The *Cytoscape* card groups the tools on the drawn network in collapsible panels.
 *Status* says whether Cytoscape answers and which network is drawn; *Check Connection*
@@ -168,16 +187,25 @@ asks again and *Unlock View* frees a view that stopped panning. *Selection*: *Re
 Selection* lists the selected nodes with the edges touching them, their target gene and
 scores (SAINT, BFDR, WD and WDFDR to 3 decimals, fold change to 2); the panel header
 shows the row count and *Download selection CSV* saves the table. The hide/show buttons
-act on edges around the selection, and *Select Loners* / *Select Satellites* pick a
-bait's loners or satellites. *Select by relation* selects the nodes a relation names
+act on edges around the selection. With one bait selected, *Select Loners* picks it with
+the preys whose only visible neighbor it is, and *Select Satellites* adds the two-bait
+preys that currently sit nearer to it than to their other bait. *Select by relation*
+selects the nodes a relation names
 for a seed, typed as a bait's experiment name, a gene symbol or a UniProt accession
 (case-insensitive, whichever bait labels are shown); a gene or accession shared by two
-drawn baits fails with a message naming both. *Cluster the selection*: *Cluster and Repack* runs Leiden over the selected
-preys and arranges them by community with the chosen cluster layout (circles, or a
-force-directed or Kamada-Kawai layout of each community inside its own disc), coloring
+drawn baits fails with a message naming both. The relations are a bait's interactors
+(with optional SAINT, BFDR and abundance cuts), its singletons, a node's BioGRID or
+complex partners, and its CORUM co-complex members; the result replaces or adds to the
+selection. *Cluster the selection*: *Cluster and Repack* runs Leiden over the selected
+preys and arranges them by community inside the box the selection occupies, with the
+chosen cluster layout (circles, each community on its own ring tiled in rows, or a
+force-directed or Kamada-Kawai layout of each community inside its own disc, which suits
+large selections), coloring
 communities of two or more nodes unless *Recolor communities* is off, and leaving
-selected baits in place. *Saved layouts*: *Save Layout* writes every drawn node's
-position to a named `id,x,y` file under the dataset's `cytoscape/layouts/` folder,
+selected baits in place. Only selected nodes move, and the community number lands in the
+node table. *Saved layouts*: *Save Layout* writes every drawn node's
+position to a named `id,x,y` file under the dataset's `cytoscape/layouts/` folder, keyed
+on the node name Cytoscape shows (UniProt accession for a prey, bait name for a bait) and
 merging into an earlier save of that name so one layout can cover several bait subsets;
 *Load Layout* moves the drawn nodes a saved layout names back to those positions and
 leaves the rest where they are. *Export*: *Export PNG* writes an image under the

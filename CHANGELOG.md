@@ -11,6 +11,14 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+### Changed
+- The README is a quickstart; the command line, Cytoscape setup, MCP, logs, databases and
+  development details are separate pages under `docs/`. Tooltips are shorter.
+
+### Fixed
+- `get_gui_documentation` no longer fails for the Cytoscape and Data & Scoring tabs
+  inside the container, where it tried to read a `README.md` the image does not carry.
+
 ## [0.4.0] - 2026-10-20
 
 ### Added

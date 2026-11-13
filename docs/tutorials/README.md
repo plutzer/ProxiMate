@@ -1,9 +1,15 @@
 # ProxiMate tutorials
 
-Task-focused walkthroughs of the ProxiMate GUI. Tutorials 1 and 3 to 5 use the Human
-Cell Map datasets that ship with the Docker image; tutorial 2 uses the small example
-dataset downloadable from inside the GUI. Start the GUI with
-`docker run -p 3838:3838 plutzer/proximate` and open http://localhost:3838.
+Five walkthroughs of the ProxiMate GUI. Start it, then open http://localhost:3838:
+
+```bash
+docker run -p 3838:3838 \
+  --mount type=bind,source=<output_dir>,target=/Outputs \
+  plutzer/proximate
+```
+
+Tutorial 2 uses the small example dataset downloadable from inside the GUI. The others
+use the Human Cell Map datasets that ship with the Docker image.
 
 1. [Getting started](1-getting-started.md): the scores in plain language and the sidebar
    (active dataset, thresholds, presets).
@@ -16,4 +22,4 @@ dataset downloadable from inside the GUI. Start the GUI with
 5. [Networks and export](5-networks-and-export.md): draw, restyle, select and cluster a
    network in Cytoscape, then export results.
 
-For a reference description of every control, see [`GUI/gui_docs.md`](../../GUI/gui_docs.md).
+Every control is described in [`GUI/gui_docs.md`](../../GUI/gui_docs.md).

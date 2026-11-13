@@ -160,7 +160,7 @@ app_ui = ui.page_navbar(
                         ui.layout_columns(
                             ui.input_text("dataset_name",
                                         tip("Dataset Name", "dataset_name"),
-                                        placeholder="No spaces or special characters (/ \\ : * ? \" < > |)"),
+                                        placeholder="Letters, digits, _"),
                             ui.input_select("input_format", tip("Input Format", "input_format"),
                                            choices=["MaxQuant", "DIA-NN", "Pioneer", "FragPipe", "MSstats", "SAINT"],
                                            selected="MaxQuant"),
@@ -231,10 +231,6 @@ app_ui = ui.page_navbar(
                                 ui.div(
                                     ui.input_file("msstats_file", tip("MSstats ProteinLevelData.csv file", "msstats_file")),
                                     ui.input_file("ed_file", tip("Experimental Design File", "ed_file_msstats")),
-                                    ui.tags.small(
-                                        "Note: MSstats data is already log2-transformed, normalized, and imputed. Set Imputation Method to 'Default' (0).",
-                                        class_="help-text d-block mt-2"
-                                    )
                                 ),
                                 ui.output_data_frame("ed_table_msstats"),
                                 col_widths=[4, 8]
@@ -261,7 +257,7 @@ app_ui = ui.page_navbar(
                     ui.card(
                         ui.card_header(
                             ui.span("Step 2 — Score", class_="step-title"),
-                            ui.span("Scores a dataset with SAINT and CompPASS, then annotates it.",
+                            ui.span("Score a dataset with SAINT and CompPASS, then annotate it.",
                                     class_="step-purpose")),
                         ui.input_select("score_dataset", tip("Dataset to score", "score_dataset"), choices=[]),
                         # Organism selection for annotation databases.
@@ -410,7 +406,7 @@ app_ui = ui.page_navbar(
                 ui.layout_columns(
                     ui.card(
                         ui.card_header("Foreground"),
-                        ui.p("Preys passing the sidebar thresholds form the foreground tested for enrichment.",
+                        ui.p("Preys passing the sidebar thresholds.",
                              class_="help-text"),
                         ui.tooltip(ui.input_action_button("feature_analysis", "Run Feature Enrichment"),
                                    TOOLTIPS["feature_analysis"]),
@@ -478,9 +474,8 @@ app_ui = ui.page_navbar(
             ui.card_header(tip("Differential Abundance Volcano Plot", "volcano_plot")),
             ui.output_ui("volcano_body"),
             ui.download_button("download_volcano_plot", "Export PNG", class_="btn-sm"),
-            ui.p("Flanking strips hold preys detected under only one bait "
-                 "(y = -log10 BFDR); the central panel holds shared preys "
-                 "(y = -log10 BH-adjusted p).",
+            ui.p("Side strips: preys under one bait only (y = -log10 BFDR). "
+                 "Center: shared preys (y = -log10 BH-adjusted p).",
                  class_="help-text mt-2"),
         ),
 
@@ -720,7 +715,6 @@ app_ui = ui.page_navbar(
                     ),
                     ui.card(
                         ui.card_header(tip("Batch Export", "batch_export")),
-                        ui.p("Download all results for a dataset as a ZIP file. Includes merged.csv, annotated_scores.csv, Feature_enrichment.csv (if available), and SAINT input files."),
                         ui.download_button("download_batch", "Download All Results (ZIP)"),
                     ),
                     ),
@@ -746,7 +740,6 @@ app_ui = ui.page_navbar(
             ),
             ui.accordion_panel(
                 "About and feedback",
-                ui.p("Your feedback is invaluable in helping us improve the tool.", class_="small"),
                 ui.tags.ul(
                     ui.tags.li(ui.a("Report a bug or request a new feature", href="https://github.com/plutzer/ProxiMate/issues",
                                     target="_blank")),
@@ -1136,7 +1129,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 missing_cols = [col for col in required_cols if col not in ed_df.columns]
                 if missing_cols:
                     notify(
-                        f"ED file is missing required columns: {', '.join(missing_cols)}",
+                        f"Experimental design file is missing required columns: {', '.join(missing_cols)}",
                         type="error"
                     )
                     return
@@ -1153,7 +1146,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 invalid_types = ed_df[~ed_df['Type'].isin(['C', 'T'])]
                 if len(invalid_types) > 0:
                     notify(
-                        f"ED file contains invalid Type values. Must be 'C' or 'T'.",
+                        "Experimental design file has invalid Type values. Use 'C' or 'T'.",
                         type="error"
                     )
                     return
@@ -1161,7 +1154,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 ed_dataframe.set(ed_df)
             except Exception as e:
                 notify(
-                    f"Error reading ED file: {str(e)}",
+                    f"Could not read the experimental design file: {str(e)}",
                     type="error",
                     exc_info=True
                 )
@@ -1424,7 +1417,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             logger.info("Session archive written to %s", zip_path)
             return zip_path
         except Exception as e:
-            notify(f"Could not build the session archive: {e}",
+            notify(f"Could not build the session zip: {e}",
                    type="error", duration=None, exc_info=True)
             return None
 
@@ -1433,7 +1426,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def upload_session():
         uploaded = input.session_file.get()
         if not uploaded:
-            notify("No session archive selected.", type="error")
+            notify("No session zip selected.", type="error")
             return
         zip_path = uploaded[0]['datapath']
 
@@ -1444,7 +1437,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             notify(str(e), type="error", duration=None)
         except Exception as e:
             logger.exception("Failed to restore session from %s", zip_path)
-            notify(f"Could not restore the session archive: {e}", type="error",
+            notify(f"Could not restore the session zip: {e}", type="error",
                    duration=None)
 
 
@@ -1718,7 +1711,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def download_pca_plot():
         dataset_name = active()
         if not dataset_name:
-            notify("No dataset selected.", type="error")
+            notify("No dataset is active.", type="error")
             return None
         interaction_path = os.path.join(out_dir, dataset_name, "interaction.txt")
         ed_path = os.path.join(out_dir, dataset_name, "ED.csv")
@@ -1736,7 +1729,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def download_prey_pca_plot():
         dataset_name = active()
         if not dataset_name:
-            notify("No dataset selected.", type="error")
+            notify("No dataset is active.", type="error")
             return None
         matrix = pca_result()[0]
         values, label, mode, threshold = _prey_pca_color_data(
@@ -1922,12 +1915,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         """Download filtered enrichment results."""
         dataset = active_scored()
         if not dataset:
-            notify("No dataset selected.", type="error")
+            notify("No dataset is active.", type="error")
             return None
 
         feature_file = os.path.join(out_dir, dataset, "Feature_enrichment.csv")
         if not os.path.exists(feature_file):
-            notify("No enrichment results available. Please run feature analysis first.", type="error")
+            notify("No enrichment results. Run Feature Enrichment first.", type="error")
             return None
 
         # Load enrichment data
@@ -2336,7 +2329,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         dataset = active()
         preset = dp.PRESETS.get(input.dl_preset.get())
         if not dataset or preset is None:
-            notify("No dataset selected.", type="error")
+            notify("No dataset is active.", type="error")
             return None
         if preset.kind == 'files':
             if not dl_result_files.get():
@@ -2362,7 +2355,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         """Download all results for a dataset as a ZIP file."""
         dataset = active()
         if not dataset:
-            notify("No dataset selected.", type="error")
+            notify("No dataset is active.", type="error")
             return None
 
         notify("Preparing ZIP file...", type="message", duration=2)
@@ -2537,9 +2530,9 @@ def server(input: Inputs, output: Outputs, session: Session):
             cy_start_send()
             return
         ui.modal_show(ui.modal(
-            ui.p(f"This network has {estimate_text(counts)}: more than {SEND_WARN_EDGES} edges, "
-                 "which Cytoscape draws slowly and which is hard to read."),
-            ui.p("Consider the \"Multivalidated only\" BioGRID scope or fewer baits."),
+            ui.p(f"This network has {estimate_text(counts)}. Over {SEND_WARN_EDGES} edges "
+                 "draws slowly and is hard to read."),
+            ui.p("Try the \"Multivalidated only\" BioGRID scope or fewer baits."),
             title="Large network", easy_close=True,
             footer=ui.div(
                 ui.modal_button("Cancel"),
