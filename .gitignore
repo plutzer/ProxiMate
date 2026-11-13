@@ -33,3 +33,6 @@ DIANN_example/
 # Annotation databases downloaded for a local release build; Datasets/.gitignore
 # keeps everything but CORUM out of the tree
 Datasets/build_info.txt
+
+# Manuscript figure assets (screenshots re-captured at 3x for Illustrator)
+figures/
