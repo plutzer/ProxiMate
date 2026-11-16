@@ -24,11 +24,6 @@ logger = get_logger(__name__)
 
 GUI_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCS_PATH = os.path.join(GUI_DIR, 'gui_docs.md')
-README_PATH = os.path.join(os.path.dirname(GUI_DIR), 'README.md')
-
-# README sections that complement a tab's page.
-README_SECTIONS = {'Cytoscape': ('Cytoscape',), 'Data & Scoring': ('Logs and provenance',
-                                                                    'Excluding Human Cell Map evidence')}
 
 
 def search_tools(query: str = '', mode: str = None) -> list:
@@ -86,23 +81,14 @@ def _split_docs(text):
     return sections
 
 
-def _readme_section(title):
-    with open(README_PATH, encoding='utf-8') as handle:
-        text = handle.read()
-    match = re.search(r'^#{2,3} ' + re.escape(title) + r'\s*$\n(.*?)(?=^#{2,3} |\Z)', text, re.M | re.S)
-    if not match:
-        raise KeyError(f"README has no section {title!r}")
-    return match.group(1).strip()
-
-
 def get_gui_documentation(section: str = None) -> dict:
     """What the user sees in the ProxiMate GUI, tab by tab, to help them use it.
 
     With no section: the table of contents with a paragraph per tab.  With a tab name
     (Data & Scoring, Quality Control, Feature Enrichment, Compare Baits, Cytoscape,
-    Export): that tab's walkthrough, the tooltip of every control on it keyed by
-    control, and any README section that explains it further.  Data & Scoring also
-    carries ``format_notes``: what each input format needs.
+    Export): that tab's walkthrough and the tooltip of every control on it keyed by
+    control.  Data & Scoring also carries ``format_notes``: what each input format
+    needs.
     """
     with open(DOCS_PATH, encoding='utf-8') as handle:
         docs = _split_docs(handle.read())
@@ -115,11 +101,8 @@ def get_gui_documentation(section: str = None) -> dict:
         return {'preamble': docs[''], 'sections': tabs, 'overview': overview}
     if section not in help_text.SECTIONS:
         raise KeyError(f"no tab named {section!r}; tabs are {tabs}")
-    text = docs[section]
-    for title in README_SECTIONS.get(section, ()):
-        text += '\n\n### From the README: ' + title + '\n\n' + _readme_section(title)
     controls = {key: help_text.TOOLTIPS[key] for key in help_text.SECTIONS[section]}
-    page = {'section': section, 'text': text, 'controls': controls}
+    page = {'section': section, 'text': docs[section], 'controls': controls}
     if section == 'Data & Scoring':
         page['format_notes'] = dict(help_text.FORMAT_NOTES)
     return page

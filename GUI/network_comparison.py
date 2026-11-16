@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 from scipy.stats import ttest_ind
 from statsmodels.stats.multitest import multipletests
 import os
+import textwrap
 from QC_plots import apply_score_thresholds
 
 
@@ -28,6 +29,15 @@ CATEGORY_COLORS = {
 
 # Draw order: background categories first so hits render on top.
 CATEGORY_ORDER = ['Neither', 'Network B only', 'Network A only', 'Both']
+
+
+def wrap_label(text, width, sep='\n'):
+    """Break ``text`` into lines of at most ``width`` characters joined by ``sep``.
+
+    Bait names are long experiment IDs; wrapping keeps them whole inside narrow
+    panels.  Plotly needs ``sep='<br>'``.
+    """
+    return sep.join(textwrap.wrap(text, width))
 
 
 def parse_intensity_string(intensity_str):
@@ -383,11 +393,19 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
         )
         return fig
 
+    # The strip titles wrap to the strips' width and grow upward, under the figure
+    # title, so the top margin holds both: 18 px per strip title line and 22 px per
+    # figure title line.
+    strip_titles = [wrap_label(f"Only in {bait}", 14, '<br>') for bait in (bait_b, bait_a)]
+    title = wrap_label(f"Compare Baits: {bait_a} vs {bait_b}", 60, '<br>')
+    strip_height = 18 * (max(t.count('<br>') for t in strip_titles) + 1)
+    top_margin = 40 + 22 * (title.count('<br>') + 1) + strip_height
     fig = make_subplots(
         rows=1, cols=3, column_widths=[0.15, 0.7, 0.15],
         horizontal_spacing=0.06,
-        subplot_titles=(f"Only in {bait_b}", "", f"Only in {bait_a}")
+        subplot_titles=(strip_titles[0], "", strip_titles[1])
     )
+    fig.update_annotations(font_size=12)
 
     categories_in_legend = set()
     for panel, category, points, x, y in volcano_panels(volcano_data, bait_a, bait_b):
@@ -414,7 +432,8 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
                   line_width=2, annotation_text="adj. p = 0.05",
                   annotation_position="top right", row=1, col=2)
 
-    fig.update_xaxes(title_text=f"log2(Mean Intensity {bait_a} / Mean Intensity {bait_b})",
+    fig.update_xaxes(title_text=wrap_label(
+                         f"log2(Mean Intensity {bait_a} / Mean Intensity {bait_b})", 70, '<br>'),
                      zeroline=True, zerolinewidth=1, zerolinecolor='lightgray',
                      row=1, col=2)
     fig.update_yaxes(title_text="-log10(adjusted p-value)", row=1, col=2)
@@ -423,11 +442,12 @@ def create_volcano_plot(volcano_data, bait_a, bait_b):
         fig.update_yaxes(title_text="-log10(BFDR)", row=1, col=col)
 
     fig.update_layout(
-        # Centered so the title clears the left strip's subplot title
-        title=dict(text=f"Compare Baits: {bait_a} vs {bait_b}",
-                   x=0.5, xanchor='center'),
+        title=dict(text=title, x=0.5, xanchor='center', yref='paper', y=1,
+                   yanchor='bottom', pad=dict(b=20 + strip_height)),
+        margin=dict(t=top_margin),
         hovermode='closest',
-        height=500,
+        # The panels are the same height however many lines the titles take.
+        height=420 + top_margin,
         template='plotly_white',
         # Horizontal legend below the panels: inside the plot area it would sit on
         # top of the narrow right-hand strip.
@@ -465,9 +485,12 @@ def create_venn_diagram_matplotlib(set_a, set_b, label_a, label_b):
         Venn diagram visualization
     """
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
     from matplotlib_venn import venn2
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    # The tight layout engine reruns on every draw, so the legend keeps its room after
+    # shiny resizes the figure to the output's size.
+    fig, ax = plt.subplots(figsize=(8, 6), layout='tight')
 
     # venn2 cannot draw two empty sets
     if len(set_a) == 0 and len(set_b) == 0:
@@ -478,8 +501,8 @@ def create_venn_diagram_matplotlib(set_a, set_b, label_a, label_b):
         ax.axis('off')
         return fig
 
-    venn = venn2([set_a, set_b], set_labels=(label_a, label_b),
-                 set_colors=('#ff7f0e', '#2ca02c'), alpha=0.35, ax=ax)
+    colors = ('#ff7f0e', '#2ca02c')
+    venn = venn2([set_a, set_b], set_labels=None, set_colors=colors, alpha=0.35, ax=ax)
 
     # Empty regions have no label
     for region_id in ('10', '01', '11'):
@@ -488,13 +511,16 @@ def create_venn_diagram_matplotlib(set_a, set_b, label_a, label_b):
             label.set_fontsize(16)
             label.set_fontweight('bold')
 
-    for label, color in zip(venn.set_labels, ('#ff7f0e', '#2ca02c')):
-        if label is not None:
-            label.set_fontsize(14)
-            label.set_fontweight('bold')
-            label.set_color(color)
+    # The bait names go in a legend centered below the diagram rather than under each
+    # circle: a circle can reach the figure edge, and the layout does not make room
+    # for text placed beside it.
+    legend = ax.legend(handles=[Patch(color=color, alpha=0.35) for color in colors],
+                       labels=[wrap_label(label_a, 22), wrap_label(label_b, 22)],
+                       loc='upper center', bbox_to_anchor=(0.5, 0), frameon=False,
+                       prop={'size': 13, 'weight': 'bold'})
+    for text, color in zip(legend.get_texts(), colors):
+        text.set_color(color)
 
-    plt.tight_layout()
     return fig
 
 
@@ -531,8 +557,10 @@ def create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b):
         ax.axis('off')
         return fig
 
-    fig = plt.figure(figsize=(13, 8))
-    grid = fig.add_gridspec(1, 3, width_ratios=[0.15, 0.7, 0.15], wspace=0.35)
+    strip_titles = [wrap_label(f"Only in {bait}", 16) for bait in (bait_b, bait_a)]
+    fig = plt.figure(figsize=(13, 8), layout="constrained")
+    fig.suptitle(wrap_label(f"Compare Baits: {bait_a} vs {bait_b}", 80), fontsize=14, fontweight='bold')
+    grid = fig.add_gridspec(1, 3, width_ratios=[0.15, 0.7, 0.15])
     ax_left = fig.add_subplot(grid[0, 0])
     ax_center = fig.add_subplot(grid[0, 1])
     ax_right = fig.add_subplot(grid[0, 2])
@@ -550,16 +578,16 @@ def create_volcano_plot_matplotlib(volcano_data, bait_a, bait_b):
                        xytext=(-5, 5), textcoords='offset points',
                        fontsize=10, color='red', va='bottom', ha='right')
 
-    ax_center.set_xlabel(f"log2(Mean Intensity {bait_a} / Mean Intensity {bait_b})", fontsize=12)
+    ax_center.set_xlabel(wrap_label(f"log2(Mean Intensity {bait_a} / Mean Intensity {bait_b})", 80),
+                         fontsize=12)
     ax_center.set_ylabel("-log10(adjusted p-value)", fontsize=12)
-    ax_center.set_title(f"Compare Baits: {bait_a} vs {bait_b}", fontsize=14, fontweight='bold')
     ax_center.legend(title="Category", loc='upper right', fontsize=9)
     ax_center.grid(True, alpha=0.3)
 
-    for ax, bait in ((ax_left, bait_b), (ax_right, bait_a)):
+    for ax, strip_title in zip((ax_left, ax_right), strip_titles):
         ax.set_xlim(-1, 1)
         ax.set_xticks([])
-        ax.set_title(f"Only in {bait}", fontsize=11)
+        ax.set_title(strip_title, fontsize=11)
         ax.set_ylabel("-log10(BFDR)", fontsize=12)
         ax.grid(True, alpha=0.3, axis='y')
 

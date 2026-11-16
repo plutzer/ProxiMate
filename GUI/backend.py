@@ -460,6 +460,77 @@ def rename_dataset(old, new, actor='gui'):
     return store.row(new)
 
 
+def dataset_design(name):
+    """The dataset's experimental design (its ED.csv) as a frame, every cell as written
+    (an empty or "None" Bait ID stays as it is rather than becoming NaN)."""
+    store.row(name)
+    path = os.path.join(dataset_dir(name), 'ED.csv')
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"dataset {name!r} has no ED.csv")
+    return pd.read_csv(path, keep_default_na=False)
+
+
+def duplicate_dataset(source, new, design=None, leave_out=(), actor='gui', progress=None):
+    """Parse a copy of ``source`` named ``new`` from the input stored in its directory.
+
+    ``design`` replaces the source's experimental design (experiment names must match
+    the source's); the experiments in ``leave_out`` are dropped from it.  The copy
+    starts unscored and the source is unchanged.  Returns the new row as ``run_parse``
+    does.
+    """
+    row = store.row(source)
+    design = dataset_design(source) if design is None else design
+    unknown = sorted(set(leave_out) - set(design['Experiment Name'].astype(str)))
+    if unknown:
+        raise ValueError(f"no experiment named {', '.join(unknown)} in the design of {source!r}")
+    design = design[~design['Experiment Name'].astype(str).isin(leave_out)].reset_index(drop=True)
+    # run_parse reads the design file in place of an empty frame.
+    if design.empty:
+        raise ValueError(f"the design of the copy of {source!r} has no experiments left")
+    source_path = dataset_dir(source)
+    temporary = []
+    try:
+        with _job(source, actor, 'duplicate'):
+            logger.info("Duplicating dataset '%s' as '%s', leaving out %s (actor=%s)",
+                        source, new, list(leave_out) or 'nothing', actor)
+            if row['Input Type'] == 'SAINT':
+                bait_frame = design[['Experiment Name', 'Bait', 'Type', 'Bait ID']]
+                interaction = pd.read_csv(os.path.join(source_path, 'interaction.txt'), sep="\t",
+                                          header=None, names=['Experiment', 'Bait', 'Prey', 'Value'])
+                interaction = interaction[interaction['Experiment'].astype(str).isin(
+                    bait_frame['Experiment Name'].astype(str))]
+                # The interaction file repeats each experiment's bait, which the design may rename.
+                interaction['Bait'] = interaction['Experiment'].map(
+                    dict(zip(bait_frame['Experiment Name'], bait_frame['Bait'])))
+                files = {'prey': os.path.join(source_path, 'prey.txt')}
+                for key, frame in (('bait', bait_frame[['Experiment Name', 'Bait', 'Type']]),
+                                   ('interaction', interaction)):
+                    handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
+                                                         newline="", encoding="utf-8")
+                    with handle:
+                        frame.to_csv(handle, sep="\t", header=False, index=False)
+                    files[key] = handle.name
+                    temporary.append(handle.name)
+                result = run_parse(new, 'SAINT', files, row['Quant Type'], actor=actor,
+                                   bait_frame=bait_frame, progress=progress)
+            else:
+                table = os.path.join(source_path, 'proteinGroups.txt')
+                if not os.path.isfile(table):
+                    raise FileNotFoundError(f"dataset {source!r} has no proteinGroups.txt, "
+                                            "so it cannot be duplicated")
+                # proteinGroups.txt is the MaxQuant-shaped table every format was parsed from.
+                result = run_parse(new, 'MaxQuant',
+                                   {'pg': table, 'ed': os.path.join(source_path, 'ED.csv')},
+                                   row['Quant Type'], actor=actor, ed_frame=design,
+                                   progress=progress)
+                store.update(new, **{'Input Type': row['Input Type']})
+                result['Input Type'] = row['Input Type']
+    finally:
+        for path in temporary:
+            os.unlink(path)
+    return result
+
+
 # --- session -----------------------------------------------------------------------
 
 def clear_datasets():

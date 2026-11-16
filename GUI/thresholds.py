@@ -2,8 +2,8 @@
 
 KEYS = ('SaintScore', 'BFDR', 'WD', 'WDFDR')
 
-# The sliders in display order: (id suffix, threshold key, label, maximum, step).  The
-# suffix is also the tooltip key.  Every slider runs from 0.
+# The threshold inputs in display order: (id suffix, threshold key, label, maximum, step).
+# The suffix is also the tooltip key.  Every input runs from 0.
 SLIDERS = (
     ('saintscore', 'SaintScore', 'SAINT ≥', 1.0, 0.01),
     ('bfdr', 'BFDR', 'BFDR ≤', 1.0, 0.01),
@@ -18,7 +18,7 @@ PRESETS = {
     'Both': {'SaintScore': 0.9, 'BFDR': 0.05, 'WD': 0.0, 'WDFDR': 0.05},
 }
 
-# Where the sliders start.  A dataset scored with 0 WDFDR iterations has no WDFDR
+# Where the thresholds start.  A dataset scored with 0 WDFDR iterations has no WDFDR
 # values, so a WDFDR cut would empty it.
 DEFAULT = PRESETS['SAINT only']
 
@@ -42,3 +42,9 @@ def active_preset(values):
 def describe(values):
     """One line naming the four cutoffs: 'SAINT ≥ 0.9, BFDR ≤ 0.05, WD ≥ 0, WDFDR ≤ 1'."""
     return ', '.join(f"{label} {float(values[key]):g}" for _, key, label, _, _ in SLIDERS)
+
+
+def filename_tag(values):
+    """The four cutoffs for a filename: 'SAINT0.9_BFDR0.05_WD0_WDFDR1'."""
+    return '_'.join(f"{name}{float(values[key]):g}"
+                    for name, key in zip(('SAINT', 'BFDR', 'WD', 'WDFDR'), KEYS))

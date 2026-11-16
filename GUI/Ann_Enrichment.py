@@ -6,6 +6,7 @@ from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 import argparse
 import re
+import textwrap
 from collections import Counter
 from QC_plots import apply_score_thresholds
 import matplotlib.ticker as ticker
@@ -47,22 +48,19 @@ def enrich_foreground(foreground_ids, all_ids, feature_map):
     # df['adj_p'] = multipletests(df['p_value'], method='fdr_bh')[1]
     return df
 
-def split_and_clean(annotations):
-    if isinstance(annotations, str):
-        split_anns = annotations.split(';')
-        # Remove any leading or trailing whitespace from each annotation
-        split_anns = [x.strip() for x in split_anns]
-        # Remove any numbers that are at the end of the string
-        split_anns = [x.rstrip('0123456789') for x in split_anns]
-        # Remove trailing whitespace again
-        split_anns = [x.strip() for x in split_anns]
-        # Remove any empty strings
-        split_anns = [x for x in split_anns if x != '']
-        # Remove any annotations that begin with a number
-        split_anns = [x for x in split_anns if not x[0].isdigit()]
-        return set(split_anns)
-    else:
+# UniProt numbers each copy of a sequence feature ("WD 1", "WD 2"); the number is
+# stripped so copies count as one feature. Other names (GO terms) keep their digits.
+NUMBERED_FEATURE_TYPES = {'Motifs', 'Regions', 'Repeats', 'Domains'}
+
+
+def split_and_clean(annotations, feature_type):
+    """Split a ';'-separated annotation cell of ``feature_type`` into a set of names."""
+    if not isinstance(annotations, str):
         return set()
+    split_anns = [x.strip() for x in annotations.split(';')]
+    if feature_type in NUMBERED_FEATURE_TYPES:
+        split_anns = [x.rstrip('0123456789').strip() for x in split_anns]
+    return {x for x in split_anns if x != ''}
 
 RESULT_COLUMNS = ['Bait', 'Feature', 'Feature_type', 'k', 'n', 'K', 'M',
                   'p_value', 'enrichment', 'adj_p']
@@ -74,7 +72,7 @@ def _feature_map(data, column):
     A prey's annotation is a property of the protein and is repeated on every one of
     its experiment rows; rows that disagree are corrupt input and raise.
     """
-    features = data[column].apply(split_and_clean)
+    features = data[column].apply(split_and_clean, feature_type=column)
     feature_map = {}
     for prey, feats in zip(data['Prey.ID'], features):
         if prey in feature_map and feature_map[prey] != feats:
@@ -130,19 +128,27 @@ def process_refactored(data, columns_for_analysis, thresholds):
     return pd.concat(frames, ignore_index=True)[RESULT_COLUMNS]
 
 
-MAX_LABEL_CHARS = 60
+LABEL_LINE_CHARS = 30
+LABEL_FONT_SIZE = 8
+# Points per feature row: two lines of an 8 pt label take about 19, the rest is space
+# between neighboring labels.
+FEATURE_ROW_POINTS = 30
+# Points from one bait label to the next: an 8 pt label and as much space again.
+BAIT_LABEL_POINTS = 16
+# The row dendrogram's share of the width, and the column dendrogram's height in inches
+# (the colorbar sits beside it).
+ROW_DENDROGRAM_RATIO = 0.18
+COLUMN_DENDROGRAM_INCHES = 1.5
 
 
-def _truncate_label(label):
-    """Shorten a feature name to something a heatmap row can carry.
+def _wrap_label(label):
+    """Fit a feature name in the heatmap's label margin: at most two lines of
+    LABEL_LINE_CHARS, ending in '...' when the name is longer.
 
     Feature names run to hundreds of characters; drawn in full they take the width the
     map itself needs.
     """
-    label = str(label)
-    if len(label) <= MAX_LABEL_CHARS:
-        return label
-    return label[:MAX_LABEL_CHARS - 3] + '...'
+    return textwrap.fill(str(label), LABEL_LINE_CHARS, max_lines=2, placeholder='...')
 
 
 # The raw UniProt column each GO feature type is trimmed from; it names each term's id
@@ -163,7 +169,31 @@ def go_term_ids(scores):
     return ids
 
 
-def plot_results(results, feature_type, num_features=30):
+def fit_heatmap(grid, width):
+    """Lay the heatmap out at `width` inches: size the figure so every feature row has
+    FEATURE_ROW_POINTS, then label as many baits as fit BAIT_LABEL_POINTS apart."""
+    figure, ax = grid.figure, grid.ax_heatmap
+    n_rows, n_columns = grid.data2d.shape
+    inches_per_pixel = 1 / figure.get_dpi()
+
+    figure.set_size_inches(width, figure.get_figheight())
+    figure.canvas.draw()
+    # Margins and gaps: everything but the map and the column dendrogram above it.
+    drawn = ax.get_window_extent().height + grid.ax_col_dendrogram.get_window_extent().height
+    margins = figure.get_figheight() - drawn * inches_per_pixel
+    map_inches = FEATURE_ROW_POINTS * n_rows / 72
+    grid.gs.set_height_ratios([COLUMN_DENDROGRAM_INCHES, map_inches])
+    figure.set_size_inches(width, max(5, margins + COLUMN_DENDROGRAM_INCHES + map_inches))
+    figure.canvas.draw()
+
+    fit = int(ax.get_window_extent().width * inches_per_pixel * 72 // BAIT_LABEL_POINTS)
+    stride = int(np.ceil(n_columns / max(fit, 1)))
+    ax.set_xticks(np.arange(0, n_columns, stride) + 0.5)
+    ax.set_xticklabels(grid.data2d.columns[::stride], rotation=90, fontsize=LABEL_FONT_SIZE)
+
+
+def plot_results(results, feature_type, num_features=30, width=12):
+    """The clustered heatmap of the top features of one type, laid out at `width` inches."""
     # Filter the results for the specific feature type
     filtered_results = results[results['Feature_type'] == feature_type]
 
@@ -195,26 +225,19 @@ def plot_results(results, feature_type, num_features=30):
     # Hierarchical clustering needs at least two items on an axis; a single-bait
     # dataset or a single passing feature otherwise makes scipy raise on an empty
     # distance matrix.
-    # 0.28 in per row keeps a 9 pt label from touching its neighbors.
-    height = max(5, 0.28 * filtered_results.shape[0] + 2)
-    grid = sns.clustermap(filtered_results, cmap='viridis', figsize=(12, height),
+    grid = sns.clustermap(filtered_results, cmap='viridis', figsize=(width, 5),
                           row_cluster=filtered_results.shape[0] > 1,
                           col_cluster=filtered_results.shape[1] > 1,
-                          dendrogram_ratio=(0.18, 0.18), cbar_pos=None)
+                          dendrogram_ratio=ROW_DENDROGRAM_RATIO, cbar_pos=None)
 
     ax = grid.ax_heatmap
     ax.set_xlabel("Bait")
     ax.set_ylabel("Feature")
 
     # data2d holds the data in the order the clustering put it in.
-    ordered_columns = grid.data2d.columns
     ordered_rows = grid.data2d.index
-
-    ax.set_xticks(np.arange(len(ordered_columns)) + 0.5)
-    ax.set_xticklabels(ordered_columns, rotation=45, ha='right', fontsize=8)
-
     ax.set_yticks(np.arange(len(ordered_rows)) + 0.5)
-    ax.set_yticklabels([_truncate_label(label) for label in ordered_rows], fontsize=9)
+    ax.set_yticklabels([_wrap_label(label) for label in ordered_rows], fontsize=LABEL_FONT_SIZE)
 
     # The colorbar goes in the corner the two dendrograms leave empty, as a cell of the
     # clustermap's own grid rather than as a free-floating inset: only an axes the grid
@@ -235,6 +258,7 @@ def plot_results(results, feature_type, num_features=30):
     # fall off the canvas.
     grid.figure.set_layout_engine("tight")
 
+    fit_heatmap(grid, width)
     return grid
 
 

@@ -1,6 +1,6 @@
 """The datasets table as one process-wide store.
 
-The table ("Datasets in this Session") is shared by every browser session and by the
+The table ("Datasets") is shared by every browser session and by the
 MCP server, so it lives at module level rather than in a Shiny session.  Every
 mutation is written to ``datasets.csv`` under the output directory and bumps
 ``version``, which the GUI polls; a row added by any caller appears in every open

@@ -1,7 +1,7 @@
 """The session archive: one zip holding every dataset directory plus the datasets table.
 
 The table (``datasets.csv`` at the top of the output directory) is what the GUI shows
-as "Datasets in this Session"; it is rewritten whenever the session changes and read
+as "Datasets"; it is rewritten whenever the session changes and read
 back at server start, so a session outlives the server process.
 """
 
