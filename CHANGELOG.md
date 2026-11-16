@@ -11,13 +11,61 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-16
+
+### Added
+- *Duplicate selected* on the Datasets table parses a copy of the active dataset under a
+  new name, with its experimental design as edited in the dialog, so an outlier can be
+  dropped or another scoring tried while the original and its scores stay as they are.
+  The MCP server gains `duplicate_dataset` and `dataset_design`.
+- A number box above each threshold slider. A typed value applies on Enter or when the
+  box loses focus; an empty or out-of-range box is named in a message and the outputs
+  that read the thresholds stay empty until it is corrected.
+- *Download example dataset* on the Parse card: a zip with a small Human Cell Map subset
+  (Go et al. 2021) in MaxQuant format, 8 baits with two replicates each and 12 control
+  runs.
+- A *Dataset to score* select on the Score card. It follows the active dataset, and
+  picking another dataset there changes only what gets scored.
+- A *Bait labels* select on the Cytoscape tab labels baits by experiment name or by gene.
+  *Apply Style* relabels the drawn network in place, and the MCP `cytoscape_send` and
+  `cytoscape_restyle` operations take `bait_labels`.
+- Spectral-count datasets carry `AvgSpec` as a Cytoscape edge attribute, and the Export
+  tab's SAINT scores column group offers `Spec`, `SpecSum`, `AvgSpec` and `ctrlCounts`.
+- Tutorials under `docs/tutorials/` walk through parsing, scoring, quality control,
+  exploring interactors, and networks and export.
+
 ### Changed
 - The README is a quickstart; the command line, Cytoscape setup, MCP, logs, databases and
   development details are separate pages under `docs/`. Tooltips are shorter.
+- Every plot and table download is named after the dataset and what it shows (bait, plot
+  settings and, where they shape it, the thresholds), for example
+  `HCM_COIL_BirA-FLAG_SAINT_scatter_SAINT0.9.png`.
+- *Select by relation* and node selection on the Cytoscape tab match a bait by experiment
+  name, gene symbol or accession, ignoring case. A gene or accession shared by two drawn
+  baits fails with a message naming both.
+- The Compare Baits Venn diagram names its baits in a legend below the diagram.
+- The session table is titled *Datasets*, and the Parse summary strip no longer has a
+  *Score now* button.
 
 ### Fixed
 - `get_gui_documentation` no longer fails for the Cytoscape and Data & Scoring tabs
   inside the container, where it tried to read a `README.md` the image does not carry.
+- Feature enrichment keeps the digits in GO term names such as "cellular response to
+  interleukin-7", and keeps annotations that begin with a digit such as "14-3-3 protein
+  binding". Trailing copy numbers are stripped only from UniProt motifs, regions, repeats
+  and domains.
+- The Export preview is no longer blank or stale for the *Experimental Design* and
+  *Gene List* presets in a fresh session.
+- The Feature Enrichment heatmap stays readable with many baits: bait labels are thinned
+  to fit the width it is drawn at, and long feature names wrap onto two lines.
+- Compare Baits Venn labels, volcano titles and axis titles wrap instead of running past
+  the figure edge.
+- Clicking a *Gene Lists* tab on Compare Baits no longer scrolls the page to the top.
+- The Cytoscape connection status no longer renders twice on first view and logs Shiny
+  output state errors in the browser.
+- Sessions no longer disconnect while a large dataset loads on the Quality Control tab.
+  Its computations run in a worker thread, the plots show a busy spinner meanwhile, and
+  the websocket ping timeout is 120 s.
 
 ## [0.4.0] - 2026-10-20
 
@@ -167,7 +215,8 @@ section to the version and date and starts a fresh Unreleased section above it.
 Last version published to Docker Hub by hand, before this changelog existed. Older
 versions are listed at https://hub.docker.com/r/plutzer/proximate/tags.
 
-[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.5.0
 [0.4.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.4.0
 [0.3.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.3.0
 [0.2.1]: https://github.com/plutzer/ProxiMate/releases/tag/v0.2.1
