@@ -111,6 +111,16 @@ def test_counts_prey_prey_edges_only(tmp_path):
     assert degrees == [1, 1, 2]
 
 
+def test_a_pair_listed_in_both_orientations_counts_once(tmp_path):
+    """The BioGRID summary lists every pair as A-B and B-A; a self-pair is not a partner."""
+    biogrid = _write_biogrid(tmp_path / "bg.csv", [
+        ("P1", "P2"), ("P2", "P1"), ("P1", "P3"), ("P3", "P1"), ("P1", "P1")])
+    passing = pd.DataFrame({"First_ID": ["P1", "P2", "P3"],
+                            "Bait.ID": ["B1", "B1", "B1"]})
+
+    assert sorted(calculate_network_degrees(passing, biogrid)) == [1, 1, 2]
+
+
 def test_baits_are_excluded_by_accession_when_the_column_is_present(tmp_path):
     """Symbol-keyed inputs carry the supplied symbol in Bait.ID and the resolved
     accession in Bait_Accession; BioGRID lists the accession."""

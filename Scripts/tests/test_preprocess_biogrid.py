@@ -77,6 +77,17 @@ def _pairs(summary):
                    summary["SWISS-PROT Accessions Interactor B"]))
 
 
+def _both_ways(*pairs):
+    return {(a, b) for a, b in pairs} | {(b, a) for a, b in pairs}
+
+
+def _row(summary, a, b):
+    match = summary[(summary["SWISS-PROT Accessions Interactor A"] == a) &
+                    (summary["SWISS-PROT Accessions Interactor B"] == b)]
+    assert len(match) == 1
+    return match.iloc[0]
+
+
 # --- filtering -----------------------------------------------------------------
 
 def test_genetic_interactions_are_dropped(build):
@@ -84,7 +95,7 @@ def test_genetic_interactions_are_dropped(build):
     summary = build([_interaction("P1", "P2"),
                      _interaction("P3", "P4", system_type="genetic")])
 
-    assert _pairs(summary) == {("P1", "P2")}
+    assert _pairs(summary) == _both_ways(("P1", "P2"))
 
 
 @pytest.mark.parametrize("organism_id, expected", [
@@ -99,7 +110,7 @@ def test_only_pairs_with_both_partners_in_the_organism_are_kept(build, organism_
         _interaction("X3", "X4", organism_a=HUMAN, organism_b=MOUSE),
     ], organism_id=organism_id)
 
-    assert _pairs(summary) == expected
+    assert _pairs(summary) == _both_ways(*expected)
 
 
 # --- aggregation ----------------------------------------------------------------
@@ -114,10 +125,47 @@ def test_the_supporting_evidence_is_joined_into_one_row_per_pair(build):
                      source="PUBMED:2"),
     ])
 
-    assert len(summary) == 1
+    assert len(summary) == 2
     assert summary.loc[0, "Experimental System"] == "Affinity Capture-MS; Two-hybrid"
     assert summary.loc[0, "Author"] == "Smith A (2020); Jones B (2021)"
     assert summary.loc[0, "Publication Source"] == "PUBMED:1; PUBMED:2"
+
+
+# --- both orientations ----------------------------------------------------------
+
+def test_a_pair_is_listed_in_both_orientations_with_the_same_evidence(build):
+    """BioGRID records a pair once, bait first.  Annotation looks a pair up prey first,
+    so the summary has to answer whichever partner was the bait."""
+    summary = build([_interaction("P1", "P2", system="Proximity Label-MS")])
+
+    assert _pairs(summary) == {("P1", "P2"), ("P2", "P1")}
+    evidence = ["Experimental System", "Author", "Publication Source",
+                "Multivalidated", "In.BioGRID"]
+    assert _row(summary, "P1", "P2")[evidence].equals(_row(summary, "P2", "P1")[evidence])
+
+
+def test_reports_in_opposite_orientations_pool_into_both_rows(build):
+    summary = build([_interaction("P1", "P2", source="PUBMED:1"),
+                     _interaction("P2", "P1", source="PUBMED:2")])
+
+    assert len(summary) == 2
+    for a, b in [("P1", "P2"), ("P2", "P1")]:
+        assert set(_row(summary, a, b)["Publication Source"].split("; ")) == {
+            "PUBMED:1", "PUBMED:2"}
+
+
+def test_a_self_interaction_is_listed_once(build):
+    summary = build([_interaction("P1", "P1")])
+
+    assert len(summary) == 1
+    assert summary.loc[0, "Publication Source"] == "PUBMED:1"
+
+
+def test_multivalidation_flags_both_orientations(build):
+    summary = build([_interaction("P1", "P2")], [_multivalidated("P2", "P1")])
+
+    assert bool(_row(summary, "P1", "P2")["Multivalidated"]) is True
+    assert bool(_row(summary, "P2", "P1")["Multivalidated"]) is True
 
 
 # --- multivalidation --------------------------------------------------------------
@@ -146,7 +194,7 @@ def test_repeated_multivalidated_records_still_flag_once(build):
     summary = build([_interaction("P1", "P2")],
                     [_multivalidated("P1", "P2"), _multivalidated("P1", "P2")])
 
-    assert len(summary) == 1
+    assert len(summary) == 2
     assert bool(summary.loc[0, "Multivalidated"]) is True
 
 
@@ -177,10 +225,12 @@ def test_excluding_a_publication_keeps_only_the_other_evidence(build):
         _interaction("P3", "P4", source=HCM),
     ], exclude_publication=HCM, output_filename="biogrid_summary_no_hcm.csv")
 
-    assert _pairs(summary) == {("P1", "P2")}
-    assert summary.loc[0, "Publication Source"] == "PUBMED:1"
-    assert summary.loc[0, "Author"] == "Smith A (2020)"
-    assert summary.loc[0, "Experimental System"] == "Affinity Capture-MS"
+    assert _pairs(summary) == _both_ways(("P1", "P2"))
+    for a, b in [("P1", "P2"), ("P2", "P1")]:
+        row = _row(summary, a, b)
+        assert row["Publication Source"] == "PUBMED:1"
+        assert row["Author"] == "Smith A (2020)"
+        assert row["Experimental System"] == "Affinity Capture-MS"
 
 
 def test_multivalidation_reported_only_by_the_excluded_publication_is_dropped(build):

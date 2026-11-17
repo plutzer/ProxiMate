@@ -25,6 +25,16 @@ dates in any of:
 To build an image with a snapshot you choose, see
 [Development](development.md#pin-a-database-snapshot).
 
+## How BioGRID interactions are matched
+
+BioGRID records an interaction once, bait first. `biogrid_summary.csv` lists every
+pair in both orientations with the evidence pooled, so:
+
+- an interaction is `In.BioGRID` whichever partner was the bait in the published
+  experiment;
+- `Multivalidated` is the same for both orientations;
+- only physical interactions with both partners in the dataset's organism count.
+
 ## Excluding Human Cell Map evidence
 
 The Human Cell Map (Go et al. 2021, PubMed 34079125) is a large BioID screen

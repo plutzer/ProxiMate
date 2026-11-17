@@ -2,6 +2,20 @@ import pandas as pd
 import numpy as np
 import argparse
 
+A = 'SWISS-PROT Accessions Interactor A'
+B = 'SWISS-PROT Accessions Interactor B'
+
+
+def mirror(df):
+    """Add each A-B row again as B-A.
+
+    BioGRID records a pair once, bait in A.  Listing both orientations lets a lookup
+    find the pair whichever partner was the bait.  Self-pairs are not repeated.
+    """
+    swapped = df[df[A] != df[B]].rename(columns={A: B, B: A})
+    return pd.concat([df, swapped], ignore_index=True)
+
+
 def preprocess_biogrid(biogrid_all_path, biogrid_mv_path, output_dir, organism_id=9606,
                        exclude_publication=None, output_filename="biogrid_summary.csv"):
     # Read the biogrid_all file
@@ -25,21 +39,20 @@ def preprocess_biogrid(biogrid_all_path, biogrid_mv_path, output_dir, organism_i
         all_biogrid = all_biogrid[all_biogrid['Publication Source'] != exclude_publication]
         mv_biogrid = mv_biogrid[mv_biogrid['Publication Source'] != exclude_publication]
 
+    all_biogrid = mirror(all_biogrid[[A, B, 'Experimental System', 'Author', 'Publication Source']])
+    mv_biogrid = mirror(mv_biogrid[[A, B]])
+
     # Tag mv_biogrid for multivalidation
     mv_biogrid['multivalidated'] = True
-    mv_biogrid = mv_biogrid.groupby(['SWISS-PROT Accessions Interactor A', 'SWISS-PROT Accessions Interactor B']).agg(
+    mv_biogrid = mv_biogrid.groupby([A, B]).agg(
         Multivalidated=('multivalidated', 'any')
     ).reset_index()
-    
+
     # Merge all_biogrid with mv_biogrid
-    all_biogrid = pd.merge(
-        all_biogrid, mv_biogrid, 
-        how='left', 
-        on=['SWISS-PROT Accessions Interactor A', 'SWISS-PROT Accessions Interactor B']
-    )
-    
+    all_biogrid = pd.merge(all_biogrid, mv_biogrid, how='left', on=[A, B])
+
     # Group by and summarize data
-    summ_biogrid = all_biogrid.groupby(['SWISS-PROT Accessions Interactor A', 'SWISS-PROT Accessions Interactor B']).agg({
+    summ_biogrid = all_biogrid.groupby([A, B]).agg({
         'Experimental System': lambda x: '; '.join(np.array(x).astype(str)),
         'Author': lambda x: '; '.join(np.array(x).astype(str)),
         'Publication Source': lambda x: '; '.join(np.array(x).astype(str)),

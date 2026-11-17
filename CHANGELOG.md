@@ -11,6 +11,12 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+### Changed
+- `In.BioGRID` and `Multivalidated` match a published interaction whichever partner was
+  the bait; before, only records with the prey as BioGRID's bait matched. Known counts
+  rise and *Exclude Human Cell Map evidence* removes more. Re-score a dataset to pick
+  this up. Mean prey-prey degree counts a pair BioGRID lists in both orientations once.
+
 ## [0.5.0] - 2026-11-16
 
 ### Added
