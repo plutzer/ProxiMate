@@ -47,6 +47,8 @@ To avoid that, tick **Exclude Human Cell Map evidence** on the Score card, or pa
 - Annotation then uses `/Datasets/human/biogrid_summary_no_hcm.csv`: the human
   BioGRID summary with every evidence line from that paper removed.
 - Interactions with other evidence are kept; only their HCM entries are dropped.
+- `Multivalidated` is recomputed from what is left: two publications or two
+  experimental systems.
 - `run.json` records the choice.
 - The Quality Control tab's known-interaction and network-degree metrics use the
   same file the run was annotated against.

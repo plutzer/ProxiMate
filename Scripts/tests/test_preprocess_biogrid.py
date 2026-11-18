@@ -23,7 +23,7 @@ ALL_COLUMNS = ["Organism ID Interactor A", "Organism ID Interactor B",
                "SWISS-PROT Accessions Interactor B", "Author", "Publication Source"]
 
 MV_COLUMNS = ["Organism ID Interactor A", "Organism ID Interactor B",
-              "SWISS-PROT Accessions Interactor A",
+              "Experimental System", "SWISS-PROT Accessions Interactor A",
               "SWISS-PROT Accessions Interactor B", "Publication Source"]
 
 
@@ -42,10 +42,12 @@ def _interaction(a, b, system="Affinity Capture-MS", system_type="physical",
     }
 
 
-def _multivalidated(a, b, organism_a=HUMAN, organism_b=HUMAN, source="PUBMED:1"):
+def _multivalidated(a, b, organism_a=HUMAN, organism_b=HUMAN, source="PUBMED:1",
+                    system="Affinity Capture-MS"):
     return {
         "Organism ID Interactor A": organism_a,
         "Organism ID Interactor B": organism_b,
+        "Experimental System": system,
         "SWISS-PROT Accessions Interactor A": a,
         "SWISS-PROT Accessions Interactor B": b,
         "Publication Source": source,
@@ -242,3 +244,36 @@ def test_multivalidation_reported_only_by_the_excluded_publication_is_dropped(bu
 
     assert bool(kept.loc[0, "Multivalidated"]) is True
     assert bool(dropped.loc[0, "Multivalidated"]) is False
+
+
+HCM_ROW = _multivalidated("P1", "P2", source=HCM, system="Proximity Label-MS")
+
+
+def _flags(summary):
+    return [bool(flag) for flag in summary["Multivalidated"]]
+
+
+def test_one_report_left_after_exclusion_is_not_multivalidated(build):
+    """The excluded publication was half of the pair's validation; the report that is
+    left is a single piece of evidence."""
+    all_rows = [_interaction("P1", "P2", source="PUBMED:1")]
+    mv_rows = [HCM_ROW, _multivalidated("P1", "P2", source="PUBMED:1")]
+
+    assert _flags(build(all_rows, mv_rows)) == [True, True]
+    assert _flags(build(all_rows, mv_rows, exclude_publication=HCM)) == [False, False]
+
+
+@pytest.mark.parametrize("remaining", [
+    [_multivalidated("P1", "P2", source="PUBMED:1"),
+     _multivalidated("P1", "P2", source="PUBMED:2")],
+    [_multivalidated("P1", "P2", source="PUBMED:1", system="Affinity Capture-MS"),
+     _multivalidated("P1", "P2", source="PUBMED:1", system="Two-hybrid")],
+    [_multivalidated("P1", "P2", source="PUBMED:1"),
+     _multivalidated("P2", "P1", source="PUBMED:2")],
+], ids=["two publications", "two systems", "opposite orientations"])
+def test_two_publications_or_systems_left_after_exclusion_stay_multivalidated(
+        build, remaining):
+    summary = build([_interaction("P1", "P2", source="PUBMED:1")], [HCM_ROW, *remaining],
+                    exclude_publication=HCM)
+
+    assert _flags(summary) == [True, True]

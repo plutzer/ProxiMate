@@ -83,8 +83,9 @@ CompPASS, then annotates the result; the row's State becomes `scored`.
 Excluding Human Cell Map evidence annotates against a copy of the human BioGRID summary
 with every evidence line from Go et al. 2021 removed. HCM is itself a BioID screen, so
 its evidence makes proximity-labeling hits look more "known" than they are. Interactions
-with other evidence are kept, `run.json` records the choice, and the Quality Control
-metrics use the same file the run was annotated against.
+with other evidence are kept, and count as multivalidated only if that evidence has two
+publications or two experimental systems. `run.json` records the choice, and the Quality
+Control metrics use the same file the run was annotated against.
 
 Each dataset directory holds `run.json` (parameters, input checksums, row counts,
 package versions, pass/fail per stage) and `proximate.log` (timestamped log from

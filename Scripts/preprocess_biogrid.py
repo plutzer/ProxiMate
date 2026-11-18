@@ -40,13 +40,15 @@ def preprocess_biogrid(biogrid_all_path, biogrid_mv_path, output_dir, organism_i
         mv_biogrid = mv_biogrid[mv_biogrid['Publication Source'] != exclude_publication]
 
     all_biogrid = mirror(all_biogrid[[A, B, 'Experimental System', 'Author', 'Publication Source']])
-    mv_biogrid = mirror(mv_biogrid[[A, B]])
+    mv_biogrid = mirror(mv_biogrid[[A, B, 'Experimental System', 'Publication Source']])
 
-    # Tag mv_biogrid for multivalidation
-    mv_biogrid['multivalidated'] = True
-    mv_biogrid = mv_biogrid.groupby([A, B]).agg(
-        Multivalidated=('multivalidated', 'any')
-    ).reset_index()
+    # Every pair in the multivalidated file has two publications or two experimental
+    # systems.  With a publication's rows excluded, a pair has to meet that again on the
+    # evidence that is left.
+    mv_biogrid = mv_biogrid.groupby([A, B])[['Experimental System', 'Publication Source']].nunique()
+    if exclude_publication is not None:
+        mv_biogrid = mv_biogrid[mv_biogrid.max(axis=1) >= 2]
+    mv_biogrid = mv_biogrid.assign(Multivalidated=True)[['Multivalidated']].reset_index()
 
     # Merge all_biogrid with mv_biogrid
     all_biogrid = pd.merge(all_biogrid, mv_biogrid, how='left', on=[A, B])
@@ -98,7 +100,8 @@ def main():
     parser.add_argument("--exclude_publication", default=None,
                         help="drop every evidence row with this 'Publication Source' value "
                              "(e.g. PUBMED:34079125) before summarizing; interactions that keep "
-                             "other evidence remain")
+                             "other evidence remain, multivalidated only if that evidence has "
+                             "two publications or two experimental systems")
 
     args = parser.parse_args()
     preprocess_biogrid(args.biogrid_all, args.biogrid_mv,

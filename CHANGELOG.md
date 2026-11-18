@@ -17,6 +17,11 @@ section to the version and date and starts a fresh Unreleased section above it.
   rise and *Exclude Human Cell Map evidence* removes more. Re-score a dataset to pick
   this up. Mean prey-prey degree counts a pair BioGRID lists in both orientations once.
 
+### Fixed
+- *Exclude Human Cell Map evidence* no longer leaves an interaction `Multivalidated` on
+  one remaining report: the flag now needs two publications or two experimental systems
+  among the non-HCM evidence. Re-score a dataset to pick this up.
+
 ## [0.5.0] - 2026-11-16
 
 ### Added
