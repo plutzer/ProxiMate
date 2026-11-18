@@ -157,9 +157,12 @@ session:
   the drawn Cytoscape network.
 - **Duplicate selected** opens the dialog described above.
 - **Clear All Datasets** empties the session.
+
+The *Save or load a session* card next to the table holds the session archive:
+
 - **Download Session Zip** saves every dataset and its results as one archive, over a
-  gigabyte with the three HCM datasets. The *Load a saved session* card next to the
-  table restores an archive with **Load Session**, replacing the current session.
+  gigabyte with the three HCM datasets.
+- **Load Session** restores an archive, replacing the current session.
 
 To clean up, select the `HCM_example_11controls` row, click **Delete selected** and
 confirm, then do the same for `HCM_example`.

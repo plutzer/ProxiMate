@@ -49,9 +49,9 @@ manifest and the drawn Cytoscape network); *Duplicate selected* parses a copy un
 name from the input stored with the active dataset, with its experimental design as edited
 in the dialog (experiments left out, or Type, Bait, Replicate, Bait ID and Group changed;
 experiment names stay), so an outlier can be dropped or another scoring tried while the
-original and its scores stay as they are; *Clear All Datasets* empties the session; and
-*Download Session Zip* saves every dataset with its results as one archive, which the
-smaller *Load a saved session* card beside the table restores with *Load Session*
+original and its scores stay as they are; and *Clear All Datasets* empties the session.
+In the smaller *Save or load a session* card beside the table, *Download Session Zip*
+saves every dataset with its results as one archive, which *Load Session* restores
 (replacing the current session).
 
 **Step 1 — Parse** takes a dataset name, an input format (MaxQuant, DIA-NN, Pioneer,
