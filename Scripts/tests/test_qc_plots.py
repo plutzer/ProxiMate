@@ -111,6 +111,16 @@ def test_counts_prey_prey_edges_only(tmp_path):
     assert degrees == [1, 1, 2]
 
 
+def test_a_pair_listed_in_both_orientations_counts_once(tmp_path):
+    """The BioGRID summary lists every pair as A-B and B-A; a self-pair is not a partner."""
+    biogrid = _write_biogrid(tmp_path / "bg.csv", [
+        ("P1", "P2"), ("P2", "P1"), ("P1", "P3"), ("P3", "P1"), ("P1", "P1")])
+    passing = pd.DataFrame({"First_ID": ["P1", "P2", "P3"],
+                            "Bait.ID": ["B1", "B1", "B1"]})
+
+    assert sorted(calculate_network_degrees(passing, biogrid)) == [1, 1, 2]
+
+
 def test_baits_are_excluded_by_accession_when_the_column_is_present(tmp_path):
     """Symbol-keyed inputs carry the supplied symbol in Bait.ID and the resolved
     accession in Bait_Accession; BioGRID lists the accession."""
@@ -227,10 +237,10 @@ def _annotated_with(scores_csv, monkeypatch, **settings):
 CONNECTED = [("P1", "P2"), ("P1", "P3")]
 
 
-@pytest.mark.parametrize("case", ["organism", "no_manifest", "explicit", "hcm"])
+@pytest.mark.parametrize("case", ["organism", "no_manifest", "explicit", "proximity"])
 def test_the_reference_set_follows_how_the_dataset_was_annotated(
         case, datasets_dir, scores_csv, monkeypatch, tmp_path):
-    """The summary is built per organism and per Human Cell Map choice.  Reading
+    """The summary is built per organism and per proximity-evidence choice.  Reading
     another organism's file would score a mouse experiment against human
     interactions; an explicit path (the command-line annotator takes one) wins over
     the manifest; a dataset with no manifest falls back to human."""
@@ -244,10 +254,10 @@ def test_the_reference_set_follows_how_the_dataset_was_annotated(
     elif case == "explicit":
         _biogrid_for(datasets_dir, "human", [])
         kwargs["biogrid_path"] = _write_biogrid(tmp_path / "elsewhere.csv", CONNECTED)
-    elif case == "hcm":
-        _annotated_with(scores_csv, monkeypatch, organism="human", exclude_hcm=True)
+    elif case == "proximity":
+        _annotated_with(scores_csv, monkeypatch, organism="human", exclude_proximity=True)
         _biogrid_for(datasets_dir, "human", [])
-        _biogrid_for(datasets_dir, "human", CONNECTED, "biogrid_summary_no_hcm.csv")
+        _biogrid_for(datasets_dir, "human", CONNECTED, "biogrid_summary_no_proximity.csv")
 
     metrics = calculate_threshold_metrics(scores_csv, PASSING, **kwargs)
 

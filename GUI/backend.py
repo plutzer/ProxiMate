@@ -312,7 +312,7 @@ def _run_stage_subprocess(command, dataset_path, run_id):
     return result.returncode, _log_tail_since(dataset_path, offset)
 
 
-def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_method=None,
+def run_score(name, imputation, wdfdr_iterations, organism, exclude_proximity, pi_method=None,
               pi_bait=None, aft_min_obs=None, seed=None, actor='gui', run_id=None, progress=None):
     """Score and annotate a parsed dataset; on success its row reads Scored = Yes.
 
@@ -363,8 +363,8 @@ def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_meth
     ann_cmd = [sys.executable, os.path.join(SCRIPTS_DIR, 'annotator.py'),
                '--organism', organism, '--scoreFile', os.path.join(dataset_path, 'merged.csv'),
                '--outputDir', dataset_path]
-    if organism == 'human' and exclude_hcm:
-        ann_cmd.append('--excludeHCM')
+    if exclude_proximity:
+        ann_cmd.append('--excludeProximity')
 
     with _job(name, actor, 'score'), log_config.run_context(run_id), log_config.dataset_log(dataset_path):
         logger.info("Starting scoring for dataset '%s' (quant=%s, imputation=%d, actor=%s)",
@@ -388,7 +388,7 @@ def run_score(name, imputation, wdfdr_iterations, organism, exclude_hcm, pi_meth
                      **{'WDFDR iterations': wdfdr_iterations},
                      **session_archive.scored_fields(dataset_path))
         logger.info("Scoring and annotation completed for '%s'", name)
-    return {'dataset': name, 'run_id': run_id, 'organism': organism, 'exclude_hcm': bool(exclude_hcm),
+    return {'dataset': name, 'run_id': run_id, 'organism': organism, 'exclude_proximity': bool(exclude_proximity),
             'imputation': IMPUTATION_LABELS[imputation], 'wdfdr_iterations': wdfdr_iterations}
 
 
@@ -687,7 +687,7 @@ def network_sources(name, corum=False):
     None unless ``corum``.  CORUM covers human complexes only."""
     settings = provenance.annotation_settings(dataset_dir(name))
     organism = settings['organism']
-    biogrid_path = provenance.biogrid_summary_path(organism, exclude_hcm=settings['exclude_hcm'])
+    biogrid_path = provenance.biogrid_summary_path(organism, exclude_proximity=settings['exclude_proximity'])
     if not corum:
         return biogrid_path, None
     if not ORGANISMS[organism]['has_corum']:

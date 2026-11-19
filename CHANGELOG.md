@@ -11,6 +11,23 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-19
+
+### Changed
+- *Exclude proximity evidence* replaces *Exclude Human Cell Map evidence* and is offered
+  for every organism. It drops all BioGRID `Proximity Label-MS` evidence: an interaction
+  known only from proximity labeling loses `In.BioGRID`, and one stays `Multivalidated`
+  only on two publications or two experimental systems among the rest. The flags are
+  `--exclude-proximity` (`run_pipeline.sh`) and `exclude_proximity` (MCP `score`).
+  Re-score a dataset scored with the old option; until then its Quality Control metrics
+  use the full summary.
+- `In.BioGRID` and `Multivalidated` match a published interaction whichever partner was
+  the bait; before, only records with the prey as BioGRID's bait matched. Known counts
+  rise. Re-score a dataset to pick this up. Mean prey-prey degree counts a pair BioGRID
+  lists in both orientations once.
+- *Download Session Zip* sits with *Load Session* in the *Save or load a session* card
+  beside the *Datasets* table.
+
 ## [0.5.0] - 2026-11-16
 
 ### Added
@@ -215,7 +232,8 @@ section to the version and date and starts a fresh Unreleased section above it.
 Last version published to Docker Hub by hand, before this changelog existed. Older
 versions are listed at https://hub.docker.com/r/plutzer/proximate/tags.
 
-[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.6.0
 [0.5.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.5.0
 [0.4.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.4.0
 [0.3.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.3.0

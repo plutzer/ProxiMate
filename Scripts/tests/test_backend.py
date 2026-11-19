@@ -125,7 +125,7 @@ def test_score_runs_both_stages_with_the_given_settings_and_marks_the_row(out_di
     calls = []
     _fake_stages(monkeypatch, calls)
     result = backend.run_score('ds1', imputation=2, wdfdr_iterations=5, organism='human',
-                               exclude_hcm=True, pi_method='single_bait', pi_bait='Ctrl',
+                               exclude_proximity=True, pi_method='single_bait', pi_bait='Ctrl',
                                aft_min_obs=0, seed=7)
     score_cmd, ann_cmd = calls
     assert score_cmd[1].endswith('score.py')
@@ -135,7 +135,7 @@ def test_score_runs_both_stages_with_the_given_settings_and_marks_the_row(out_di
     assert score_cmd[score_cmd.index('--pi-bait') + 1] == 'Ctrl'
     assert score_cmd[score_cmd.index('--aft-min-obs') + 1] == '0'
     assert score_cmd[score_cmd.index('--seed') + 1] == '7'
-    assert ann_cmd[1].endswith('annotator.py') and '--excludeHCM' in ann_cmd
+    assert ann_cmd[1].endswith('annotator.py') and '--excludeProximity' in ann_cmd
     assert store.row('ds1')['Scored'] == 'Yes'
     assert store.row('ds1')['Imputation'] == 'Two-component AFT'
     assert result['run_id']
@@ -144,13 +144,13 @@ def test_score_runs_both_stages_with_the_given_settings_and_marks_the_row(out_di
 def test_a_failing_stage_raises_with_its_log_and_leaves_the_row_unscored(parsed, monkeypatch):
     _fake_stages(monkeypatch, [], fail='annotator.py')
     with pytest.raises(backend.StageError, match='boom'):
-        backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='human', exclude_hcm=False)
+        backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='human', exclude_proximity=False)
     assert store.row('ds1')['Scored'] != 'Yes'
 
 
 def test_run_info_and_log_tail_report_the_stages_and_the_log(parsed, monkeypatch):
     _fake_stages(monkeypatch, [])
-    backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='human', exclude_hcm=False)
+    backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='human', exclude_proximity=False)
     info = backend.run_info('ds1')
     # The faked score.py and annotator.py record no stages of their own.
     assert [(s['stage'], s['status']) for run in info['runs'] for s in run['stages']] == [('parse', 'ok')]
@@ -167,11 +167,11 @@ def test_run_info_and_log_tail_report_the_stages_and_the_log(parsed, monkeypatch
 def test_score_refuses_an_unknown_dataset_or_bad_settings(parsed, monkeypatch):
     _fake_stages(monkeypatch, [])
     with pytest.raises(KeyError):
-        backend.run_score('nope', imputation=0, wdfdr_iterations=0, organism='human', exclude_hcm=False)
+        backend.run_score('nope', imputation=0, wdfdr_iterations=0, organism='human', exclude_proximity=False)
     with pytest.raises(ValueError, match='imputation'):
-        backend.run_score('ds1', imputation=9, wdfdr_iterations=0, organism='human', exclude_hcm=False)
+        backend.run_score('ds1', imputation=9, wdfdr_iterations=0, organism='human', exclude_proximity=False)
     with pytest.raises(ValueError, match='organism'):
-        backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='cat', exclude_hcm=False)
+        backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='cat', exclude_proximity=False)
 
 
 @pytest.mark.parametrize("imputation", [1, 2, 3])
@@ -182,7 +182,7 @@ def test_score_refuses_imputation_for_spectral_counts(parsed, monkeypatch, imput
     _fake_stages(monkeypatch, calls)
     with pytest.raises(ValueError, match='spectral counts'):
         backend.run_score('ds1', imputation=imputation, wdfdr_iterations=0, organism='human',
-                          exclude_hcm=False)
+                          exclude_proximity=False)
     assert calls == []
     assert store.row('ds1')['Scored'] != 'Yes'
 
@@ -199,14 +199,14 @@ def test_a_dataset_being_worked_on_refuses_a_second_job(parsed, monkeypatch):
     def first():
         with pytest.raises(backend.StageError):
             backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='human',
-                              exclude_hcm=False, actor='gui')
+                              exclude_proximity=False, actor='gui')
     worker = threading.Thread(target=first)
     worker.start()
     started.wait(5)
     job = backend.running_jobs()['ds1']
     assert (job['actor'], job['what']) == ('gui', 'score') and job['since']
     with pytest.raises(backend.BusyError, match='gui'):
-        backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='human', exclude_hcm=False)
+        backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='human', exclude_proximity=False)
     release.set()
     worker.join(5)
     assert backend.running_jobs() == {}
@@ -327,7 +327,7 @@ def test_parse_reads_the_bait_file_when_the_edited_table_is_empty(out_dir):
 
 def test_score_records_when_and_against_what_the_dataset_was_annotated(parsed, monkeypatch):
     _fake_stages(monkeypatch, [])
-    backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='mouse', exclude_hcm=False)
+    backend.run_score('ds1', imputation=0, wdfdr_iterations=0, organism='mouse', exclude_proximity=False)
     # The faked annotator records no stage, so the fields stay blank.
     assert store.row('ds1')['Scored at'] == '' and store.row('ds1')['Organism'] == ''
 

@@ -485,22 +485,18 @@ def calculate_network_degrees(passing_interactions, biogrid_path):
     col_a = biogrid['SWISS-PROT Accessions Interactor A']
     col_b = biogrid['SWISS-PROT Accessions Interactor B']
 
-    prey_prey_edges = biogrid[
-        col_a.isin(prey_ids) & col_b.isin(prey_ids) &
-        ~col_a.isin(bait_ids) & ~col_b.isin(bait_ids)
-    ]
+    keep = (col_a.isin(prey_ids) & col_b.isin(prey_ids) &
+            ~col_a.isin(bait_ids) & ~col_b.isin(bait_ids) & (col_a != col_b))
 
     # If no prey-prey edges found, return zeros
-    if len(prey_prey_edges) == 0:
+    if not keep.any():
         return [0] * len(prey_ids)
 
-    # Count degree efficiently using value_counts on concatenated series
-    # This is faster than creating separate DataFrames and concatenating
-    all_proteins = pd.concat([
-        prey_prey_edges['SWISS-PROT Accessions Interactor A'],
-        prey_prey_edges['SWISS-PROT Accessions Interactor B']
-    ])
-    degree_counts = all_proteins.value_counts().to_dict()
+    # The summary lists a pair in both orientations; sorting the ends makes each
+    # pair one edge.
+    ends = np.sort(np.column_stack([col_a[keep].to_numpy(), col_b[keep].to_numpy()]), axis=1)
+    edges = pd.DataFrame(ends).drop_duplicates()
+    degree_counts = edges.stack().value_counts().to_dict()
 
     # Calculate degrees for each unique prey
     degrees = [degree_counts.get(prey_id, 0) for prey_id in prey_ids]

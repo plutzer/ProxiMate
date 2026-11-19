@@ -64,7 +64,7 @@ def test_details_carry_the_parameters_with_types_and_defaults():
     d = registry.details('score_dataset')
     props = d['schema']['properties']
     assert props['imputation']['type'] == 'integer'
-    assert props['exclude_hcm']['type'] == 'boolean'
+    assert props['exclude_proximity']['type'] == 'boolean'
     assert props['pi_bait']['default'] is None
     assert 'dataset' in d['schema']['required'] and 'seed' not in d['schema']['required']
     assert d['mode'] == 'dataset' and 'GUI' in d['effects']
@@ -79,7 +79,7 @@ def test_call_validates_arguments_before_running():
         registry.call('get_dataset_info', {})
     with pytest.raises(ValueError, match='integer'):
         registry.call('score_dataset', {'dataset': 'x', 'imputation': 'two', 'wdfdr_iterations': 0,
-                                        'organism': 'human', 'exclude_hcm': False})
+                                        'organism': 'human', 'exclude_proximity': False})
     with pytest.raises(KeyError):
         registry.call('nope', {})
 
@@ -178,8 +178,8 @@ def test_run_info_and_tail_log_read_the_manifest_and_the_log(out_dir):
 
 def test_score_dataset_defaults_are_the_scoring_cards(monkeypatch):
     params = registry.details('score_dataset')['schema']['properties']
-    assert {k: params[k]['default'] for k in ('imputation', 'wdfdr_iterations', 'organism', 'exclude_hcm')} == \
-        {'imputation': 0, 'wdfdr_iterations': 1000, 'organism': 'human', 'exclude_hcm': False}
+    assert {k: params[k]['default'] for k in ('imputation', 'wdfdr_iterations', 'organism', 'exclude_proximity')} == \
+        {'imputation': 0, 'wdfdr_iterations': 1000, 'organism': 'human', 'exclude_proximity': False}
     seen = {}
     monkeypatch.setattr(backend, 'run_score', lambda name, *a, **k: seen.update(args=a, **k) or {'run_id': 'r'})
     registry.call('score_dataset', {'dataset': 'ds'})
@@ -360,7 +360,7 @@ def test_cytoscape_send_records_its_settings_in_the_manifest(scored, drawn, monk
         seen.update(dataset=dataset, thresholds=thresholds, **kwargs)
         return ctl.snapshot()
     monkeypatch.setattr(ctl, 'draw', fake_draw)
-    monkeypatch.setattr(mcp_ops.provenance, 'biogrid_summary_path', lambda organism, exclude_hcm=False: '/no/biogrid.csv')
+    monkeypatch.setattr(mcp_ops.provenance, 'biogrid_summary_path', lambda organism, exclude_proximity=False: '/no/biogrid.csv')
     with pytest.raises(ValueError, match="'ds' is drawn; pass replace=true"):
         registry.call('cytoscape_send', {'dataset': 'ds', 'thresholds': THRESHOLDS})
     assert not seen

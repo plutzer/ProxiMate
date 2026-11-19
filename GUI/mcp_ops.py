@@ -57,7 +57,7 @@ def list_datasets() -> dict:
 def get_dataset_info(dataset: str) -> dict:
     """The session row, presence of ED.csv / merged.csv / annotated_scores.csv /
     Feature_enrichment.csv / run.json, the bait names (from annotated_scores.csv), the
-    organism and Human Cell Map setting it was annotated with, and whether a job is
+    organism and proximity-evidence setting it was annotated with, and whether a job is
     running on it."""
     return _json(backend.dataset_info(dataset))
 
@@ -199,20 +199,20 @@ def parse_dataset(dataset: str, input_format: str, files: dict, quant_type: str 
 @register('dataset', "Score a parsed dataset with SAINTexpress and CompPASS, then annotate it.",
           tags=('score', 'saint', 'comppass', 'annotate', 'imputation', 'wdfdr'))
 def score_dataset(dataset: str, imputation: int = 0, wdfdr_iterations: int = 1000,
-                  organism: str = 'human', exclude_hcm: bool = False, pi_method: str = None,
+                  organism: str = 'human', exclude_proximity: bool = False, pi_method: str = None,
                   pi_bait: str = None, aft_min_obs: int = None, seed: int = None) -> dict:
     """Runs score.py and annotator.py on the dataset, as the Scoring card does; the
     defaults are the Scoring card's.  ``imputation``: 0 none, 1 prey-specific AFT, 2
     refactored AFT, 3 one-component AFT (intensity data only).  ``wdfdr_iterations``:
     permutations for the WD FDR (0 skips it).  ``organism``: human, mouse or yeast.
-    ``exclude_hcm`` removes Human Cell Map evidence from BioGRID (human only).
+    ``exclude_proximity`` removes proximity-labeling evidence from BioGRID.
     ``pi_method`` (weighted_average or single_bait, with ``pi_bait``) applies to
     imputation 2.  ``aft_min_obs`` applies to imputation 2 and 3: preys observed in
     fewer than that many runs are fitted with the dataset median per-prey SD as their
     sigma lower bound (default 4; 0 disables the floor).  ``seed`` fixes the CompPASS permutations.  Blocks until both
     stages finish (minutes); refused while the GUI or another call is working on the
     dataset."""
-    return _json(backend.run_score(dataset, imputation, wdfdr_iterations, organism, exclude_hcm,
+    return _json(backend.run_score(dataset, imputation, wdfdr_iterations, organism, exclude_proximity,
                                    pi_method=pi_method, pi_bait=pi_bait, aft_min_obs=aft_min_obs,
                                    seed=seed, actor=ACTOR))
 

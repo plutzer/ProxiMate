@@ -88,16 +88,16 @@ def test_unusable_downloads_are_rejected_without_writing(tmp_path, content):
 
 # --- run_preprocess_biogrid -------------------------------------------------------------
 
-@pytest.mark.parametrize("exclude_hcm, summary, expected_args", [
+@pytest.mark.parametrize("exclude_proximity, summary, expected_args", [
     (False, setup_datasets.BIOGRID_SUMMARY_FILENAME, []),
-    (True, setup_datasets.BIOGRID_NO_HCM_SUMMARY_FILENAME,
-     ["--exclude_publication", setup_datasets.HCM_PUBLICATION,
-      "--output_filename", setup_datasets.BIOGRID_NO_HCM_SUMMARY_FILENAME]),
-], ids=["full", "no HCM"])
+    (True, setup_datasets.BIOGRID_NO_PROXIMITY_SUMMARY_FILENAME,
+     ["--exclude_system", setup_datasets.PROXIMITY_SYSTEM,
+      "--output_filename", setup_datasets.BIOGRID_NO_PROXIMITY_SUMMARY_FILENAME]),
+], ids=["full", "no proximity"])
 def test_preprocessing_passes_the_organism_and_variant_to_the_subprocess(
-        tmp_path, monkeypatch, exclude_hcm, summary, expected_args):
+        tmp_path, monkeypatch, exclude_proximity, summary, expected_args):
     """The taxonomy id has to reach the subprocess: preprocessing filters on it, and a
-    wrong one yields an empty summary rather than an error.  The no-HCM variant must
+    wrong one yields an empty summary rather than an error.  The no-proximity variant must
     land beside the full summary without replacing it."""
     for filename in (setup_datasets.BIOGRID_ALL_FILENAME,
                      setup_datasets.BIOGRID_MV_FILENAME):
@@ -119,7 +119,7 @@ def test_preprocessing_passes_the_organism_and_variant_to_the_subprocess(
     monkeypatch.setattr(setup_datasets.subprocess, "run", _run)
 
     assert setup_datasets.run_preprocess_biogrid(
-        str(tmp_path), "human", 10090, exclude_hcm=exclude_hcm) is True
+        str(tmp_path), "human", 10090, exclude_proximity=exclude_proximity) is True
     cmd = calls[0]
     assert cmd[cmd.index("--organism_id") + 1] == "10090"
     for arg in expected_args:

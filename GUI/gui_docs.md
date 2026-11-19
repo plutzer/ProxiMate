@@ -49,9 +49,9 @@ manifest and the drawn Cytoscape network); *Duplicate selected* parses a copy un
 name from the input stored with the active dataset, with its experimental design as edited
 in the dialog (experiments left out, or Type, Bait, Replicate, Bait ID and Group changed;
 experiment names stay), so an outlier can be dropped or another scoring tried while the
-original and its scores stay as they are; *Clear All Datasets* empties the session; and
-*Download Session Zip* saves every dataset with its results as one archive, which the
-smaller *Load a saved session* card beside the table restores with *Load Session*
+original and its scores stay as they are; and *Clear All Datasets* empties the session.
+In the smaller *Save or load a session* card beside the table, *Download Session Zip*
+saves every dataset with its results as one archive, which *Load Session* restores
 (replacing the current session).
 
 **Step 1 — Parse** takes a dataset name, an input format (MaxQuant, DIA-NN, Pioneer,
@@ -76,15 +76,16 @@ only what gets scored, not the active dataset. The card also picks the organism,
 imputation method for missing control values (AFT imputation applies to intensity data;
 a spectral-count dataset offers Default only), how π is estimated (imputation 2 only),
 the sigma floor's minimum observation count (imputation 2 and 3; default 4, 0 disables
-it), the number of WDFDR permutations, and for human data whether Human Cell Map
+it), the number of WDFDR permutations, and whether proximity-labeling
 evidence is excluded from BioGRID. *Score Data* runs SAINTexpress and
 CompPASS, then annotates the result; the row's State becomes `scored`.
 
-Excluding Human Cell Map evidence annotates against a copy of the human BioGRID summary
-with every evidence line from Go et al. 2021 removed. HCM is itself a BioID screen, so
-its evidence makes proximity-labeling hits look more "known" than they are. Interactions
-with other evidence are kept, `run.json` records the choice, and the Quality Control
-metrics use the same file the run was annotated against.
+Excluding proximity evidence annotates against a copy of the organism's BioGRID summary
+with every `Proximity Label-MS` evidence line removed. Evidence from the same kind of
+assay makes proximity-labeling hits look more "known" than they are. Interactions
+with other evidence are kept, and count as multivalidated only if that evidence has two
+publications or two experimental systems. `run.json` records the choice, and the Quality
+Control metrics use the same file the run was annotated against.
 
 Each dataset directory holds `run.json` (parameters, input checksums, row counts,
 package versions, pass/fail per stage) and `proximate.log` (timestamped log from
