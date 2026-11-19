@@ -27,7 +27,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --organism    - human (default), mouse, or yeast"
-    echo "  --exclude-hcm - annotate against BioGRID with Human Cell Map (Go et al. 2021) evidence removed; human only"
+    echo "  --exclude-proximity - annotate against BioGRID with proximity-labeling evidence removed"
     echo "  --pi-method   - weighted_average (default) or single_bait; applies when imputation=2"
     echo "  --pi-bait     - required when --pi-method=single_bait: control Bait name"
     echo "  --aft-min-obs - preys observed in fewer than N runs take the dataset median per-prey SD"
@@ -54,7 +54,7 @@ pi_method="weighted_average"
 pi_bait=""
 aft_min_obs="4"
 seed=""
-hcm_args=()
+proximity_args=()
 while true; do
     case "$1" in
         --organism)   organism="$2"; shift 2 ;;
@@ -62,7 +62,7 @@ while true; do
         --pi-bait)    pi_bait="$2"; shift 2 ;;
         --aft-min-obs) aft_min_obs="$2"; shift 2 ;;
         --seed)       seed="$2"; shift 2 ;;
-        --exclude-hcm) hcm_args=(--excludeHCM); shift ;;
+        --exclude-proximity) proximity_args=(--excludeProximity); shift ;;
         *) break ;;
     esac
 done
@@ -197,6 +197,6 @@ run_stage "Annotating" \
     python3 /Scripts/annotator.py \
         --organism "$organism" \
         --scoreFile "$output_dir/merged.csv" \
-        --outputDir "$output_dir" "${hcm_args[@]}"
+        --outputDir "$output_dir" "${proximity_args[@]}"
 
 echo "=== Done (run $PROXIMATE_RUN_ID) ===" | tee -a "$log_file"

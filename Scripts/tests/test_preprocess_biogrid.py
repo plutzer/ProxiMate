@@ -14,8 +14,8 @@ from preprocess_biogrid import preprocess_biogrid
 
 HUMAN, MOUSE = 9606, 10090
 
-# Publication whose evidence the "no HCM" summary variant leaves out.
-HCM = "PUBMED:34079125"
+# Experimental system whose evidence the "no proximity" summary variant leaves out.
+PROXIMITY = "Proximity Label-MS"
 
 ALL_COLUMNS = ["Organism ID Interactor A", "Organism ID Interactor B",
                "Experimental System Type", "Experimental System",
@@ -57,7 +57,7 @@ def _multivalidated(a, b, organism_a=HUMAN, organism_b=HUMAN, source="PUBMED:1",
 @pytest.fixture
 def build(tmp_path):
     """Write the two BioGRID exports, run the summariser, return the summary frame."""
-    def _build(all_rows, mv_rows=(), organism_id=HUMAN, exclude_publication=None,
+    def _build(all_rows, mv_rows=(), organism_id=HUMAN, exclude_system=None,
                output_filename="biogrid_summary.csv"):
         all_path = tmp_path / "BIOGRID-ALL.tab3.txt"
         mv_path = tmp_path / "BIOGRID-MV-Physical.tab3.txt"
@@ -67,7 +67,7 @@ def build(tmp_path):
             mv_path, sep="\t", index=False)
 
         preprocess_biogrid(str(all_path), str(mv_path), str(tmp_path), organism_id,
-                           exclude_publication=exclude_publication,
+                           exclude_system=exclude_system,
                            output_filename=output_filename)
         return pd.read_csv(tmp_path / output_filename)
 
@@ -214,18 +214,18 @@ def test_the_summary_carries_the_columns_annotation_reads(build):
     assert summary["In.BioGRID"].all()
 
 
-# --- excluding one publication's evidence ---------------------------------------
+# --- excluding one experimental system's evidence -------------------------------
 
-def test_excluding_a_publication_keeps_only_the_other_evidence(build):
-    """A pair reported only by the excluded publication drops out; one with other
+def test_excluding_a_system_keeps_only_the_other_evidence(build):
+    """A pair reported only by the excluded system drops out; one with other
     evidence keeps exactly that evidence."""
     summary = build([
-        _interaction("P1", "P2", source=HCM, author="Go CD (2021)",
-                     system="Proximity Label-MS"),
+        _interaction("P1", "P2", source="PUBMED:2", author="Go CD (2021)",
+                     system=PROXIMITY),
         _interaction("P1", "P2", source="PUBMED:1", author="Smith A (2020)",
                      system="Affinity Capture-MS"),
-        _interaction("P3", "P4", source=HCM),
-    ], exclude_publication=HCM, output_filename="biogrid_summary_no_hcm.csv")
+        _interaction("P3", "P4", system=PROXIMITY),
+    ], exclude_system=PROXIMITY, output_filename="biogrid_summary_no_proximity.csv")
 
     assert _pairs(summary) == _both_ways(("P1", "P2"))
     for a, b in [("P1", "P2"), ("P2", "P1")]:
@@ -235,18 +235,18 @@ def test_excluding_a_publication_keeps_only_the_other_evidence(build):
         assert row["Experimental System"] == "Affinity Capture-MS"
 
 
-def test_multivalidation_reported_only_by_the_excluded_publication_is_dropped(build):
+def test_multivalidation_reported_only_by_the_excluded_system_is_dropped(build):
     all_rows = [_interaction("P1", "P2", source="PUBMED:1")]
-    mv_rows = [_multivalidated("P1", "P2", source=HCM)]
+    mv_rows = [_multivalidated("P1", "P2", system=PROXIMITY)]
 
     kept = build(all_rows, mv_rows)
-    dropped = build(all_rows, mv_rows, exclude_publication=HCM)
+    dropped = build(all_rows, mv_rows, exclude_system=PROXIMITY)
 
     assert bool(kept.loc[0, "Multivalidated"]) is True
     assert bool(dropped.loc[0, "Multivalidated"]) is False
 
 
-HCM_ROW = _multivalidated("P1", "P2", source=HCM, system="Proximity Label-MS")
+PROXIMITY_ROW = _multivalidated("P1", "P2", source="PUBMED:9", system=PROXIMITY)
 
 
 def _flags(summary):
@@ -254,13 +254,13 @@ def _flags(summary):
 
 
 def test_one_report_left_after_exclusion_is_not_multivalidated(build):
-    """The excluded publication was half of the pair's validation; the report that is
+    """The excluded system was half of the pair's validation; the report that is
     left is a single piece of evidence."""
     all_rows = [_interaction("P1", "P2", source="PUBMED:1")]
-    mv_rows = [HCM_ROW, _multivalidated("P1", "P2", source="PUBMED:1")]
+    mv_rows = [PROXIMITY_ROW, _multivalidated("P1", "P2", source="PUBMED:1")]
 
     assert _flags(build(all_rows, mv_rows)) == [True, True]
-    assert _flags(build(all_rows, mv_rows, exclude_publication=HCM)) == [False, False]
+    assert _flags(build(all_rows, mv_rows, exclude_system=PROXIMITY)) == [False, False]
 
 
 @pytest.mark.parametrize("remaining", [
@@ -273,7 +273,7 @@ def test_one_report_left_after_exclusion_is_not_multivalidated(build):
 ], ids=["two publications", "two systems", "opposite orientations"])
 def test_two_publications_or_systems_left_after_exclusion_stay_multivalidated(
         build, remaining):
-    summary = build([_interaction("P1", "P2", source="PUBMED:1")], [HCM_ROW, *remaining],
-                    exclude_publication=HCM)
+    summary = build([_interaction("P1", "P2", source="PUBMED:1")],
+                    [PROXIMITY_ROW, *remaining], exclude_system=PROXIMITY)
 
     assert _flags(summary) == [True, True]

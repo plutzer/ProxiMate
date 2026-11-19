@@ -50,7 +50,7 @@ Options go before `--format`.
 | Option | Effect |
 | --- | --- |
 | `--organism` | `human` (default), `mouse` or `yeast` |
-| `--exclude-hcm` | Annotate against BioGRID without Human Cell Map evidence; human only. See [Databases](databases.md#excluding-human-cell-map-evidence). |
+| `--exclude-proximity` | Annotate against BioGRID without proximity-labeling evidence. See [Databases](databases.md#excluding-proximity-evidence). |
 | `--seed` | CompPASS permutation seed, so WD p-values reproduce between runs |
 | `--pi-method` | `weighted_average` (default) or `single_bait`; `imputation` `2` only |
 | `--pi-bait` | Control bait name; required with `--pi-method single_bait` |

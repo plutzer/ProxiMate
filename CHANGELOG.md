@@ -12,15 +12,17 @@ section to the version and date and starts a fresh Unreleased section above it.
 ## [Unreleased]
 
 ### Changed
+- *Exclude proximity evidence* replaces *Exclude Human Cell Map evidence* and is offered
+  for every organism. It drops all BioGRID `Proximity Label-MS` evidence: an interaction
+  known only from proximity labeling loses `In.BioGRID`, and one stays `Multivalidated`
+  only on two publications or two experimental systems among the rest. The flags are
+  `--exclude-proximity` (`run_pipeline.sh`) and `exclude_proximity` (MCP `score`).
+  Re-score a dataset scored with the old option; until then its Quality Control metrics
+  use the full summary.
 - `In.BioGRID` and `Multivalidated` match a published interaction whichever partner was
   the bait; before, only records with the prey as BioGRID's bait matched. Known counts
-  rise and *Exclude Human Cell Map evidence* removes more. Re-score a dataset to pick
-  this up. Mean prey-prey degree counts a pair BioGRID lists in both orientations once.
-
-### Fixed
-- *Exclude Human Cell Map evidence* no longer leaves an interaction `Multivalidated` on
-  one remaining report: the flag now needs two publications or two experimental systems
-  among the non-HCM evidence. Re-score a dataset to pick this up.
+  rise. Re-score a dataset to pick this up. Mean prey-prey degree counts a pair BioGRID
+  lists in both orientations once.
 
 ## [0.5.0] - 2026-11-16
 

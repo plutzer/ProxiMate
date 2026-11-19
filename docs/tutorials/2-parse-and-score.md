@@ -102,7 +102,7 @@ In *Step 2 — Score*, *Dataset to score* now names `HCM_example`.
 | --- | --- |
 | **Dataset to score** | The dataset **Score Data** scores. It follows the active dataset and a newly parsed one. Picking another here changes only what gets scored, not the active dataset. |
 | **Organism** | *Human* here. Picks the annotation databases (BioGRID, UniProt, Human Protein Atlas, CORUM). |
-| **Exclude Human Cell Map evidence** | Annotates against a copy of BioGRID without the HCM paper's evidence. HCM is itself a BioID screen, so its evidence makes proximity hits look more "known" than they are. Tick it when benchmarking against BioGRID; this tutorial leaves it off. |
+| **Exclude proximity evidence** | Annotates against a copy of BioGRID without proximity-labeling evidence, which makes proximity hits look more "known" than they are. Tick it when benchmarking against BioGRID; this tutorial leaves it off. |
 | **Imputation Method** | How missing control values are filled before SAINT. *Default* fills nothing. The two AFT options model values that fell below detection and apply to intensity data only. The preloaded `HCM_LFQ_1comp` and `HCM_LFQ_2comp` are the full HCM data scored with them. |
 | **WDFDR Iterations** | How many data shuffles estimate the WD false discovery rate. 1000 is the default; 0 skips WDFDR. |
 

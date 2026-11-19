@@ -17,7 +17,7 @@ def mirror(df):
 
 
 def preprocess_biogrid(biogrid_all_path, biogrid_mv_path, output_dir, organism_id=9606,
-                       exclude_publication=None, output_filename="biogrid_summary.csv"):
+                       exclude_system=None, output_filename="biogrid_summary.csv"):
     # Read the biogrid_all file
     all_biogrid = pd.read_csv(biogrid_all_path, sep='\t')
     all_biogrid = all_biogrid[
@@ -33,20 +33,20 @@ def preprocess_biogrid(biogrid_all_path, biogrid_mv_path, output_dir, organism_i
         (mv_biogrid['Organism ID Interactor B'] == organism_id)
     ]
 
-    # Excluding a publication removes its evidence rows from both files; a pair with no
-    # rows left drops out of the summary below, one with other evidence keeps it.
-    if exclude_publication is not None:
-        all_biogrid = all_biogrid[all_biogrid['Publication Source'] != exclude_publication]
-        mv_biogrid = mv_biogrid[mv_biogrid['Publication Source'] != exclude_publication]
+    # Excluding an experimental system removes its evidence rows from both files; a pair
+    # with no rows left drops out of the summary below, one with other evidence keeps it.
+    if exclude_system is not None:
+        all_biogrid = all_biogrid[all_biogrid['Experimental System'] != exclude_system]
+        mv_biogrid = mv_biogrid[mv_biogrid['Experimental System'] != exclude_system]
 
     all_biogrid = mirror(all_biogrid[[A, B, 'Experimental System', 'Author', 'Publication Source']])
     mv_biogrid = mirror(mv_biogrid[[A, B, 'Experimental System', 'Publication Source']])
 
     # Every pair in the multivalidated file has two publications or two experimental
-    # systems.  With a publication's rows excluded, a pair has to meet that again on the
+    # systems.  With a system's rows excluded, a pair has to meet that again on the
     # evidence that is left.
     mv_biogrid = mv_biogrid.groupby([A, B])[['Experimental System', 'Publication Source']].nunique()
-    if exclude_publication is not None:
+    if exclude_system is not None:
         mv_biogrid = mv_biogrid[mv_biogrid.max(axis=1) >= 2]
     mv_biogrid = mv_biogrid.assign(Multivalidated=True)[['Multivalidated']].reset_index()
 
@@ -97,16 +97,16 @@ def main():
     parser.add_argument("--organism_id", type=int, default=9606,
                         help="NCBI Taxonomy ID for organism filtering (default: 9606 for human)")
 
-    parser.add_argument("--exclude_publication", default=None,
-                        help="drop every evidence row with this 'Publication Source' value "
-                             "(e.g. PUBMED:34079125) before summarizing; interactions that keep "
+    parser.add_argument("--exclude_system", default=None,
+                        help="drop every evidence row with this 'Experimental System' value "
+                             "(e.g. Proximity Label-MS) before summarizing; interactions that keep "
                              "other evidence remain, multivalidated only if that evidence has "
                              "two publications or two experimental systems")
 
     args = parser.parse_args()
     preprocess_biogrid(args.biogrid_all, args.biogrid_mv,
                        output_dir=args.output_dir, organism_id=args.organism_id,
-                       exclude_publication=args.exclude_publication,
+                       exclude_system=args.exclude_system,
                        output_filename=args.output_filename)
 
 

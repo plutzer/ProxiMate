@@ -30,9 +30,9 @@ import requests
 #   4. If the organism has a species-specific database (like HPA for human),
 #      add a download function in setup_datasets.py and conditional logic in annotator.py
 ORGANISMS = {
-    "human": {"organism_id": 9606, "has_hpa": True, "has_corum": True, "has_hcm": True},
-    "mouse": {"organism_id": 10090, "has_hpa": False, "has_corum": False, "has_hcm": False},
-    "yeast": {"organism_id": 559292, "has_hpa": False, "has_corum": False, "has_hcm": False},
+    "human": {"organism_id": 9606, "has_hpa": True, "has_corum": True},
+    "mouse": {"organism_id": 10090, "has_hpa": False, "has_corum": False},
+    "yeast": {"organism_id": 559292, "has_hpa": False, "has_corum": False},
 }
 
 # ---------------------------------------------------------------------------
@@ -72,11 +72,10 @@ BIOGRID_MV_URL = (
 BIOGRID_ALL_FILENAME = "BIOGRID-ALL.tab3.txt"
 BIOGRID_MV_FILENAME = "BIOGRID-MV-Physical.tab3.txt"
 BIOGRID_SUMMARY_FILENAME = "biogrid_summary.csv"
-# The same summary with Human Cell Map (Go et al. 2021) evidence removed, built only for
-# organisms flagged has_hcm above.  HCM is itself a BioID screen, so proximity-labeling
-# runs scored against it look more "known" than they are.
-BIOGRID_NO_HCM_SUMMARY_FILENAME = "biogrid_summary_no_hcm.csv"
-HCM_PUBLICATION = "PUBMED:34079125"
+# The same summary with proximity-labeling evidence removed.  Proximity-labeling runs
+# scored against evidence from the same kind of assay look more "known" than they are.
+BIOGRID_NO_PROXIMITY_SUMMARY_FILENAME = "biogrid_summary_no_proximity.csv"
+PROXIMITY_SYSTEM = "Proximity Label-MS"
 BIOGRID_REQUIRED_COLUMNS = {
     "Organism ID Interactor A", "Organism ID Interactor B",
     "Experimental System Type", "Publication Source", "SWISS-PROT Accessions Interactor A",
@@ -289,11 +288,11 @@ def download_corum(output_dir: str, force: bool) -> bool:
 # ---------------------------------------------------------------------------
 
 def run_preprocess_biogrid(output_dir: str, organism_name: str, organism_id: int,
-                           exclude_hcm: bool = False) -> bool:
+                           exclude_proximity: bool = False) -> bool:
     """Run BioGRID preprocessing for a specific organism.
 
-    With ``exclude_hcm`` the summary is written under the no-HCM filename with every
-    Human Cell Map evidence row removed first.
+    With ``exclude_proximity`` the summary is written under the no-proximity filename
+    with every proximity-labeling evidence row removed first.
     """
     biogrid_all = os.path.join(output_dir, BIOGRID_ALL_FILENAME)
     biogrid_mv = os.path.join(output_dir, BIOGRID_MV_FILENAME)
@@ -319,10 +318,10 @@ def run_preprocess_biogrid(output_dir: str, organism_name: str, organism_id: int
         "--output_dir", organism_dir,
         "--organism_id", str(organism_id),
     ]
-    if exclude_hcm:
-        label = f"BioGRID preprocessing ({organism_name}, no HCM)"
-        summary_filename = BIOGRID_NO_HCM_SUMMARY_FILENAME
-        cmd += ["--exclude_publication", HCM_PUBLICATION,
+    if exclude_proximity:
+        label = f"BioGRID preprocessing ({organism_name}, no proximity)"
+        summary_filename = BIOGRID_NO_PROXIMITY_SUMMARY_FILENAME
+        cmd += ["--exclude_system", PROXIMITY_SYSTEM,
                 "--output_filename", summary_filename]
 
     log(f"{label}: Generating {summary_filename} (organism_id={organism_id})...")
@@ -413,10 +412,9 @@ def main() -> int:
                 results[f"BioGRID preprocessing ({org_name})"] = run_preprocess_biogrid(
                     output_dir, org_name, org_config["organism_id"]
                 )
-                if org_config["has_hcm"]:
-                    results[f"BioGRID preprocessing ({org_name}, no HCM)"] = run_preprocess_biogrid(
-                        output_dir, org_name, org_config["organism_id"], exclude_hcm=True
-                    )
+                results[f"BioGRID preprocessing ({org_name}, no proximity)"] = run_preprocess_biogrid(
+                    output_dir, org_name, org_config["organism_id"], exclude_proximity=True
+                )
 
     # HPA: human only
     if "hpa" not in args.skip:

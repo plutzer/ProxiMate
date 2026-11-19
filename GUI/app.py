@@ -268,12 +268,9 @@ app_ui = ui.page_navbar(
                                      "mouse": "Mouse (M. musculus)",
                                      "yeast": "Yeast (S. cerevisiae)"},
                             selected="human"),
-                        ui.panel_conditional(
-                            "input.organism === 'human'",
-                            ui.input_checkbox("exclude_hcm",
-                                tip("Exclude Human Cell Map evidence", "exclude_hcm"),
-                                value=False),
-                        ),
+                        ui.input_checkbox("exclude_proximity",
+                            tip("Exclude proximity evidence", "exclude_proximity"),
+                            value=False),
                         ui.input_radio_buttons("imputation_method", tip("Imputation Method", "imputation_method"),
                                               choices={0: "Default", 
                                                     #    1: "Prey-specific",
@@ -1507,7 +1504,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         imputation = int(input.imputation_method.get())
         pi_method = input.pi_method.get() if imputation == 2 else None
         settings = dict(imputation=imputation, wdfdr_iterations=input.wdfdr_iterations.get(),
-                        organism=input.organism.get(), exclude_hcm=input.exclude_hcm.get(),
+                        organism=input.organism.get(), exclude_proximity=input.exclude_proximity.get(),
                         pi_method=pi_method,
                         pi_bait=input.pi_bait.get() if pi_method == 'single_bait' else None,
                         aft_min_obs=input.aft_min_obs.get() if imputation in (2, 3) else None)

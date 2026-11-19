@@ -200,15 +200,15 @@ def test_a_parse_that_fails_validation_still_writes_a_dataset_log(tmp_path, run_
 # Locating a dataset's annotation databases
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("exclude_hcm, filename", [
+@pytest.mark.parametrize("exclude_proximity, filename", [
     (False, setup_datasets.BIOGRID_SUMMARY_FILENAME),
-    (True, setup_datasets.BIOGRID_NO_HCM_SUMMARY_FILENAME),
+    (True, setup_datasets.BIOGRID_NO_PROXIMITY_SUMMARY_FILENAME),
 ])
 def test_the_biogrid_summary_is_looked_for_where_setup_datasets_writes_it(
-        tmp_path, exclude_hcm, filename):
+        tmp_path, exclude_proximity, filename):
     """The summary is built per organism, so there is no copy at the top of the
     datasets directory to fall back on."""
-    path = provenance.biogrid_summary_path("mouse", str(tmp_path), exclude_hcm=exclude_hcm)
+    path = provenance.biogrid_summary_path("mouse", str(tmp_path), exclude_proximity=exclude_proximity)
 
     assert path == os.path.join(str(tmp_path), "mouse", filename)
 
@@ -219,20 +219,20 @@ def test_annotation_settings_come_from_the_latest_run_that_recorded_them(
     full summary: every dataset scored before either became a parameter was.  Once
     recorded, the most recent annotating run wins."""
     assert provenance.annotation_settings(tmp_path) == {
-        "organism": "human", "exclude_hcm": False}
+        "organism": "human", "exclude_proximity": False}
 
     monkeypatch.setenv("PROXIMATE_RUN_ID", "20260831T120000Z-0badcafe")
     with provenance.stage(tmp_path, "annotate") as record:
-        record.extra(organism="human", exclude_hcm=True)
+        record.extra(organism="human", exclude_proximity=True)
     monkeypatch.setenv("PROXIMATE_RUN_ID", "20260901T120000Z-1badcafe")
     with provenance.stage(tmp_path, "annotate") as record:
         record.extra(organism="mouse")
 
-    assert provenance.annotation_settings(tmp_path) == {"organism": "mouse", "exclude_hcm": True}
+    assert provenance.annotation_settings(tmp_path) == {"organism": "mouse", "exclude_proximity": True}
 
     (tmp_path / provenance.RUN_JSON_FILENAME).write_text("{not json", encoding="utf-8")
     assert provenance.annotation_settings(tmp_path) == {
-        "organism": "human", "exclude_hcm": False}
+        "organism": "human", "exclude_proximity": False}
 
 
 # ---------------------------------------------------------------------------

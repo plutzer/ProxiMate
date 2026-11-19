@@ -250,9 +250,9 @@ def main():
     parser.add_argument("--biogridFile", default=None,
                         help="path to biogrid annotation file (default: /Datasets/{organism}/biogrid_summary.csv)")
 
-    parser.add_argument("--excludeHCM", action="store_true",
-                        help="annotate against the BioGRID summary with Human Cell Map "
-                             "(Go et al. 2021) evidence removed; human only")
+    parser.add_argument("--excludeProximity", action="store_true",
+                        help="annotate against the BioGRID summary with proximity-labeling "
+                             "evidence removed")
 
     parser.add_argument("--locationFile", default=None,
                         help="path to subcellular locations file (HPA, human only)")
@@ -297,14 +297,11 @@ def _annotate(args, record):
     organism_dir = f"{datasets_dir}/{args.organism}"
     org_config = ORGANISMS[args.organism]
 
-    if args.excludeHCM and not org_config["has_hcm"]:
-        raise ValueError(f"--excludeHCM: no Human Cell Map variant exists for {args.organism}")
-
     if args.uniprotFile is None:
         args.uniprotFile = f"{organism_dir}/uniprot_anns.tsv"
     if args.biogridFile is None:
         args.biogridFile = provenance.biogrid_summary_path(
-            args.organism, datasets_dir, exclude_hcm=args.excludeHCM)
+            args.organism, datasets_dir, exclude_proximity=args.excludeProximity)
     if args.locationFile is None and org_config["has_hpa"]:
         args.locationFile = f"{organism_dir}/subcellular_location.tsv"
     if args.complexFile is None and org_config["has_corum"]:
@@ -314,7 +311,7 @@ def _annotate(args, record):
     bait_col = args.baitColumn
     gene_col = args.preyGeneColumn
 
-    record.extra(organism=args.organism, exclude_hcm=args.excludeHCM, prey_column=prey_col,
+    record.extra(organism=args.organism, exclude_proximity=args.excludeProximity, prey_column=prey_col,
                  bait_column=bait_col, gene_column=gene_col)
     for role in ("scoreFile", "uniprotFile", "biogridFile", "locationFile", "complexFile"):
         path = getattr(args, role)

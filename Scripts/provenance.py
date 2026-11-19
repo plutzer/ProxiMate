@@ -32,7 +32,7 @@ import traceback
 from datetime import datetime, timezone
 
 from log_config import get_logger, get_run_id
-from setup_datasets import (BIOGRID_NO_HCM_SUMMARY_FILENAME, BIOGRID_SUMMARY_FILENAME,
+from setup_datasets import (BIOGRID_NO_PROXIMITY_SUMMARY_FILENAME, BIOGRID_SUMMARY_FILENAME,
                             BUILD_INFO_FILENAME)
 
 logger = get_logger(__name__)
@@ -173,32 +173,32 @@ def read_build_info(datasets_dir=DEFAULT_DATASETS_DIR):
         return None
 
 
-def biogrid_summary_path(organism, datasets_dir=None, exclude_hcm=False):
+def biogrid_summary_path(organism, datasets_dir=None, exclude_proximity=False):
     """Where ``setup_datasets`` writes the BioGRID summary for one organism.
 
     The summary is filtered by taxonomy id, so each organism gets its own; there is no
-    copy at the top of the datasets directory.  ``exclude_hcm`` selects the variant with
-    Human Cell Map evidence removed.
+    copy at the top of the datasets directory.  ``exclude_proximity`` selects the variant with
+    proximity-labeling evidence removed.
     """
     if datasets_dir is None:
         datasets_dir = DEFAULT_DATASETS_DIR
-    filename = BIOGRID_NO_HCM_SUMMARY_FILENAME if exclude_hcm else BIOGRID_SUMMARY_FILENAME
+    filename = BIOGRID_NO_PROXIMITY_SUMMARY_FILENAME if exclude_proximity else BIOGRID_SUMMARY_FILENAME
     return os.path.join(datasets_dir, organism, filename)
 
 
 def annotation_settings(output_dir):
     """The organism and BioGRID variant a dataset's results were annotated against.
 
-    Returns ``{"organism": ..., "exclude_hcm": ...}`` from the last stage of the
+    Returns ``{"organism": ..., "exclude_proximity": ...}`` from the last stage of the
     manifest that recorded each.  A dataset whose manifest records no organism is
     human, which covers every run scored before the organism became a parameter;
-    one recording nothing about HCM was annotated against the full summary.  A
+    one recording no proximity choice was annotated against the full summary.  A
     manifest that cannot be read yields the same defaults: callers resolve these
     to draw a plot, and an unreadable manifest is not a reason to fail one.
     """
     document = _load(os.path.join(str(output_dir), RUN_JSON_FILENAME))
 
-    settings = {"organism": "human", "exclude_hcm": False}
+    settings = {"organism": "human", "exclude_proximity": False}
     for run in document["runs"].values():
         for entry in run.get("stages", []):
             extra = entry.get("extra", {})

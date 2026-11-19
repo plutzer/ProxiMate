@@ -39,7 +39,7 @@ TOOLTIPS = {
     "saint_interaction": "SAINT interaction.txt, one row per protein per experiment: experiment name, bait, prey, quantity.",  # tooltip
     "score_dataset": "Dataset that Score Data scores. Follows the active dataset; changing it here does not change the active dataset.",  # tooltip
     "organism": "Species of the samples. Selects the annotation databases (BioGRID, UniProt, HPA, CORUM).",  # tooltip
-    "exclude_hcm": "Annotate against BioGRID without Human Cell Map evidence (Go et al. 2021). HCM is a BioID screen, so it inflates 'known' hits. Other evidence is kept.",  # tooltip
+    "exclude_proximity": "Annotate against BioGRID without proximity-labeling evidence (Proximity Label-MS), which inflates 'known' hits for a proximity experiment. Other evidence is kept.",  # tooltip
     "imputation_method": "Fills missing control values before SAINT. Default: no fill. AFT: models below-detection values; intensity data only. MSstats input: use Default.",  # tooltip
     "pi_method": "π: share of missing values that are true absences, not below-detection signal. Estimate from all control baits or from one.",  # tooltip
     "pi_bait": "Control bait used to fit π. Pick one with several replicates.",  # tooltip
@@ -158,7 +158,7 @@ SECTIONS = {
     "Data & Scoring": [
         "dataset_name", "input_format", "quant_type", "pg_file", "diann_matrix_file",
         "pioneer_matrix_file", "fragpipe_file", "msstats_file", "ed_file", "ed_file_msstats",
-        "saint_bait", "saint_prey", "saint_interaction", "score_dataset", "organism", "exclude_hcm",
+        "saint_bait", "saint_prey", "saint_interaction", "score_dataset", "organism", "exclude_proximity",
         "imputation_method", "pi_method", "pi_bait", "aft_min_obs", "wdfdr_iterations",
         "delete_dataset", "rename_dataset", "duplicate_dataset", "clear_datasets", "download_session", "session_file",
         "ed_template", "example_data",

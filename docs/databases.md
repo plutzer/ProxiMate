@@ -35,18 +35,18 @@ pair in both orientations with the evidence pooled, so:
 - `Multivalidated` is the same for both orientations;
 - only physical interactions with both partners in the dataset's organism count.
 
-## Excluding Human Cell Map evidence
+## Excluding proximity evidence
 
-The Human Cell Map (Go et al. 2021, PubMed 34079125) is a large BioID screen
-deposited in BioGRID. Scoring a proximity-labeling experiment against it counts
-hits as "known" on the strength of the same kind of assay.
+BioGRID holds proximity-labeling screens (experimental system `Proximity Label-MS`),
+such as the Human Cell Map. Scoring a proximity-labeling experiment against them
+counts hits as "known" on the strength of the same kind of assay.
 
-To avoid that, tick **Exclude Human Cell Map evidence** on the Score card, or pass
-`--exclude-hcm` to `run_pipeline.sh`. Human datasets only.
+To avoid that, tick **Exclude proximity evidence** on the Score card, or pass
+`--exclude-proximity` to `run_pipeline.sh`.
 
-- Annotation then uses `/Datasets/human/biogrid_summary_no_hcm.csv`: the human
-  BioGRID summary with every evidence line from that paper removed.
-- Interactions with other evidence are kept; only their HCM entries are dropped.
+- Annotation then uses `/Datasets/<organism>/biogrid_summary_no_proximity.csv`: the
+  BioGRID summary with every `Proximity Label-MS` evidence line removed.
+- Interactions with other evidence are kept; only their proximity entries are dropped.
 - `Multivalidated` is recomputed from what is left: two publications or two
   experimental systems.
 - `run.json` records the choice.
