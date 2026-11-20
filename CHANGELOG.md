@@ -11,6 +11,8 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-20
+
 ### Fixed
 - `AvgIntensity`, `IntensitySum` and `FoldChange` fill a missing bait replicate with the
   prey's own imputed value; before, they used the first or second prey's. Scores are
@@ -237,7 +239,8 @@ section to the version and date and starts a fresh Unreleased section above it.
 Last version published to Docker Hub by hand, before this changelog existed. Older
 versions are listed at https://hub.docker.com/r/plutzer/proximate/tags.
 
-[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/plutzer/ProxiMate/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/plutzer/ProxiMate/releases/tag/v0.6.1
 [0.6.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.6.0
 [0.5.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.5.0
 [0.4.0]: https://github.com/plutzer/ProxiMate/releases/tag/v0.4.0
