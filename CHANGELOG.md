@@ -11,6 +11,11 @@ section to the version and date and starts a fresh Unreleased section above it.
 
 ## [Unreleased]
 
+### Fixed
+- `AvgIntensity`, `IntensitySum` and `FoldChange` fill a missing bait replicate with the
+  prey's own imputed value; before, they used the first or second prey's. Scores are
+  unchanged. Re-score a dataset to pick this up.
+
 ## [0.6.0] - 2026-11-19
 
 ### Changed
