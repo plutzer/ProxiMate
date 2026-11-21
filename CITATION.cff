@@ -14,8 +14,8 @@ authors:
     orcid: "https://orcid.org/0000-0002-9370-7763"
 repository-code: "https://github.com/plutzer/ProxiMate"
 license: MIT
-version: 0.6.0
-date-released: "2026-11-19"
+version: 0.6.1
+date-released: "2026-11-20"
 keywords:
   - proteomics
   - proximity labeling

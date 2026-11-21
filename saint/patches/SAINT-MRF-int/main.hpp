@@ -474,7 +474,7 @@ void Model_data::list_output(const string& filename, const vector<string>& prey_
 		// const valarray<double>& quant = reinterpret_cast<const valarray<double>&>(quant_orig);
 		for(size_t i=0;i<quant.size();++i) // replace nan with exp(t)
 			if(saint::isnan(quant[i])) // if quant[i] is nan
-				quant[i] = exp(t[i]); // replace it with exp(t)
+				quant[i] = exp(t[row]); // replace it with this prey's imputed value
 		double AvgQuant = quant.sum()/quant.size(); // average of quant data
 		f << quant_orig[0]; // Intensity column
 		for(size_t col = 1; col < quant_orig.size(); ++col) // for each column

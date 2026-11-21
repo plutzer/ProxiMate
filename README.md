@@ -35,7 +35,7 @@ CompPASS, annotates the interactions, and plots the results.
 For your own data, upload MaxQuant, DIA-NN, Pioneer, FragPipe, MSstats or SAINT
 files with an experimental design CSV. **Download ED template** gives the layout.
 
-To pin a version, use a tag such as `plutzer/proximate:v0.6.0`. Each
+To pin a version, use a tag such as `plutzer/proximate:v0.6.1`. Each
 [release](https://github.com/plutzer/ProxiMate/releases) lists its changes and
 database dates. Images run on Intel/AMD and Apple Silicon.
 
